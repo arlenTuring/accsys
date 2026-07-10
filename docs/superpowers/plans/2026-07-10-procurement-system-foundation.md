@@ -521,17 +521,21 @@ git commit -m "feat: add departments and employees schema"
 
 `tests/integration/budget-and-suppliers-schema.test.ts`:
 ```ts
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createServiceRoleTestClient,
   hasIntegrationTestCredentials,
 } from './supabase-test-client';
 
 describe.skipIf(!hasIntegrationTestCredentials())('budget_codes and suppliers schema', () => {
-  const supabase = createServiceRoleTestClient();
+  let supabase: ReturnType<typeof createServiceRoleTestClient>;
   const departmentCode = `TEST-BC-${Date.now()}`;
   let departmentId: string;
   let employeeId: string;
+
+  beforeAll(() => {
+    supabase = createServiceRoleTestClient();
+  });
 
   afterAll(async () => {
     await supabase.from('budget_codes').delete().eq('department_id', departmentId);
@@ -676,7 +680,7 @@ import {
 } from './supabase-test-client';
 
 describe.skipIf(!hasIntegrationTestCredentials())('master data RLS policies', () => {
-  const adminClient = createServiceRoleTestClient();
+  let adminClient: ReturnType<typeof createServiceRoleTestClient>;
   const password = 'Test-password-123!';
   const staffEmail = `rls-staff-${Date.now()}@turingdrive.ai`;
   const adminEmail = `rls-admin-${Date.now()}@turingdrive.ai`;
@@ -686,6 +690,8 @@ describe.skipIf(!hasIntegrationTestCredentials())('master data RLS policies', ()
   let adminAuthUserId: string;
 
   beforeAll(async () => {
+    adminClient = createServiceRoleTestClient();
+
     const { data: dept, error: deptError } = await adminClient
       .from('departments')
       .insert({ code: `RLS-${Date.now()}`, name: 'RLS 測試部門' })
