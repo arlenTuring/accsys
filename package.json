@@ -7,8 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "NODE_OPTIONS=--experimental-websocket vitest run",
+    "test:watch": "NODE_OPTIONS=--experimental-websocket vitest",
     "seed": "tsx scripts/import-seed-data.ts"
   },
   "dependencies": {
