@@ -6,3 +6,5 @@ node_modules/
 .env.local
 .worktrees/
 .superpowers/
+supabase/.branches
+supabase/.temp
