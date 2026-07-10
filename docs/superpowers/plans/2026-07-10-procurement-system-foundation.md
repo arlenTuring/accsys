@@ -1327,10 +1327,12 @@ async function main() {
   );
 
   const uniqueBudgetCodes = new Map(budgetCodes.map((b) => [b.code, b]));
+  let insertedBudgetCodeCount = 0;
+  let skippedProjectScopedBudgetCodeCount = 0;
   for (const budget of uniqueBudgetCodes.values()) {
     const departmentId = departmentIdByCode.get(budget.departmentCode);
     if (!departmentId) {
-      console.warn(`跳過預算編號 ${budget.code}：找不到部門代碼 ${budget.departmentCode}`);
+      skippedProjectScopedBudgetCodeCount += 1;
       continue;
     }
     const { error } = await supabase.from('budget_codes').upsert(
@@ -1345,6 +1347,7 @@ async function main() {
       { onConflict: 'code' }
     );
     if (error) throw error;
+    insertedBudgetCodeCount += 1;
   }
 
   for (const supplier of suppliers) {
@@ -1361,8 +1364,13 @@ async function main() {
   }
 
   console.log(
-    `匯入完成：${departmentByCode.size} 個部門、${employees.length} 位員工、${uniqueBudgetCodes.size} 個預算編號、${suppliers.length} 家供應商。`
+    `匯入完成：${departmentByCode.size} 個部門、${employees.length} 位員工、${insertedBudgetCodeCount} 個預算編號、${suppliers.length} 家供應商。`
   );
+  if (skippedProjectScopedBudgetCodeCount > 0) {
+    console.log(
+      `已略過 ${skippedProjectScopedBudgetCodeCount} 個專案型預算編號（部門代號欄位填的是專案代碼，不在 8 個部門代碼中）——這批專案預算的部門歸屬解析留待後續任務處理，本次匯入僅涵蓋部門型預算。`
+    );
+  }
   console.log(
     '提醒：所有員工預設角色為 staff，且尚未設定 google_email。請於 Supabase Studio 手動：' +
       '(1) 補上每位員工的 google_email 才能登入，(2) 將財會與系統管理員設為對應角色 (finance / admin)。'
@@ -1380,13 +1388,16 @@ main().catch((error) => {
 Run: `npm run seed`
 Expected output ends with:
 ```
-匯入完成：8 個部門、39 位員工、293 個預算編號、4 家供應商。
+匯入完成：8 個部門、39 位員工、185 個預算編號、4 家供應商。
+已略過 108 個專案型預算編號（部門代號欄位填的是專案代碼，不在 8 個部門代碼中）——這批專案預算的部門歸屬解析留待後續任務處理，本次匯入僅涵蓋部門型預算。
 提醒：所有員工預設角色為 staff，且尚未設定 google_email。...
 ```
 
+Note: the source workbook has 293 unique budget codes total (Task 7's parser correctly extracts all of them), but 108 of those rows carry a *project* code (e.g. `112BD003`) in the department-code column instead of one of the 8 real department codes — those are project-scoped budgets whose department attribution lives in a different column. This plan's scope only imports department-scoped budgets (185 rows); resolving project-scoped budgets to a department is deferred to a later task.
+
 - [ ] **Step 3: Manually verify row counts in Supabase Studio**
 
-Open the Supabase dashboard → Table Editor. Confirm: `departments` has 8 rows, `employees` has 39 rows, `budget_codes` has 293 rows, `suppliers` has 4 rows, and every `departments.manager_employee_id` is non-null.
+Open the Supabase dashboard → Table Editor. Confirm: `departments` has 8 rows, `employees` has 39 rows, `budget_codes` has 185 rows, `suppliers` has 4 rows, and every `departments.manager_employee_id` is non-null.
 
 - [ ] **Step 4: Set your own employee's `google_email` and `role` so you can log in**
 
@@ -1832,7 +1843,7 @@ export default async function MasterDataPage() {
 - [ ] **Step 3: Manually verify in the browser**
 
 Run: `npm run dev`, log in via `/login` as the admin employee you configured in Task 8, Step 4.
-Expected: `/dashboard` shows your name, employee code, and role, plus a link to "主檔資料總覽" (only because your role is `admin`). Clicking it shows `/admin/master-data` with 8 departments, 39 employees, 293 budget codes, 4 suppliers.
+Expected: `/dashboard` shows your name, employee code, and role, plus a link to "主檔資料總覽" (only because your role is `admin`). Clicking it shows `/admin/master-data` with 8 departments, 39 employees, 185 budget codes, 4 suppliers.
 Log out (clear cookies) and hit `/dashboard` directly.
 Expected: redirected to `/login` (middleware from Task 6 blocks unauthenticated access).
 
@@ -1865,7 +1876,7 @@ Expected: build succeeds with no type errors.
 2. Visit `/dashboard` while logged out — redirected to `/login`.
 3. Log in with a non-company Google account (if you have one to test with) — redirected to `/login?error=domain_not_allowed`.
 4. Log in with your configured company account — redirected to `/dashboard`, shows correct name/employee code/role.
-5. As an `admin`-role employee, visit `/admin/master-data` — counts match Task 8's verified numbers (8/39/293/4).
+5. As an `admin`-role employee, visit `/admin/master-data` — counts match Task 8's verified numbers (8/39/185/4).
 6. Temporarily set your `employees.role` to `staff` in Supabase Studio, reload `/admin/master-data` — redirected to `/dashboard`. Set your role back to `admin` afterward.
 
 - [ ] **Step 4: Confirm no secrets are tracked by git**
