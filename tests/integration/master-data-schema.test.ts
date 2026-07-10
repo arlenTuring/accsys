@@ -1,13 +1,17 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createServiceRoleTestClient,
   hasIntegrationTestCredentials,
 } from './supabase-test-client';
 
 describe.skipIf(!hasIntegrationTestCredentials())('departments and employees schema', () => {
-  const supabase = createServiceRoleTestClient();
+  let supabase: ReturnType<typeof createServiceRoleTestClient>;
   const departmentCode = `TEST-${Date.now()}`;
   let departmentId: string;
+
+  beforeAll(() => {
+    supabase = createServiceRoleTestClient();
+  });
 
   afterAll(async () => {
     await supabase.from('employees').delete().eq('department_id', departmentId);
