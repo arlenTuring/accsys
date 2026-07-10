@@ -303,7 +303,7 @@ Expected: CLI confirms the link; you'll be prompted for the database password se
 NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key-from-supabase-dashboard>
 SUPABASE_SERVICE_ROLE_KEY=<service-role-key-from-supabase-dashboard>
-ALLOWED_GOOGLE_DOMAIN=turingdrive.ai
+ALLOWED_GOOGLE_DOMAIN=turing-drive.com
 ```
 
 Copy this to `.env.local` and fill in real values (never commit `.env.local`).
