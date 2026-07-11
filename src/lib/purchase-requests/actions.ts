@@ -286,6 +286,128 @@ export async function approvePurchaseRequestStep(requestId: string): Promise<Act
   return { ok: true };
 }
 
+export async function resubmitPurchaseRequest(
+  requestId: string,
+  input: NewPurchaseRequest
+): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  const db = createSupabaseServiceRoleClient();
+
+  const { data: pr } = await db
+    .from('purchase_requests')
+    .select('id, applicant_employee_id, status, department_id, procurement_case_id')
+    .eq('id', requestId)
+    .maybeSingle();
+  if (!pr) return { ok: false, error: '找不到這張請購單' };
+  if (pr.applicant_employee_id !== employee.id) {
+    return { ok: false, error: '只有申請人可以重新送出這張請購單' };
+  }
+  if (pr.status !== 'returned') {
+    return { ok: false, error: '只有被退回的請購單可以重新送出' };
+  }
+  if (input.items.length === 0) {
+    return { ok: false, error: '請購單至少需要一個明細項次' };
+  }
+
+  const budgetCodeIds = Array.from(new Set(input.items.map((i) => i.budgetCodeId)));
+  const { data: budgetCodes } = await db
+    .from('budget_codes')
+    .select('id, category, owner_employee_id')
+    .in('id', budgetCodeIds);
+  if (!budgetCodes || budgetCodes.length !== budgetCodeIds.length) {
+    return { ok: false, error: '選取的預算編號無效' };
+  }
+  const byId = new Map(budgetCodes.map((b) => [b.id, b]));
+  const validation = validatePurchaseRequestInput(
+    input.items.map((i) => ({
+      budgetCodeId: i.budgetCodeId,
+      budgetOwnerEmployeeId: byId.get(i.budgetCodeId)!.owner_employee_id ?? '',
+      itemCategory: byId.get(i.budgetCodeId)!.category,
+      description: i.description,
+      quantity: i.quantity,
+      estimatedAmount: i.estimatedAmount,
+    }))
+  );
+  if (!validation.ok) return { ok: false, error: validation.error };
+  const budgetOwnerId = byId.get(input.items[0].budgetCodeId)!.owner_employee_id;
+  if (!budgetOwnerId) return { ok: false, error: '選取的預算編號沒有指定預算負責人' };
+
+  const totalAmount = input.items.reduce((sum, i) => sum + i.estimatedAmount, 0);
+
+  const { data: dept } = await db
+    .from('departments')
+    .select('manager_employee_id')
+    .eq('id', pr.department_id)
+    .single();
+  const { data: gm } = await db.from('employees').select('id').eq('is_general_manager', true).limit(1).single();
+  const { data: chairman } = await db.from('employees').select('id').eq('is_chairman', true).limit(1).single();
+  const chain = generateApprovalChain({
+    applicantEmployeeId: employee.id,
+    departmentManagerEmployeeId: dept?.manager_employee_id ?? employee.id,
+    budgetOwnerEmployeeId: budgetOwnerId,
+    generalManagerEmployeeId: gm?.id ?? employee.id,
+    chairmanEmployeeId: chairman?.id ?? employee.id,
+    totalAmount,
+  });
+  if (chain.length === 0) {
+    return { ok: false, error: '重新送出後找不到適用的簽核人，請聯絡系統管理員' };
+  }
+
+  await db.from('purchase_request_items').delete().eq('purchase_request_id', requestId);
+  await db.from('approval_steps').delete().eq('form_type', 'purchase_request').eq('form_id', requestId);
+
+  await db.from('purchase_request_items').insert(
+    input.items.map((i, idx) => ({
+      purchase_request_id: requestId,
+      line_no: idx + 1,
+      budget_code_id: i.budgetCodeId,
+      item_category: byId.get(i.budgetCodeId)!.category,
+      description: i.description,
+      quantity: i.quantity,
+      estimated_amount: i.estimatedAmount,
+    }))
+  );
+  await db.from('approval_steps').insert(
+    chain.map((step, idx) => ({
+      form_type: 'purchase_request',
+      form_id: requestId,
+      step_order: idx + 1,
+      approver_employee_id: step.approverEmployeeId,
+      approver_role: step.approverRole,
+    }))
+  );
+  await db
+    .from('purchase_requests')
+    .update({
+      budget_owner_employee_id: budgetOwnerId,
+      needed_within_days: input.neededWithinDays,
+      total_amount: totalAmount,
+      status: 'pending_approval',
+      current_step_order: 1,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', requestId);
+
+  const { data: caseRow } = await db
+    .from('procurement_cases')
+    .select('case_number')
+    .eq('id', pr.procurement_case_id)
+    .single();
+  await db.from('notifications').insert({
+    recipient_employee_id: chain[0].approverEmployeeId,
+    type: 'approval_requested',
+    form_type: 'purchase_request',
+    form_id: requestId,
+    case_number: caseRow!.case_number,
+    message: `請購單 ${caseRow!.case_number} 已重新送出，待您簽核`,
+  });
+
+  revalidatePath('/approvals');
+  revalidatePath(`/requests/${requestId}`);
+  return { ok: true };
+}
+
 export async function returnPurchaseRequestStep(
   requestId: string,
   reason: string
