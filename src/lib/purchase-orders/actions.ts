@@ -174,3 +174,158 @@ export async function createPurchaseOrder(input: NewPurchaseOrder): Promise<Crea
   revalidatePath('/approvals');
   return { ok: true, orderId: order.id, caseNumber };
 }
+
+export type ActionResult = { ok: true } | { ok: false; error: string };
+
+type LoadStepResult =
+  | { error: string }
+  | {
+      order: { id: string; applicant_employee_id: string; procurement_case_id: string };
+      step: { id: string; step_order: number; approver_employee_id: string };
+    };
+
+async function loadCurrentStep(
+  db: ReturnType<typeof createSupabaseServiceRoleClient>,
+  orderId: string,
+  callerId: string
+): Promise<LoadStepResult> {
+  const { data: order } = await db
+    .from('purchase_orders')
+    .select('id, applicant_employee_id, status, current_step_order, procurement_case_id')
+    .eq('id', orderId)
+    .maybeSingle();
+  if (!order || order.status !== 'pending_approval' || order.current_step_order === null) {
+    return { error: '這張採購單目前不在簽核中' };
+  }
+  const { data: step } = await db
+    .from('approval_steps')
+    .select('id, step_order, approver_employee_id')
+    .eq('form_type', 'purchase_order')
+    .eq('form_id', orderId)
+    .eq('step_order', order.current_step_order)
+    .maybeSingle();
+  if (!step || step.approver_employee_id !== callerId) {
+    return { error: '您不是這張採購單目前的簽核人' };
+  }
+  return { order, step };
+}
+
+export async function approvePurchaseOrderStep(orderId: string): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  const db = createSupabaseServiceRoleClient();
+
+  const loaded = await loadCurrentStep(db, orderId, employee.id);
+  if ('error' in loaded) return { ok: false, error: loaded.error };
+  const { order, step } = loaded;
+
+  await db
+    .from('approval_steps')
+    .update({ status: 'approved', acted_at: new Date().toISOString() })
+    .eq('id', step.id);
+
+  await db
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('recipient_employee_id', employee.id)
+    .eq('form_type', 'purchase_order')
+    .eq('form_id', orderId)
+    .eq('type', 'approval_requested')
+    .eq('is_read', false);
+
+  const { data: caseRow } = await db
+    .from('procurement_cases')
+    .select('case_number')
+    .eq('id', order.procurement_case_id)
+    .single();
+  const caseNumber = caseRow!.case_number;
+
+  const { data: nextStep } = await db
+    .from('approval_steps')
+    .select('step_order, approver_employee_id')
+    .eq('form_type', 'purchase_order')
+    .eq('form_id', orderId)
+    .eq('step_order', step.step_order + 1)
+    .maybeSingle();
+
+  if (nextStep) {
+    await db
+      .from('purchase_orders')
+      .update({ current_step_order: nextStep.step_order, updated_at: new Date().toISOString() })
+      .eq('id', orderId);
+    await notifyAndEmail(db, {
+      recipientEmployeeId: nextStep.approver_employee_id,
+      type: 'approval_requested',
+      formType: 'purchase_order',
+      formId: orderId,
+      caseNumber,
+      message: `採購單 ${caseNumber} 待您簽核`,
+    });
+  } else {
+    await db
+      .from('purchase_orders')
+      .update({ status: 'approved', current_step_order: null, updated_at: new Date().toISOString() })
+      .eq('id', orderId);
+    await notifyAndEmail(db, {
+      recipientEmployeeId: order.applicant_employee_id,
+      type: 'request_approved',
+      formType: 'purchase_order',
+      formId: orderId,
+      caseNumber,
+      message: `採購單 ${caseNumber} 已完成簽核`,
+    });
+  }
+
+  revalidatePath('/approvals');
+  revalidatePath(`/purchase-orders/${orderId}`);
+  return { ok: true };
+}
+
+export async function returnPurchaseOrderStep(orderId: string, reason: string): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  if (reason.trim() === '') return { ok: false, error: '請填寫退回原因' };
+  const db = createSupabaseServiceRoleClient();
+
+  const loaded = await loadCurrentStep(db, orderId, employee.id);
+  if ('error' in loaded) return { ok: false, error: loaded.error };
+  const { order, step } = loaded;
+
+  await db
+    .from('approval_steps')
+    .update({ status: 'returned', comment: reason, acted_at: new Date().toISOString() })
+    .eq('id', step.id);
+
+  await db
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('recipient_employee_id', employee.id)
+    .eq('form_type', 'purchase_order')
+    .eq('form_id', orderId)
+    .eq('type', 'approval_requested')
+    .eq('is_read', false);
+
+  await db
+    .from('purchase_orders')
+    .update({ status: 'returned', current_step_order: null, updated_at: new Date().toISOString() })
+    .eq('id', orderId);
+
+  const { data: caseRow } = await db
+    .from('procurement_cases')
+    .select('case_number')
+    .eq('id', order.procurement_case_id)
+    .single();
+
+  await notifyAndEmail(db, {
+    recipientEmployeeId: order.applicant_employee_id,
+    type: 'request_returned',
+    formType: 'purchase_order',
+    formId: orderId,
+    caseNumber: caseRow!.case_number,
+    message: `採購單 ${caseRow!.case_number} 已被退回：${reason}`,
+  });
+
+  revalidatePath('/approvals');
+  revalidatePath(`/purchase-orders/${orderId}`);
+  return { ok: true };
+}
