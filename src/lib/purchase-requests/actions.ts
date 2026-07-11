@@ -4,7 +4,11 @@ import { revalidatePath } from 'next/cache';
 import { createSupabaseServiceRoleClient } from '@/lib/supabase/service-role';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
-import { generateApprovalChain, type ApprovalChainStep } from '@/lib/approval/chain';
+import {
+  generateApprovalChain,
+  CHAIRMAN_THRESHOLD,
+  type ApprovalChainStep,
+} from '@/lib/approval/chain';
 import {
   validatePurchaseRequestInput,
   type PurchaseRequestItemInput,
@@ -70,30 +74,48 @@ export async function createPurchaseRequest(input: NewPurchaseRequest): Promise<
 
   const totalAmount = input.items.reduce((sum, i) => sum + i.estimatedAmount, 0);
 
-  const { data: dept } = await db
+  const { data: dept, error: deptError } = await db
     .from('departments')
     .select('manager_employee_id')
     .eq('id', employee.departmentId)
     .single();
-  const { data: gm } = await db
+  if (deptError || !dept) {
+    return { ok: false, error: '找不到申請單位資料，請聯絡系統管理員' };
+  }
+  if (!dept.manager_employee_id) {
+    return { ok: false, error: '申請單位尚未設定主管，無法送出簽核，請聯絡系統管理員' };
+  }
+
+  const { data: gm, error: gmError } = await db
     .from('employees')
     .select('id')
     .eq('is_general_manager', true)
     .limit(1)
     .single();
-  const { data: chairman } = await db
-    .from('employees')
-    .select('id')
-    .eq('is_chairman', true)
-    .limit(1)
-    .single();
+  if (gmError || !gm) {
+    return { ok: false, error: '系統尚未設定總經理，請聯絡系統管理員' };
+  }
+
+  let chairmanId = employee.id;
+  if (totalAmount > CHAIRMAN_THRESHOLD) {
+    const { data: chairman, error: chairmanError } = await db
+      .from('employees')
+      .select('id')
+      .eq('is_chairman', true)
+      .limit(1)
+      .single();
+    if (chairmanError || !chairman) {
+      return { ok: false, error: '系統尚未設定董事長，無法送出逾 10 萬元的請購單，請聯絡系統管理員' };
+    }
+    chairmanId = chairman.id;
+  }
 
   const chain = generateApprovalChain({
     applicantEmployeeId: employee.id,
-    departmentManagerEmployeeId: dept?.manager_employee_id ?? employee.id,
+    departmentManagerEmployeeId: dept.manager_employee_id,
     budgetOwnerEmployeeId: budgetOwnerId,
-    generalManagerEmployeeId: gm?.id ?? employee.id,
-    chairmanEmployeeId: chairman?.id ?? employee.id,
+    generalManagerEmployeeId: gm.id,
+    chairmanEmployeeId: chairmanId,
     totalAmount,
   });
 
@@ -335,59 +357,76 @@ export async function resubmitPurchaseRequest(
 
   const totalAmount = input.items.reduce((sum, i) => sum + i.estimatedAmount, 0);
 
-  const { data: dept } = await db
+  const { data: dept, error: deptError } = await db
     .from('departments')
     .select('manager_employee_id')
     .eq('id', pr.department_id)
     .single();
-  const { data: gm } = await db.from('employees').select('id').eq('is_general_manager', true).limit(1).single();
-  const { data: chairman } = await db.from('employees').select('id').eq('is_chairman', true).limit(1).single();
+  if (deptError || !dept) {
+    return { ok: false, error: '找不到申請單位資料，請聯絡系統管理員' };
+  }
+  if (!dept.manager_employee_id) {
+    return { ok: false, error: '申請單位尚未設定主管，無法送出簽核，請聯絡系統管理員' };
+  }
+
+  const { data: gm, error: gmError } = await db
+    .from('employees')
+    .select('id')
+    .eq('is_general_manager', true)
+    .limit(1)
+    .single();
+  if (gmError || !gm) {
+    return { ok: false, error: '系統尚未設定總經理，請聯絡系統管理員' };
+  }
+
+  let chairmanId = employee.id;
+  if (totalAmount > CHAIRMAN_THRESHOLD) {
+    const { data: chairman, error: chairmanError } = await db
+      .from('employees')
+      .select('id')
+      .eq('is_chairman', true)
+      .limit(1)
+      .single();
+    if (chairmanError || !chairman) {
+      return { ok: false, error: '系統尚未設定董事長，無法送出逾 10 萬元的請購單，請聯絡系統管理員' };
+    }
+    chairmanId = chairman.id;
+  }
+
   const chain = generateApprovalChain({
     applicantEmployeeId: employee.id,
-    departmentManagerEmployeeId: dept?.manager_employee_id ?? employee.id,
+    departmentManagerEmployeeId: dept.manager_employee_id,
     budgetOwnerEmployeeId: budgetOwnerId,
-    generalManagerEmployeeId: gm?.id ?? employee.id,
-    chairmanEmployeeId: chairman?.id ?? employee.id,
+    generalManagerEmployeeId: gm.id,
+    chairmanEmployeeId: chairmanId,
     totalAmount,
   });
   if (chain.length === 0) {
     return { ok: false, error: '重新送出後找不到適用的簽核人，請聯絡系統管理員' };
   }
 
-  await db.from('purchase_request_items').delete().eq('purchase_request_id', requestId);
-  await db.from('approval_steps').delete().eq('form_type', 'purchase_request').eq('form_id', requestId);
-
-  await db.from('purchase_request_items').insert(
-    input.items.map((i, idx) => ({
-      purchase_request_id: requestId,
+  const { error: txError } = await db.rpc('resubmit_purchase_request', {
+    p_request_id: requestId,
+    p_budget_owner: budgetOwnerId,
+    p_needed_days: input.neededWithinDays,
+    p_total: totalAmount,
+    p_items: input.items.map((i, idx) => ({
       line_no: idx + 1,
       budget_code_id: i.budgetCodeId,
       item_category: byId.get(i.budgetCodeId)!.category,
       description: i.description,
       quantity: i.quantity,
       estimated_amount: i.estimatedAmount,
-    }))
-  );
-  await db.from('approval_steps').insert(
-    chain.map((step, idx) => ({
-      form_type: 'purchase_request',
-      form_id: requestId,
+    })),
+    p_steps: chain.map((step, idx) => ({
       step_order: idx + 1,
       approver_employee_id: step.approverEmployeeId,
       approver_role: step.approverRole,
-    }))
-  );
-  await db
-    .from('purchase_requests')
-    .update({
-      budget_owner_employee_id: budgetOwnerId,
-      needed_within_days: input.neededWithinDays,
-      total_amount: totalAmount,
-      status: 'pending_approval',
-      current_step_order: 1,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', requestId);
+    })),
+  });
+  if (txError) {
+    return { ok: false, error: '重新送出失敗，請稍後再試' };
+  }
 
   const { data: caseRow } = await db
     .from('procurement_cases')

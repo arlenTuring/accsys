@@ -18,7 +18,7 @@ export type ApprovalChainInput = {
   totalAmount: number;
 };
 
-const CHAIRMAN_THRESHOLD = 100000;
+export const CHAIRMAN_THRESHOLD = 100000;
 
 export function generateApprovalChain(input: ApprovalChainInput): ApprovalChainStep[] {
   const candidates: ApprovalChainStep[] = [

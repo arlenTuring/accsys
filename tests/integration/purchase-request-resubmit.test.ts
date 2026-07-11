@@ -64,6 +64,22 @@ describe.skipIf(!hasIntegrationTestCredentials())('resubmitPurchaseRequest', () 
     if (!created.ok) throw new Error(created.error);
     createdRequestIds.push(created.requestId);
 
+    // Capture the original approval chain (ids + count) before it gets rewritten.
+    const { data: originalSteps } = await admin
+      .from('approval_steps')
+      .select('id, approver_employee_id')
+      .eq('form_type', 'purchase_request')
+      .eq('form_id', created.requestId)
+      .order('step_order');
+    const originalStepIds = originalSteps!.map((s) => s.id);
+    const originalStepCount = originalSteps!.length;
+
+    const { data: originalItems } = await admin
+      .from('purchase_request_items')
+      .select('id')
+      .eq('purchase_request_id', created.requestId);
+    const originalItemIds = originalItems!.map((i) => i.id);
+
     // Return it first.
     const { data: step } = await admin
       .from('approval_steps')
@@ -93,16 +109,32 @@ describe.skipIf(!hasIntegrationTestCredentials())('resubmitPurchaseRequest', () 
 
     const { data: items } = await admin
       .from('purchase_request_items')
-      .select('description')
+      .select('id, description')
       .eq('purchase_request_id', created.requestId);
     expect(items!.map((i) => i.description)).toEqual(['修改後']);
+    // Exactly one item row remains — the old one was actually deleted, not just superseded.
+    expect(items!.length).toBe(1);
+    expect(items!.some((i) => originalItemIds.includes(i.id))).toBe(false);
 
     const { data: steps } = await admin
       .from('approval_steps')
-      .select('status')
+      .select('id, status')
+      .eq('form_type', 'purchase_request')
       .eq('form_id', created.requestId)
       .order('step_order');
     expect(steps!.every((s) => s.status === 'pending')).toBe(true);
+    // Same chain composition (dept/budget-owner/GM unchanged) so the count should match,
+    // but the row ids must be entirely new — the old steps were deleted, not left behind.
+    expect(steps!.length).toBe(originalStepCount);
+    const newStepIds = steps!.map((s) => s.id);
+    expect(newStepIds.some((id) => originalStepIds.includes(id))).toBe(false);
+
+    // Directly count old-step leftovers: none of the pre-resubmit step ids should still exist.
+    const { data: leftoverSteps } = await admin
+      .from('approval_steps')
+      .select('id')
+      .in('id', originalStepIds);
+    expect(leftoverSteps!.length).toBe(0);
   });
 
   it('rejects resubmit by a non-applicant', async () => {
