@@ -233,3 +233,165 @@ export async function createExpenseRequest(input: NewExpenseRequest): Promise<Cr
     paymentBatchDate: batch.batchDate,
   };
 }
+
+export type ActionResult = { ok: true } | { ok: false; error: string };
+
+type LoadStepResult =
+  | { error: string }
+  | {
+      expenseRequest: { id: string; applicant_employee_id: string; procurement_case_id: string };
+      step: { id: string; step_order: number; approver_employee_id: string };
+    };
+
+async function loadCurrentStep(
+  db: ReturnType<typeof createSupabaseServiceRoleClient>,
+  expenseRequestId: string,
+  callerId: string
+): Promise<LoadStepResult> {
+  const { data: expenseRequest } = await db
+    .from('expense_requests')
+    .select('id, applicant_employee_id, status, current_step_order, procurement_case_id')
+    .eq('id', expenseRequestId)
+    .maybeSingle();
+  if (
+    !expenseRequest ||
+    expenseRequest.status !== 'pending_approval' ||
+    expenseRequest.current_step_order === null
+  ) {
+    return { error: '這張費用申請單目前不在簽核中' };
+  }
+  const { data: step } = await db
+    .from('approval_steps')
+    .select('id, step_order, approver_employee_id')
+    .eq('form_type', 'expense_request')
+    .eq('form_id', expenseRequestId)
+    .eq('step_order', expenseRequest.current_step_order)
+    .maybeSingle();
+  if (!step || step.approver_employee_id !== callerId) {
+    return { error: '您不是這張費用申請單目前的簽核人' };
+  }
+  return { expenseRequest, step };
+}
+
+export async function approveExpenseRequestStep(expenseRequestId: string): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  const db = createSupabaseServiceRoleClient();
+
+  const loaded = await loadCurrentStep(db, expenseRequestId, employee.id);
+  if ('error' in loaded) return { ok: false, error: loaded.error };
+  const { expenseRequest, step } = loaded;
+
+  await db
+    .from('approval_steps')
+    .update({ status: 'approved', acted_at: new Date().toISOString() })
+    .eq('id', step.id);
+
+  await db
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('recipient_employee_id', employee.id)
+    .eq('form_type', 'expense_request')
+    .eq('form_id', expenseRequestId)
+    .eq('type', 'approval_requested')
+    .eq('is_read', false);
+
+  const { data: caseRow } = await db
+    .from('procurement_cases')
+    .select('case_number')
+    .eq('id', expenseRequest.procurement_case_id)
+    .single();
+  const caseNumber = caseRow!.case_number;
+
+  const { data: nextStep } = await db
+    .from('approval_steps')
+    .select('step_order, approver_employee_id')
+    .eq('form_type', 'expense_request')
+    .eq('form_id', expenseRequestId)
+    .eq('step_order', step.step_order + 1)
+    .maybeSingle();
+
+  if (nextStep) {
+    await db
+      .from('expense_requests')
+      .update({ current_step_order: nextStep.step_order, updated_at: new Date().toISOString() })
+      .eq('id', expenseRequestId);
+    await notifyAndEmail(db, {
+      recipientEmployeeId: nextStep.approver_employee_id,
+      type: 'approval_requested',
+      formType: 'expense_request',
+      formId: expenseRequestId,
+      caseNumber,
+      message: `費用申請單 ${caseNumber} 待您簽核`,
+    });
+  } else {
+    await db
+      .from('expense_requests')
+      .update({ status: 'approved', current_step_order: null, updated_at: new Date().toISOString() })
+      .eq('id', expenseRequestId);
+    await notifyAndEmail(db, {
+      recipientEmployeeId: expenseRequest.applicant_employee_id,
+      type: 'request_approved',
+      formType: 'expense_request',
+      formId: expenseRequestId,
+      caseNumber,
+      message: `費用申請單 ${caseNumber} 已完成簽核`,
+    });
+  }
+
+  revalidatePath('/approvals');
+  revalidatePath(`/expense-requests/${expenseRequestId}`);
+  return { ok: true };
+}
+
+export async function returnExpenseRequestStep(
+  expenseRequestId: string,
+  reason: string
+): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  if (reason.trim() === '') return { ok: false, error: '請填寫退回原因' };
+  const db = createSupabaseServiceRoleClient();
+
+  const loaded = await loadCurrentStep(db, expenseRequestId, employee.id);
+  if ('error' in loaded) return { ok: false, error: loaded.error };
+  const { expenseRequest, step } = loaded;
+
+  await db
+    .from('approval_steps')
+    .update({ status: 'returned', comment: reason, acted_at: new Date().toISOString() })
+    .eq('id', step.id);
+
+  await db
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('recipient_employee_id', employee.id)
+    .eq('form_type', 'expense_request')
+    .eq('form_id', expenseRequestId)
+    .eq('type', 'approval_requested')
+    .eq('is_read', false);
+
+  await db
+    .from('expense_requests')
+    .update({ status: 'returned', current_step_order: null, updated_at: new Date().toISOString() })
+    .eq('id', expenseRequestId);
+
+  const { data: caseRow } = await db
+    .from('procurement_cases')
+    .select('case_number')
+    .eq('id', expenseRequest.procurement_case_id)
+    .single();
+
+  await notifyAndEmail(db, {
+    recipientEmployeeId: expenseRequest.applicant_employee_id,
+    type: 'request_returned',
+    formType: 'expense_request',
+    formId: expenseRequestId,
+    caseNumber: caseRow!.case_number,
+    message: `費用申請單 ${caseRow!.case_number} 已被退回：${reason}`,
+  });
+
+  revalidatePath('/approvals');
+  revalidatePath(`/expense-requests/${expenseRequestId}`);
+  return { ok: true };
+}
