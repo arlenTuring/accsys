@@ -67,7 +67,7 @@ describe.skipIf(!hasIntegrationTestCredentials())('purchase_requests + items sch
     expect(error).not.toBeNull();
   });
 
-  it('inserts a line item and rejects quantity <= 0', async () => {
+  it('inserts a line item and rejects quantity <= 0 and estimated_amount <= 0', async () => {
     const { data, error } = await supabase
       .from('purchase_request_items')
       .insert({
@@ -94,6 +94,30 @@ describe.skipIf(!hasIntegrationTestCredentials())('purchase_requests + items sch
       estimated_amount: 100,
     });
     expect(badQty).not.toBeNull();
+
+    const { error: badAmount } = await supabase.from('purchase_request_items').insert({
+      purchase_request_id: requestId,
+      line_no: 3,
+      budget_code_id: budgetCodeId,
+      item_category: '材料',
+      description: '壞金額',
+      quantity: 1,
+      estimated_amount: 0,
+    });
+    expect(badAmount).not.toBeNull();
+  });
+
+  it('rejects a duplicate (purchase_request_id, line_no)', async () => {
+    const { error: dupLine } = await supabase.from('purchase_request_items').insert({
+      purchase_request_id: requestId,
+      line_no: 1,
+      budget_code_id: budgetCodeId,
+      item_category: '材料',
+      description: '重複項次',
+      quantity: 1,
+      estimated_amount: 100,
+    });
+    expect(dupLine).not.toBeNull();
   });
 
   it('cascades item deletion when the request is deleted', async () => {
