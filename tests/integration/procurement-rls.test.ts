@@ -35,19 +35,19 @@ describe.skipIf(!hasIntegrationTestCredentials())('procurement RLS', () => {
       password,
       email_confirm: true,
     });
-    applicantAuthId = a!.user.id;
+    applicantAuthId = a!.user!.id;
     const { data: o } = await admin.auth.admin.createUser({
       email: outsiderEmail,
       password,
       email_confirm: true,
     });
-    outsiderAuthId = o!.user.id;
+    outsiderAuthId = o!.user!.id;
     const { data: ap } = await admin.auth.admin.createUser({
       email: approverEmail,
       password,
       email_confirm: true,
     });
-    approverAuthId = ap!.user.id;
+    approverAuthId = ap!.user!.id;
 
     const { data: emps } = await admin
       .from('employees')
