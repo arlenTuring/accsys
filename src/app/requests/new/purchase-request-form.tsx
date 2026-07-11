@@ -103,12 +103,9 @@ export function PurchaseRequestForm({ budgetCodes }: { budgetCodes: BudgetCodeOp
               </select>
             </div>
             <div className="flex gap-2">
-              <input
-                value={row.itemCategory}
-                onChange={(e) => setRow(i, { itemCategory: e.target.value })}
-                placeholder="項目"
-                className="w-24 rounded border px-2 py-1"
-              />
+              <span className="flex w-24 items-center rounded border bg-gray-50 px-2 py-1 text-sm text-gray-600">
+                {row.itemCategory || '項目'}
+              </span>
               <input
                 value={row.description}
                 onChange={(e) => setRow(i, { description: e.target.value })}
