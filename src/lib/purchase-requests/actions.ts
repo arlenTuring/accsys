@@ -188,3 +188,141 @@ export async function createPurchaseRequest(input: NewPurchaseRequest): Promise<
   revalidatePath('/approvals');
   return { ok: true, requestId: pr.id, caseNumber };
 }
+
+export type ActionResult = { ok: true } | { ok: false; error: string };
+
+type LoadStepResult =
+  | { error: string }
+  | {
+      pr: { id: string; applicant_employee_id: string; procurement_case_id: string };
+      step: { id: string; step_order: number; approver_employee_id: string };
+    };
+
+async function loadCurrentStep(
+  db: ReturnType<typeof createSupabaseServiceRoleClient>,
+  requestId: string,
+  callerId: string
+): Promise<LoadStepResult> {
+  const { data: pr } = await db
+    .from('purchase_requests')
+    .select('id, applicant_employee_id, status, current_step_order, procurement_case_id')
+    .eq('id', requestId)
+    .maybeSingle();
+  if (!pr || pr.status !== 'pending_approval' || pr.current_step_order === null) {
+    return { error: '這張請購單目前不在簽核中' as const };
+  }
+  const { data: step } = await db
+    .from('approval_steps')
+    .select('id, step_order, approver_employee_id')
+    .eq('form_type', 'purchase_request')
+    .eq('form_id', requestId)
+    .eq('step_order', pr.current_step_order)
+    .maybeSingle();
+  if (!step || step.approver_employee_id !== callerId) {
+    return { error: '您不是這張請購單目前的簽核人' as const };
+  }
+  return { pr, step };
+}
+
+export async function approvePurchaseRequestStep(requestId: string): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  const db = createSupabaseServiceRoleClient();
+
+  const loaded = await loadCurrentStep(db, requestId, employee.id);
+  if ('error' in loaded) return { ok: false, error: loaded.error };
+  const { pr, step } = loaded;
+
+  await db
+    .from('approval_steps')
+    .update({ status: 'approved', acted_at: new Date().toISOString() })
+    .eq('id', step.id);
+
+  const { data: caseRow } = await db
+    .from('procurement_cases')
+    .select('case_number')
+    .eq('id', pr.procurement_case_id)
+    .single();
+  const caseNumber = caseRow!.case_number;
+
+  const { data: nextStep } = await db
+    .from('approval_steps')
+    .select('step_order, approver_employee_id')
+    .eq('form_type', 'purchase_request')
+    .eq('form_id', requestId)
+    .eq('step_order', step.step_order + 1)
+    .maybeSingle();
+
+  if (nextStep) {
+    await db
+      .from('purchase_requests')
+      .update({ current_step_order: nextStep.step_order, updated_at: new Date().toISOString() })
+      .eq('id', requestId);
+    await db.from('notifications').insert({
+      recipient_employee_id: nextStep.approver_employee_id,
+      type: 'approval_requested',
+      form_type: 'purchase_request',
+      form_id: requestId,
+      case_number: caseNumber,
+      message: `請購單 ${caseNumber} 待您簽核`,
+    });
+  } else {
+    await db
+      .from('purchase_requests')
+      .update({ status: 'approved', current_step_order: null, updated_at: new Date().toISOString() })
+      .eq('id', requestId);
+    await db.from('notifications').insert({
+      recipient_employee_id: pr.applicant_employee_id,
+      type: 'request_approved',
+      form_type: 'purchase_request',
+      form_id: requestId,
+      case_number: caseNumber,
+      message: `請購單 ${caseNumber} 已完成簽核`,
+    });
+  }
+
+  revalidatePath('/approvals');
+  revalidatePath(`/requests/${requestId}`);
+  return { ok: true };
+}
+
+export async function returnPurchaseRequestStep(
+  requestId: string,
+  reason: string
+): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  if (reason.trim() === '') return { ok: false, error: '請填寫退回原因' };
+  const db = createSupabaseServiceRoleClient();
+
+  const loaded = await loadCurrentStep(db, requestId, employee.id);
+  if ('error' in loaded) return { ok: false, error: loaded.error };
+  const { pr, step } = loaded;
+
+  await db
+    .from('approval_steps')
+    .update({ status: 'returned', comment: reason, acted_at: new Date().toISOString() })
+    .eq('id', step.id);
+  await db
+    .from('purchase_requests')
+    .update({ status: 'returned', current_step_order: null, updated_at: new Date().toISOString() })
+    .eq('id', requestId);
+
+  const { data: caseRow } = await db
+    .from('procurement_cases')
+    .select('case_number')
+    .eq('id', pr.procurement_case_id)
+    .single();
+  await db.from('notifications').insert({
+    recipient_employee_id: pr.applicant_employee_id,
+    type: 'request_returned',
+    form_type: 'purchase_request',
+    form_id: requestId,
+    case_number: caseRow!.case_number,
+    message: `請購單 ${caseRow!.case_number} 已被退回：${reason}`,
+  });
+
+  revalidatePath('/approvals');
+  revalidatePath(`/requests/${requestId}`);
+  return { ok: true };
+}
