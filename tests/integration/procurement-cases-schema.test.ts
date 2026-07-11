@@ -33,7 +33,10 @@ describe.skipIf(!hasIntegrationTestCredentials())('procurement_cases + next_case
     const prefix = (n: string) => n.slice(0, 7);
     const serial = (n: string) => parseInt(n.slice(7), 10);
     expect(prefix(second)).toBe(prefix(first));
-    expect(serial(second)).toBe(serial(first) + 1);
+    // Assert strict increase, not exactly +1: integration test files run in
+    // parallel and share the one global next_case_number() counter, so another
+    // file may consume a serial between these two calls.
+    expect(serial(second)).toBeGreaterThan(serial(first));
   });
 
   it('inserts a procurement_case with a unique case_number', async () => {
