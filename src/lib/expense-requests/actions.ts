@@ -395,3 +395,144 @@ export async function returnExpenseRequestStep(
   revalidatePath(`/expense-requests/${expenseRequestId}`);
   return { ok: true };
 }
+
+export type ResubmitExpenseRequestInput = {
+  payeeType: 'employee' | 'supplier';
+  payeeSupplierId: string | null;
+  paymentMethod: string;
+  bankName: string | null;
+  bankAccount: string | null;
+  accountName: string | null;
+  invoiceMonth: string | null;
+  expectedPaymentDate: string | null;
+  includedSourceItemIds: string[];
+};
+
+export async function resubmitExpenseRequest(
+  expenseRequestId: string,
+  input: ResubmitExpenseRequestInput
+): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  const db = createSupabaseServiceRoleClient();
+
+  const { data: expenseRequest } = await db
+    .from('expense_requests')
+    .select(
+      'id, applicant_employee_id, status, department_id, budget_owner_employee_id, procurement_case_id, purchase_order_id, acceptance_id'
+    )
+    .eq('id', expenseRequestId)
+    .maybeSingle();
+  if (!expenseRequest) return { ok: false, error: '找不到這張費用申請單' };
+  if (expenseRequest.applicant_employee_id !== employee.id) {
+    return { ok: false, error: '只有申請人可以重新送出這張費用申請單' };
+  }
+  if (expenseRequest.status !== 'returned') {
+    return { ok: false, error: '只有被退回的費用申請單可以重新送出' };
+  }
+
+  let sourceItems: SourceItem[] = [];
+  if (expenseRequest.acceptance_id) {
+    const { data: items } = await db
+      .from('acceptance_items')
+      .select('id, purchase_order_item_id, description, amount')
+      .eq('acceptance_id', expenseRequest.acceptance_id);
+    sourceItems = (items ?? []).map((i) => ({
+      id: i.id,
+      purchase_order_item_id: i.purchase_order_item_id,
+      description: i.description,
+      amount: Number(i.amount),
+    }));
+  } else {
+    const { data: items } = await db
+      .from('purchase_order_items')
+      .select('id, description, total_price')
+      .eq('purchase_order_id', expenseRequest.purchase_order_id);
+    sourceItems = (items ?? []).map((i) => ({
+      id: i.id,
+      purchase_order_item_id: i.id,
+      description: i.description,
+      amount: Number(i.total_price),
+    }));
+  }
+
+  const includedSet = new Set(input.includedSourceItemIds);
+  const includedItems = sourceItems.filter((i) => includedSet.has(i.id));
+
+  const validation = validateExpenseRequestInput({
+    payeeType: input.payeeType,
+    payeeSupplierId: input.payeeSupplierId,
+    bankAccount: input.bankAccount,
+    includedItemCount: includedItems.length,
+  });
+  if (!validation.ok) return { ok: false, error: validation.error };
+
+  const totalAmount = includedItems.reduce((sum, i) => sum + i.amount, 0);
+
+  const referenceDate = new Date().toISOString().slice(0, 10);
+  const expectedPaymentDate =
+    input.expectedPaymentDate ??
+    (input.invoiceMonth ? computeDefaultExpectedPaymentDate(input.invoiceMonth) : null);
+  const batch = computePaymentBatchDate({
+    payeeType: input.payeeType,
+    referenceDate,
+    expectedPaymentDate,
+    invoiceMonth: input.invoiceMonth,
+  });
+
+  const chainResult = await buildApprovalChainForForm(db, {
+    applicantEmployeeId: employee.id,
+    departmentId: expenseRequest.department_id,
+    budgetOwnerEmployeeId: expenseRequest.budget_owner_employee_id,
+    totalAmount,
+  });
+  if (!chainResult.ok) return { ok: false, error: chainResult.error };
+  const chain = chainResult.chain;
+  if (chain.length === 0) {
+    return { ok: false, error: '重新送出後找不到適用的簽核人，請聯絡系統管理員' };
+  }
+
+  const { error: txError } = await db.rpc('resubmit_expense_request', {
+    p_expense_request_id: expenseRequestId,
+    p_payee_type: input.payeeType,
+    p_payee_supplier: input.payeeType === 'supplier' ? input.payeeSupplierId : null,
+    p_payment_method: input.paymentMethod,
+    p_bank_name: input.payeeType === 'employee' ? input.bankName : null,
+    p_bank_account: input.payeeType === 'employee' ? input.bankAccount : null,
+    p_account_name: input.payeeType === 'employee' ? input.accountName : null,
+    p_invoice_month: input.invoiceMonth,
+    p_expected_payment_date: expectedPaymentDate,
+    p_payment_batch_date: batch.batchDate,
+    p_total: totalAmount,
+    p_items: includedItems.map((i, idx) => ({
+      line_no: idx + 1,
+      purchase_order_item_id: i.purchase_order_item_id,
+      description: i.description,
+      amount: i.amount,
+    })),
+    p_steps: chain.map((step, idx) => ({
+      step_order: idx + 1,
+      approver_employee_id: step.approverEmployeeId,
+      approver_role: step.approverRole,
+    })),
+  });
+  if (txError) return { ok: false, error: '重新送出失敗，請稍後再試' };
+
+  const { data: caseRow } = await db
+    .from('procurement_cases')
+    .select('case_number')
+    .eq('id', expenseRequest.procurement_case_id)
+    .single();
+  await notifyAndEmail(db, {
+    recipientEmployeeId: chain[0].approverEmployeeId,
+    type: 'approval_requested',
+    formType: 'expense_request',
+    formId: expenseRequestId,
+    caseNumber: caseRow!.case_number,
+    message: `費用申請單 ${caseRow!.case_number} 已重新送出，待您簽核`,
+  });
+
+  revalidatePath('/approvals');
+  revalidatePath(`/expense-requests/${expenseRequestId}`);
+  return { ok: true };
+}
