@@ -1,4 +1,5 @@
 import { notFound } from 'next/navigation';
+import Link from 'next/link';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getPurchaseOrderDetail } from '@/lib/purchase-orders/queries';
@@ -119,6 +120,14 @@ export default async function PurchaseOrderDetailPage({
       </section>
 
       <AttachmentsPanel formType="purchase_order" formId={id} attachments={attachments} />
+
+      {detail.status === 'approved' && (
+        <p>
+          <Link href={`/acceptances/new?orderId=${detail.id}`} className="text-blue-600 underline">
+            建立驗收單
+          </Link>
+        </p>
+      )}
 
       {isCurrentApprover && <ApprovalActions orderId={detail.id} />}
     </main>
