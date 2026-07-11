@@ -99,9 +99,20 @@ describe.skipIf(!hasIntegrationTestCredentials())('approve/return purchase reque
         .eq('form_id', requestId)
         .eq('step_order', pr!.current_step_order)
         .single();
-      currentEmployee.value = { id: step!.approver_employee_id };
+      const approverId = step!.approver_employee_id;
+      currentEmployee.value = { id: approverId };
       const result = await approvePurchaseRequestStep(requestId);
       expect(result.ok).toBe(true);
+      const { data: ownNotif } = await admin
+        .from('notifications')
+        .select('is_read')
+        .eq('form_id', requestId)
+        .eq('recipient_employee_id', approverId)
+        .eq('type', 'approval_requested')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+      expect(ownNotif!.is_read).toBe(true);
     }
     const { data: final } = await admin
       .from('purchase_requests')
@@ -154,5 +165,13 @@ describe.skipIf(!hasIntegrationTestCredentials())('approve/return purchase reque
       .eq('recipient_employee_id', applicantId)
       .eq('type', 'request_returned');
     expect(notif!.length).toBe(1);
+    const { data: ownNotif } = await admin
+      .from('notifications')
+      .select('is_read')
+      .eq('form_id', requestId)
+      .eq('recipient_employee_id', step!.approver_employee_id)
+      .eq('type', 'approval_requested')
+      .single();
+    expect(ownNotif!.is_read).toBe(true);
   });
 });

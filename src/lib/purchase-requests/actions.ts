@@ -260,6 +260,15 @@ export async function approvePurchaseRequestStep(requestId: string): Promise<Act
     .update({ status: 'approved', acted_at: new Date().toISOString() })
     .eq('id', step.id);
 
+  await db
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('recipient_employee_id', employee.id)
+    .eq('form_type', 'purchase_request')
+    .eq('form_id', requestId)
+    .eq('type', 'approval_requested')
+    .eq('is_read', false);
+
   const { data: caseRow } = await db
     .from('procurement_cases')
     .select('case_number')
@@ -464,6 +473,16 @@ export async function returnPurchaseRequestStep(
     .from('approval_steps')
     .update({ status: 'returned', comment: reason, acted_at: new Date().toISOString() })
     .eq('id', step.id);
+
+  await db
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('recipient_employee_id', employee.id)
+    .eq('form_type', 'purchase_request')
+    .eq('form_id', requestId)
+    .eq('type', 'approval_requested')
+    .eq('is_read', false);
+
   await db
     .from('purchase_requests')
     .update({ status: 'returned', current_step_order: null, updated_at: new Date().toISOString() })
