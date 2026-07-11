@@ -171,3 +171,189 @@ export async function createAcceptance(input: NewAcceptance): Promise<CreateResu
   revalidatePath('/approvals');
   return { ok: true, acceptanceId: acceptance.id, caseNumber };
 }
+
+export type ActionResult = { ok: true } | { ok: false; error: string };
+
+type LoadStepResult =
+  | { error: string }
+  | {
+      acceptance: { id: string; applicant_employee_id: string; procurement_case_id: string };
+      step: { id: string; step_order: number; approver_employee_id: string };
+    };
+
+async function loadCurrentStep(
+  db: ReturnType<typeof createSupabaseServiceRoleClient>,
+  acceptanceId: string,
+  callerId: string
+): Promise<LoadStepResult> {
+  const { data: acceptance } = await db
+    .from('acceptances')
+    .select('id, applicant_employee_id, status, current_step_order, procurement_case_id')
+    .eq('id', acceptanceId)
+    .maybeSingle();
+  if (!acceptance || acceptance.status !== 'pending_approval' || acceptance.current_step_order === null) {
+    return { error: '這張驗收單目前不在簽核中' };
+  }
+  const { data: step } = await db
+    .from('approval_steps')
+    .select('id, step_order, approver_employee_id')
+    .eq('form_type', 'acceptance')
+    .eq('form_id', acceptanceId)
+    .eq('step_order', acceptance.current_step_order)
+    .maybeSingle();
+  if (!step || step.approver_employee_id !== callerId) {
+    return { error: '您不是這張驗收單目前的簽核人' };
+  }
+  return { acceptance, step };
+}
+
+export async function approveAcceptanceStep(acceptanceId: string): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  const db = createSupabaseServiceRoleClient();
+
+  const loaded = await loadCurrentStep(db, acceptanceId, employee.id);
+  if ('error' in loaded) return { ok: false, error: loaded.error };
+  const { acceptance, step } = loaded;
+
+  await db
+    .from('approval_steps')
+    .update({ status: 'approved', acted_at: new Date().toISOString() })
+    .eq('id', step.id);
+
+  await db
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('recipient_employee_id', employee.id)
+    .eq('form_type', 'acceptance')
+    .eq('form_id', acceptanceId)
+    .eq('type', 'approval_requested')
+    .eq('is_read', false);
+
+  const { data: caseRow } = await db
+    .from('procurement_cases')
+    .select('case_number')
+    .eq('id', acceptance.procurement_case_id)
+    .single();
+  const caseNumber = caseRow!.case_number;
+
+  const { data: nextStep } = await db
+    .from('approval_steps')
+    .select('step_order, approver_employee_id')
+    .eq('form_type', 'acceptance')
+    .eq('form_id', acceptanceId)
+    .eq('step_order', step.step_order + 1)
+    .maybeSingle();
+
+  if (nextStep) {
+    await db
+      .from('acceptances')
+      .update({ current_step_order: nextStep.step_order, updated_at: new Date().toISOString() })
+      .eq('id', acceptanceId);
+    await notifyAndEmail(db, {
+      recipientEmployeeId: nextStep.approver_employee_id,
+      type: 'approval_requested',
+      formType: 'acceptance',
+      formId: acceptanceId,
+      caseNumber,
+      message: `驗收單 ${caseNumber} 待您簽核`,
+    });
+  } else {
+    await db
+      .from('acceptances')
+      .update({ status: 'approved', current_step_order: null, updated_at: new Date().toISOString() })
+      .eq('id', acceptanceId);
+    await notifyAndEmail(db, {
+      recipientEmployeeId: acceptance.applicant_employee_id,
+      type: 'request_approved',
+      formType: 'acceptance',
+      formId: acceptanceId,
+      caseNumber,
+      message: `驗收單 ${caseNumber} 已完成簽核`,
+    });
+  }
+
+  revalidatePath('/approvals');
+  revalidatePath(`/acceptances/${acceptanceId}`);
+  return { ok: true };
+}
+
+export async function returnAcceptanceStep(
+  acceptanceId: string,
+  reason: string
+): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  if (reason.trim() === '') return { ok: false, error: '請填寫退回原因' };
+  const db = createSupabaseServiceRoleClient();
+
+  const loaded = await loadCurrentStep(db, acceptanceId, employee.id);
+  if ('error' in loaded) return { ok: false, error: loaded.error };
+  const { acceptance, step } = loaded;
+
+  await db
+    .from('approval_steps')
+    .update({ status: 'returned', comment: reason, acted_at: new Date().toISOString() })
+    .eq('id', step.id);
+
+  await db
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('recipient_employee_id', employee.id)
+    .eq('form_type', 'acceptance')
+    .eq('form_id', acceptanceId)
+    .eq('type', 'approval_requested')
+    .eq('is_read', false);
+
+  await db
+    .from('acceptances')
+    .update({ status: 'returned', current_step_order: null, updated_at: new Date().toISOString() })
+    .eq('id', acceptanceId);
+
+  const { data: caseRow } = await db
+    .from('procurement_cases')
+    .select('case_number')
+    .eq('id', acceptance.procurement_case_id)
+    .single();
+
+  await notifyAndEmail(db, {
+    recipientEmployeeId: acceptance.applicant_employee_id,
+    type: 'request_returned',
+    formType: 'acceptance',
+    formId: acceptanceId,
+    caseNumber: caseRow!.case_number,
+    message: `驗收單 ${caseRow!.case_number} 已被退回：${reason}`,
+  });
+
+  revalidatePath('/approvals');
+  revalidatePath(`/acceptances/${acceptanceId}`);
+  return { ok: true };
+}
+
+export async function updateAcceptanceItemPropertyTag(
+  itemId: string,
+  propertyTag: string
+): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  if (employee.role !== 'finance' && employee.role !== 'admin') {
+    return { ok: false, error: '只有財會人員可以填寫財產編號' };
+  }
+  const db = createSupabaseServiceRoleClient();
+
+  const { data: item } = await db
+    .from('acceptance_items')
+    .select('acceptance_id')
+    .eq('id', itemId)
+    .maybeSingle();
+  if (!item) return { ok: false, error: '找不到驗收明細' };
+
+  const { error } = await db
+    .from('acceptance_items')
+    .update({ property_tag: propertyTag })
+    .eq('id', itemId);
+  if (error) return { ok: false, error: '更新財產編號失敗' };
+
+  revalidatePath(`/acceptances/${item.acceptance_id}`);
+  return { ok: true };
+}
