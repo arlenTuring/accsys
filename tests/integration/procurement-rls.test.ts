@@ -11,13 +11,16 @@ describe.skipIf(!hasIntegrationTestCredentials())('procurement RLS', () => {
   const applicantEmail = `rls-pr-applicant-${Date.now()}@turing-drive.com`;
   const outsiderEmail = `rls-pr-outsider-${Date.now()}@turing-drive.com`;
   const approverEmail = `rls-pr-approver-${Date.now()}@turing-drive.com`;
+  const secondApproverEmail = `rls-pr-approver2-${Date.now()}@turing-drive.com`;
   let deptId: string;
   let applicantEmpId: string;
   let outsiderEmpId: string;
   let approverEmpId: string;
+  let secondApproverEmpId: string;
   let applicantAuthId: string;
   let outsiderAuthId: string;
   let approverAuthId: string;
+  let secondApproverAuthId: string;
   let caseId: string;
   let requestId: string;
 
@@ -48,6 +51,12 @@ describe.skipIf(!hasIntegrationTestCredentials())('procurement RLS', () => {
       email_confirm: true,
     });
     approverAuthId = ap!.user!.id;
+    const { data: ap2 } = await admin.auth.admin.createUser({
+      email: secondApproverEmail,
+      password,
+      email_confirm: true,
+    });
+    secondApproverAuthId = ap2!.user!.id;
 
     const { data: emps } = await admin
       .from('employees')
@@ -73,11 +82,19 @@ describe.skipIf(!hasIntegrationTestCredentials())('procurement RLS', () => {
           google_email: approverEmail,
           role: 'staff',
         },
+        {
+          employee_code: `RLS-PR-AP2-${Date.now()}`,
+          name: 'RLS 簽核人二',
+          department_id: deptId,
+          google_email: secondApproverEmail,
+          role: 'staff',
+        },
       ])
       .select();
     applicantEmpId = emps!.find((e) => e.google_email === applicantEmail)!.id;
     outsiderEmpId = emps!.find((e) => e.google_email === outsiderEmail)!.id;
     approverEmpId = emps!.find((e) => e.google_email === approverEmail)!.id;
+    secondApproverEmpId = emps!.find((e) => e.google_email === secondApproverEmail)!.id;
 
     const { data: caseNumber } = await admin.rpc('next_case_number');
     const { data: pcase } = await admin
@@ -107,6 +124,13 @@ describe.skipIf(!hasIntegrationTestCredentials())('procurement RLS', () => {
       approver_employee_id: approverEmpId,
       approver_role: 'department_manager',
     });
+    await admin.from('approval_steps').insert({
+      form_type: 'purchase_request',
+      form_id: requestId,
+      step_order: 2,
+      approver_employee_id: secondApproverEmpId,
+      approver_role: 'budget_owner',
+    });
   });
 
   afterAll(async () => {
@@ -118,6 +142,7 @@ describe.skipIf(!hasIntegrationTestCredentials())('procurement RLS', () => {
     await admin.auth.admin.deleteUser(applicantAuthId);
     await admin.auth.admin.deleteUser(outsiderAuthId);
     await admin.auth.admin.deleteUser(approverAuthId);
+    await admin.auth.admin.deleteUser(secondApproverAuthId);
   });
 
   it('lets the applicant read their own request', async () => {
@@ -139,6 +164,13 @@ describe.skipIf(!hasIntegrationTestCredentials())('procurement RLS', () => {
     await client.auth.signInWithPassword({ email: approverEmail, password });
     const { data } = await client.from('purchase_requests').select('id').eq('id', requestId);
     expect(data).toHaveLength(1);
+  });
+
+  it('lets any approver of the request read ALL its approval steps', async () => {
+    const client = createAnonTestClient();
+    await client.auth.signInWithPassword({ email: secondApproverEmail, password });
+    const { data } = await client.from('approval_steps').select('id').eq('form_id', requestId);
+    expect(data).toHaveLength(2);
   });
 
   it('blocks a direct client insert into purchase_requests (writes are service-role only)', async () => {
