@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
@@ -102,6 +103,14 @@ export default async function RequestDetailPage({
           ))}
         </ol>
       </section>
+
+      {detail.status === 'approved' && (
+        <p>
+          <Link href={`/purchase-orders/new?requestId=${detail.id}`} className="text-blue-600 underline">
+            建立採購單
+          </Link>
+        </p>
+      )}
 
       {isCurrentApprover && <ApprovalActions requestId={detail.id} />}
     </main>
