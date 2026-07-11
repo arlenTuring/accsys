@@ -141,4 +141,46 @@ describe.skipIf(!hasIntegrationTestCredentials())('purchase_orders + items schem
     });
     expect(badPrice).not.toBeNull();
   });
+
+  it('rejects a line item with quantity <= 0', async () => {
+    const { error } = await supabase.from('purchase_order_items').insert({
+      purchase_order_id: orderId,
+      line_no: 3,
+      budget_code_id: budgetCodeId,
+      item_category: '材料',
+      description: '零數量',
+      quantity: 0,
+      unit_price: 100,
+      total_price: 100,
+    });
+    expect(error).not.toBeNull();
+  });
+
+  it('rejects a line item with unit_price <= 0', async () => {
+    const { error } = await supabase.from('purchase_order_items').insert({
+      purchase_order_id: orderId,
+      line_no: 4,
+      budget_code_id: budgetCodeId,
+      item_category: '材料',
+      description: '零單價',
+      quantity: 1,
+      unit_price: 0,
+      total_price: 100,
+    });
+    expect(error).not.toBeNull();
+  });
+
+  it('rejects a line item with total_price <= 0', async () => {
+    const { error } = await supabase.from('purchase_order_items').insert({
+      purchase_order_id: orderId,
+      line_no: 5,
+      budget_code_id: budgetCodeId,
+      item_category: '材料',
+      description: '零總價',
+      quantity: 1,
+      unit_price: 100,
+      total_price: 0,
+    });
+    expect(error).not.toBeNull();
+  });
 });
