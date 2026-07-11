@@ -6,6 +6,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { type ApprovalChainStep } from '@/lib/approval/chain';
 import { buildApprovalChainForForm } from '@/lib/approval/build-chain';
+import { notifyAndEmail } from '@/lib/notifications/notify';
 import {
   validatePurchaseRequestInput,
   type PurchaseRequestItemInput,
@@ -155,15 +156,15 @@ export async function createPurchaseRequest(input: NewPurchaseRequest): Promise<
     }
 
     const first = chain[0];
-    const { error: notifError } = await db.from('notifications').insert({
-      recipient_employee_id: first.approverEmployeeId,
+    const notifyResult = await notifyAndEmail(db, {
+      recipientEmployeeId: first.approverEmployeeId,
       type: 'approval_requested',
-      form_type: 'purchase_request',
-      form_id: pr.id,
-      case_number: caseNumber,
+      formType: 'purchase_request',
+      formId: pr.id,
+      caseNumber,
       message: `請購單 ${caseNumber} 待您簽核`,
     });
-    if (notifError) {
+    if (!notifyResult.ok) {
       await cleanup(pr.id);
       return { ok: false, error: '建立通知失敗' };
     }
@@ -252,12 +253,12 @@ export async function approvePurchaseRequestStep(requestId: string): Promise<Act
       .from('purchase_requests')
       .update({ current_step_order: nextStep.step_order, updated_at: new Date().toISOString() })
       .eq('id', requestId);
-    await db.from('notifications').insert({
-      recipient_employee_id: nextStep.approver_employee_id,
+    await notifyAndEmail(db, {
+      recipientEmployeeId: nextStep.approver_employee_id,
       type: 'approval_requested',
-      form_type: 'purchase_request',
-      form_id: requestId,
-      case_number: caseNumber,
+      formType: 'purchase_request',
+      formId: requestId,
+      caseNumber,
       message: `請購單 ${caseNumber} 待您簽核`,
     });
   } else {
@@ -265,12 +266,12 @@ export async function approvePurchaseRequestStep(requestId: string): Promise<Act
       .from('purchase_requests')
       .update({ status: 'approved', current_step_order: null, updated_at: new Date().toISOString() })
       .eq('id', requestId);
-    await db.from('notifications').insert({
-      recipient_employee_id: pr.applicant_employee_id,
+    await notifyAndEmail(db, {
+      recipientEmployeeId: pr.applicant_employee_id,
       type: 'request_approved',
-      form_type: 'purchase_request',
-      form_id: requestId,
-      case_number: caseNumber,
+      formType: 'purchase_request',
+      formId: requestId,
+      caseNumber,
       message: `請購單 ${caseNumber} 已完成簽核`,
     });
   }
@@ -371,12 +372,12 @@ export async function resubmitPurchaseRequest(
     .select('case_number')
     .eq('id', pr.procurement_case_id)
     .single();
-  await db.from('notifications').insert({
-    recipient_employee_id: chain[0].approverEmployeeId,
+  await notifyAndEmail(db, {
+    recipientEmployeeId: chain[0].approverEmployeeId,
     type: 'approval_requested',
-    form_type: 'purchase_request',
-    form_id: requestId,
-    case_number: caseRow!.case_number,
+    formType: 'purchase_request',
+    formId: requestId,
+    caseNumber: caseRow!.case_number,
     message: `請購單 ${caseRow!.case_number} 已重新送出，待您簽核`,
   });
 
@@ -422,12 +423,12 @@ export async function returnPurchaseRequestStep(
     .select('case_number')
     .eq('id', pr.procurement_case_id)
     .single();
-  await db.from('notifications').insert({
-    recipient_employee_id: pr.applicant_employee_id,
+  await notifyAndEmail(db, {
+    recipientEmployeeId: pr.applicant_employee_id,
     type: 'request_returned',
-    form_type: 'purchase_request',
-    form_id: requestId,
-    case_number: caseRow!.case_number,
+    formType: 'purchase_request',
+    formId: requestId,
+    caseNumber: caseRow!.case_number,
     message: `請購單 ${caseRow!.case_number} 已被退回：${reason}`,
   });
 
