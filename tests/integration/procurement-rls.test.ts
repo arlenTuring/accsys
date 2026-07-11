@@ -10,11 +10,14 @@ describe.skipIf(!hasIntegrationTestCredentials())('procurement RLS', () => {
   const password = 'Test-password-123!';
   const applicantEmail = `rls-pr-applicant-${Date.now()}@turing-drive.com`;
   const outsiderEmail = `rls-pr-outsider-${Date.now()}@turing-drive.com`;
+  const approverEmail = `rls-pr-approver-${Date.now()}@turing-drive.com`;
   let deptId: string;
   let applicantEmpId: string;
   let outsiderEmpId: string;
+  let approverEmpId: string;
   let applicantAuthId: string;
   let outsiderAuthId: string;
+  let approverAuthId: string;
   let caseId: string;
   let requestId: string;
 
@@ -39,6 +42,12 @@ describe.skipIf(!hasIntegrationTestCredentials())('procurement RLS', () => {
       email_confirm: true,
     });
     outsiderAuthId = o!.user.id;
+    const { data: ap } = await admin.auth.admin.createUser({
+      email: approverEmail,
+      password,
+      email_confirm: true,
+    });
+    approverAuthId = ap!.user.id;
 
     const { data: emps } = await admin
       .from('employees')
@@ -57,10 +66,18 @@ describe.skipIf(!hasIntegrationTestCredentials())('procurement RLS', () => {
           google_email: outsiderEmail,
           role: 'staff',
         },
+        {
+          employee_code: `RLS-PR-AP-${Date.now()}`,
+          name: 'RLS 簽核人',
+          department_id: deptId,
+          google_email: approverEmail,
+          role: 'staff',
+        },
       ])
       .select();
     applicantEmpId = emps!.find((e) => e.google_email === applicantEmail)!.id;
     outsiderEmpId = emps!.find((e) => e.google_email === outsiderEmail)!.id;
+    approverEmpId = emps!.find((e) => e.google_email === approverEmail)!.id;
 
     const { data: caseNumber } = await admin.rpc('next_case_number');
     const { data: pcase } = await admin
@@ -82,15 +99,25 @@ describe.skipIf(!hasIntegrationTestCredentials())('procurement RLS', () => {
       .select()
       .single();
     requestId = pr!.id;
+
+    await admin.from('approval_steps').insert({
+      form_type: 'purchase_request',
+      form_id: requestId,
+      step_order: 1,
+      approver_employee_id: approverEmpId,
+      approver_role: 'department_manager',
+    });
   });
 
   afterAll(async () => {
+    await admin.from('approval_steps').delete().eq('form_id', requestId);
     await admin.from('purchase_requests').delete().eq('id', requestId);
     await admin.from('procurement_cases').delete().eq('id', caseId);
     await admin.from('employees').delete().eq('department_id', deptId);
     await admin.from('departments').delete().eq('id', deptId);
     await admin.auth.admin.deleteUser(applicantAuthId);
     await admin.auth.admin.deleteUser(outsiderAuthId);
+    await admin.auth.admin.deleteUser(approverAuthId);
   });
 
   it('lets the applicant read their own request', async () => {
@@ -105,6 +132,13 @@ describe.skipIf(!hasIntegrationTestCredentials())('procurement RLS', () => {
     await client.auth.signInWithPassword({ email: outsiderEmail, password });
     const { data } = await client.from('purchase_requests').select('id').eq('id', requestId);
     expect(data).toEqual([]);
+  });
+
+  it('lets an assigned approver read the request', async () => {
+    const client = createAnonTestClient();
+    await client.auth.signInWithPassword({ email: approverEmail, password });
+    const { data } = await client.from('purchase_requests').select('id').eq('id', requestId);
+    expect(data).toHaveLength(1);
   });
 
   it('blocks a direct client insert into purchase_requests (writes are service-role only)', async () => {
