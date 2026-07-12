@@ -18,7 +18,6 @@ describe.skipIf(!hasIntegrationTestCredentials())('purchase order approve/return
   let gmId: string;
   let departmentId: string;
   let supplierId: string;
-  let budgetCodeId: string;
   const createdCaseIds: string[] = [];
   const createdOrderIds: string[] = [];
   const createdRequestIds: string[] = [];
@@ -34,8 +33,6 @@ describe.skipIf(!hasIntegrationTestCredentials())('purchase order approve/return
     departmentId = emps![0].department_id;
     const { data: sup } = await admin.from('suppliers').select('id').limit(1).single();
     supplierId = sup!.id;
-    const { data: bc } = await admin.from('budget_codes').select('id').limit(1).single();
-    budgetCodeId = bc!.id;
   });
 
   async function makeOrderWithTwoSteps() {

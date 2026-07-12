@@ -14,7 +14,6 @@ describe.skipIf(!hasIntegrationTestCredentials())('procurement RLS', () => {
   const secondApproverEmail = `rls-pr-approver2-${Date.now()}@turing-drive.com`;
   let deptId: string;
   let applicantEmpId: string;
-  let outsiderEmpId: string;
   let approverEmpId: string;
   let secondApproverEmpId: string;
   let applicantAuthId: string;
@@ -92,7 +91,6 @@ describe.skipIf(!hasIntegrationTestCredentials())('procurement RLS', () => {
       ])
       .select();
     applicantEmpId = emps!.find((e) => e.google_email === applicantEmail)!.id;
-    outsiderEmpId = emps!.find((e) => e.google_email === outsiderEmail)!.id;
     approverEmpId = emps!.find((e) => e.google_email === approverEmail)!.id;
     secondApproverEmpId = emps!.find((e) => e.google_email === secondApproverEmail)!.id;
 
