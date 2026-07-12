@@ -278,4 +278,89 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
       .single();
     expect(row).toEqual({ category: '租金支出', annual_budget_amount: 2000 });
   });
+
+  it('rejects delete from a non-finance employee', async () => {
+    currentEmployee.value = { id: staffEmployeeId, role: 'staff' };
+    const { deleteBudgetCode } = await import('@/lib/budget-codes/actions');
+    const result = await deleteBudgetCode('00000000-0000-0000-0000-000000000000');
+    expect(result).toEqual({ ok: false, error: '只有財會人員可以維護預算編號' });
+  });
+
+  it('deletes a budget code that is not referenced by any purchase request item', async () => {
+    currentEmployee.value = { id: financeEmployeeId, role: 'finance' };
+    const { upsertBudgetCode, deleteBudgetCode } = await import('@/lib/budget-codes/actions');
+    const create = await upsertBudgetCode({
+      code: `BCT-DEL-OK-${Date.now()}`,
+      departmentCode,
+      projectCode: null,
+      category: '人事費',
+      fiscalYear: '115',
+      annualBudgetAmount: 1000,
+      ownerEmployeeCode: null,
+    });
+    expect(create.ok).toBe(true);
+    if (!create.ok) return;
+
+    const result = await deleteBudgetCode(create.budgetCodeId);
+    expect(result).toEqual({ ok: true });
+
+    const { data: row } = await admin
+      .from('budget_codes')
+      .select('id')
+      .eq('id', create.budgetCodeId)
+      .maybeSingle();
+    expect(row).toBeNull();
+  });
+
+  it('rejects deleting a budget code referenced by a purchase request item', async () => {
+    currentEmployee.value = { id: financeEmployeeId, role: 'finance' };
+    const { upsertBudgetCode, deleteBudgetCode } = await import('@/lib/budget-codes/actions');
+    const create = await upsertBudgetCode({
+      code: `BCT-DEL-BLOCKED-${Date.now()}`,
+      departmentCode,
+      projectCode: null,
+      category: '人事費',
+      fiscalYear: '115',
+      annualBudgetAmount: 1000,
+      ownerEmployeeCode: null,
+    });
+    expect(create.ok).toBe(true);
+    if (!create.ok) return;
+    createdBudgetCodeIds.push(create.budgetCodeId);
+
+    const { data: caseNumber } = await admin.rpc('next_case_number');
+    const { data: pcase } = await admin
+      .from('procurement_cases')
+      .insert({ case_number: caseNumber, created_by_employee_id: financeEmployeeId })
+      .select()
+      .single();
+    const { data: pr } = await admin
+      .from('purchase_requests')
+      .insert({
+        procurement_case_id: pcase!.id,
+        applicant_employee_id: financeEmployeeId,
+        department_id: departmentId,
+        budget_owner_employee_id: managerId,
+        total_amount: 1000,
+        status: 'pending_approval',
+      })
+      .select()
+      .single();
+    await admin.from('purchase_request_items').insert({
+      purchase_request_id: pr!.id,
+      line_no: 1,
+      budget_code_id: create.budgetCodeId,
+      item_category: '人事費',
+      description: '測試項目',
+      quantity: 1,
+      estimated_amount: 1000,
+    });
+
+    const result = await deleteBudgetCode(create.budgetCodeId);
+    expect(result).toEqual({ ok: false, error: '此預算編號已被請購單使用，無法刪除' });
+
+    await admin.from('purchase_request_items').delete().eq('purchase_request_id', pr!.id);
+    await admin.from('purchase_requests').delete().eq('id', pr!.id);
+    await admin.from('procurement_cases').delete().eq('id', pcase!.id);
+  });
 });

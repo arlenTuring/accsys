@@ -87,3 +87,25 @@ export async function upsertBudgetCode(input: BudgetCodeInput): Promise<UpsertRe
   if (result.ok) revalidatePath('/budget-codes');
   return result;
 }
+
+export type DeleteResult = { ok: true } | { ok: false; error: string };
+
+export async function deleteBudgetCode(budgetCodeId: string): Promise<DeleteResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料，請聯絡系統管理員' };
+  if (employee.role !== 'finance') return { ok: false, error: '只有財會人員可以維護預算編號' };
+
+  const db = createSupabaseServiceRoleClient();
+  const { count } = await db
+    .from('purchase_request_items')
+    .select('id', { count: 'exact', head: true })
+    .eq('budget_code_id', budgetCodeId);
+  if ((count ?? 0) > 0) {
+    return { ok: false, error: '此預算編號已被請購單使用，無法刪除' };
+  }
+
+  const { error } = await db.from('budget_codes').delete().eq('id', budgetCodeId);
+  if (error) return { ok: false, error: '刪除預算編號失敗' };
+  revalidatePath('/budget-codes');
+  return { ok: true };
+}
