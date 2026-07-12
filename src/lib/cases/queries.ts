@@ -9,6 +9,7 @@ export type CaseFormStatus = {
   exists: boolean;
   id: string | null;
   status: string | null;
+  hasAttachments: boolean;
 };
 
 export type CaseOverview = {
@@ -39,6 +40,15 @@ export async function getCaseOverview(caseNumber: string): Promise<CaseOverview 
       .select('id, status')
       .eq('procurement_case_id', pcase.id)
       .maybeSingle();
+    let hasAttachments = false;
+    if (data) {
+      const { count } = await supabase
+        .from('attachments')
+        .select('id', { count: 'exact', head: true })
+        .eq('form_type', def.formType)
+        .eq('form_id', data.id);
+      hasAttachments = (count ?? 0) > 0;
+    }
     forms.push({
       formType: def.formType,
       label: def.label,
@@ -46,6 +56,7 @@ export async function getCaseOverview(caseNumber: string): Promise<CaseOverview 
       exists: !!data,
       id: data?.id ?? null,
       status: data?.status ?? null,
+      hasAttachments,
     });
   }
   return { caseNumber: pcase.case_number, forms };

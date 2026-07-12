@@ -32,9 +32,16 @@ export default async function CaseOverviewPage({
               {f.itemCode}｜{f.label}
             </span>
             {f.exists ? (
-              <Link href={`${FORM_ROUTE_PREFIX[f.formType]}/${f.id}`} className="text-blue-600 underline">
-                {STATUS_LABELS[f.status ?? ''] ?? f.status}
-              </Link>
+              <span className="flex items-center gap-2">
+                <Link href={`${FORM_ROUTE_PREFIX[f.formType]}/${f.id}`} className="text-blue-600 underline">
+                  {STATUS_LABELS[f.status ?? ''] ?? f.status}
+                </Link>
+                {!f.hasAttachments && (
+                  <span className="rounded bg-amber-50 px-2 py-0.5 text-xs text-amber-700">
+                    憑證待補
+                  </span>
+                )}
+              </span>
             ) : (
               <span className="text-gray-400">尚未建立</span>
             )}
