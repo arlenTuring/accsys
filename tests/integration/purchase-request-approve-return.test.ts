@@ -128,7 +128,7 @@ describe.skipIf(!hasIntegrationTestCredentials())('approve/return purchase reque
       .eq('recipient_employee_id', applicantId)
       .eq('type', 'request_approved');
     expect(applicantNotif!.length).toBeGreaterThanOrEqual(1);
-  });
+  }, 15000);
 
   it('returns the request to the applicant with a reason', async () => {
     const { requestId } = await seedRequest();
