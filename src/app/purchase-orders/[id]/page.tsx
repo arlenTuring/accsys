@@ -129,6 +129,14 @@ export default async function PurchaseOrderDetailPage({
         </p>
       )}
 
+      {detail.status === 'approved' && (
+        <p>
+          <Link href={`/expense-requests/new?orderId=${detail.id}`} className="text-blue-600 underline">
+            建立費用申請單
+          </Link>
+        </p>
+      )}
+
       {isCurrentApprover && <ApprovalActions orderId={detail.id} />}
     </main>
   );
