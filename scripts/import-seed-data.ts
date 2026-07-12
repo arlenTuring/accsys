@@ -88,26 +88,24 @@ async function main() {
 
   const uniqueBudgetCodes = new Map(budgetCodes.map((b) => [b.code, b]));
   let insertedBudgetCodeCount = 0;
-  let skippedProjectScopedBudgetCodeCount = 0;
+  let importedProjectScopedBudgetCodeCount = 0;
   for (const budget of uniqueBudgetCodes.values()) {
     const departmentId = departmentIdByCode.get(budget.departmentCode);
-    if (!departmentId) {
-      skippedProjectScopedBudgetCodeCount += 1;
-      continue;
-    }
     const { error } = await supabase.from('budget_codes').upsert(
       {
         code: budget.code,
-        department_id: departmentId,
+        department_id: departmentId ?? null,
+        project_code: departmentId ? null : budget.departmentCode,
         category: budget.category,
         fiscal_year: budget.fiscalYear,
         annual_budget_amount: budget.annualBudgetAmount,
-        owner_employee_id: managerIdByDeptCode.get(budget.departmentCode) ?? null,
+        owner_employee_id: departmentId ? (managerIdByDeptCode.get(budget.departmentCode) ?? null) : null,
       },
       { onConflict: 'code' }
     );
     if (error) throw error;
     insertedBudgetCodeCount += 1;
+    if (!departmentId) importedProjectScopedBudgetCodeCount += 1;
   }
 
   for (const supplier of suppliers) {
@@ -124,11 +122,11 @@ async function main() {
   }
 
   console.log(
-    `匯入完成：${departmentByCode.size} 個部門、${employees.length} 位員工、${insertedBudgetCodeCount} 個預算編號、${suppliers.length} 家供應商。`
+    `匯入完成：${departmentByCode.size} 個部門、${employees.length} 位員工、${insertedBudgetCodeCount} 個預算編號（其中 ${importedProjectScopedBudgetCodeCount} 個為專案型）、${suppliers.length} 家供應商。`
   );
-  if (skippedProjectScopedBudgetCodeCount > 0) {
+  if (importedProjectScopedBudgetCodeCount > 0) {
     console.log(
-      `已略過 ${skippedProjectScopedBudgetCodeCount} 個專案型預算編號（部門代號欄位填的是專案代碼，不在 8 個部門代碼中）——這批專案預算的部門歸屬解析留待後續任務處理，本次匯入僅涵蓋部門型預算。`
+      `提醒：${importedProjectScopedBudgetCodeCount} 個專案型預算編號目前沒有預算負責人（owner_employee_id 為 null），無法用於建立請購單，需要有 admin 權限的人到 Supabase Studio 手動指定每一筆的負責人。`
     );
   }
   console.log(

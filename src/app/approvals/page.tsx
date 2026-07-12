@@ -3,20 +3,7 @@ import { getMyApprovalQueue } from '@/lib/purchase-requests/queries';
 import { getMyPurchaseOrderApprovalQueue } from '@/lib/purchase-orders/queries';
 import { getMyAcceptanceApprovalQueue } from '@/lib/acceptances/queries';
 import { getMyExpenseRequestApprovalQueue } from '@/lib/expense-requests/queries';
-
-const FORM_LABELS: Record<string, string> = {
-  purchase_request: '請購單',
-  purchase_order: '採購單',
-  acceptance: '驗收單',
-  expense_request: '費用申請單',
-};
-
-const ROUTE_PREFIX: Record<string, string> = {
-  purchase_request: '/requests',
-  purchase_order: '/purchase-orders',
-  acceptance: '/acceptances',
-  expense_request: '/expense-requests',
-};
+import { FORM_LABELS, FORM_ROUTE_PREFIX } from '@/lib/procurement/form-registry';
 
 export default async function ApprovalsPage() {
   const [requests, orders, acceptances, expenseRequests] = await Promise.all([
@@ -43,7 +30,7 @@ export default async function ApprovalsPage() {
           {queue.map((q) => (
             <li key={`${q.formType}-${q.id}`}>
               <Link
-                href={`${ROUTE_PREFIX[q.formType]}/${q.id}`}
+                href={`${FORM_ROUTE_PREFIX[q.formType]}/${q.id}`}
                 className="flex justify-between p-4 hover:bg-gray-50"
               >
                 <span className="w-24 text-gray-500">{FORM_LABELS[q.formType]}</span>

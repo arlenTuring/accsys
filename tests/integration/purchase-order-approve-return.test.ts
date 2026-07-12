@@ -18,7 +18,6 @@ describe.skipIf(!hasIntegrationTestCredentials())('purchase order approve/return
   let gmId: string;
   let departmentId: string;
   let supplierId: string;
-  let budgetCodeId: string;
   const createdCaseIds: string[] = [];
   const createdOrderIds: string[] = [];
   const createdRequestIds: string[] = [];
@@ -34,8 +33,6 @@ describe.skipIf(!hasIntegrationTestCredentials())('purchase order approve/return
     departmentId = emps![0].department_id;
     const { data: sup } = await admin.from('suppliers').select('id').limit(1).single();
     supplierId = sup!.id;
-    const { data: bc } = await admin.from('budget_codes').select('id').limit(1).single();
-    budgetCodeId = bc!.id;
   });
 
   async function makeOrderWithTwoSteps() {
@@ -191,5 +188,27 @@ describe.skipIf(!hasIntegrationTestCredentials())('purchase order approve/return
     const { returnPurchaseOrderStep } = await import('@/lib/purchase-orders/actions');
     const result = await returnPurchaseOrderStep(orderId, '   ');
     expect(result).toEqual({ ok: false, error: '請填寫退回原因' });
+  });
+
+  it('only advances the chain once when approve is called twice concurrently for the same step', async () => {
+    const orderId = await makeOrderWithTwoSteps();
+    currentEmployee.value = { id: managerId };
+    const { approvePurchaseOrderStep } = await import('@/lib/purchase-orders/actions');
+
+    const [first, second] = await Promise.all([
+      approvePurchaseOrderStep(orderId),
+      approvePurchaseOrderStep(orderId),
+    ]);
+    const results = [first, second];
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(results.filter((r) => !r.ok)).toHaveLength(1);
+
+    const { data: notifs } = await admin
+      .from('notifications')
+      .select('id')
+      .eq('form_type', 'purchase_order')
+      .eq('form_id', orderId)
+      .eq('type', 'approval_requested');
+    expect(notifs).toHaveLength(1);
   });
 });

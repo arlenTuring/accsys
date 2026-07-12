@@ -6,22 +6,9 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { validateAttachmentFile } from '@/lib/attachments/validate';
 import { createSignedAttachmentUrl, uploadAttachmentFile } from '@/lib/attachments/storage';
+import { FORM_ROUTE_PREFIX, FORM_TABLE, type FormType } from '@/lib/procurement/form-registry';
 
 export type UploadResult = { ok: true; attachmentId: string } | { ok: false; error: string };
-
-const FORM_TABLE: Record<string, string> = {
-  purchase_request: 'purchase_requests',
-  purchase_order: 'purchase_orders',
-  acceptance: 'acceptances',
-  expense_request: 'expense_requests',
-};
-
-const FORM_ROUTE_PREFIX: Record<string, string> = {
-  purchase_request: '/requests',
-  purchase_order: '/purchase-orders',
-  acceptance: '/acceptances',
-  expense_request: '/expense-requests',
-};
 
 async function isFormParticipant(
   db: ReturnType<typeof createSupabaseServiceRoleClient>,
@@ -30,7 +17,7 @@ async function isFormParticipant(
   employee: { id: string; role: string }
 ): Promise<boolean> {
   if (employee.role === 'finance' || employee.role === 'admin') return true;
-  const table = FORM_TABLE[formType];
+  const table = FORM_TABLE[formType as FormType];
   if (!table) return false;
   const { data: form } = await db
     .from(table)
@@ -94,7 +81,7 @@ export async function uploadAttachment(
     return { ok: false, error: '建立附件記錄失敗' };
   }
 
-  revalidatePath(`${FORM_ROUTE_PREFIX[formType]}/${formId}`);
+  revalidatePath(`${FORM_ROUTE_PREFIX[formType as FormType]}/${formId}`);
   return { ok: true, attachmentId: data.id };
 }
 
