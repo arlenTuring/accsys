@@ -1,4 +1,5 @@
 import { notFound } from 'next/navigation';
+import Link from 'next/link';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getAcceptanceDetail } from '@/lib/acceptances/queries';
@@ -49,7 +50,12 @@ export default async function AcceptanceDetailPage({
     <main className="mx-auto max-w-4xl space-y-4 p-8">
       <div>
         <h1 className="mb-1 text-2xl font-bold">驗收單</h1>
-        <p className="font-mono text-gray-600">{detail.caseNumber}（項次 C1）</p>
+        <p className="font-mono text-gray-600">
+          <Link href={`/cases/${detail.caseNumber}`} className="underline">
+            {detail.caseNumber}
+          </Link>
+          （項次 C1）
+        </p>
       </div>
 
       <section className="rounded border p-4 text-sm">

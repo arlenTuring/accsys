@@ -1,0 +1,51 @@
+import { notFound } from 'next/navigation';
+import Link from 'next/link';
+import { getCaseOverview } from '@/lib/cases/queries';
+
+const ROUTE_PREFIX: Record<string, string> = {
+  purchase_request: '/requests',
+  purchase_order: '/purchase-orders',
+  acceptance: '/acceptances',
+  expense_request: '/expense-requests',
+};
+const STATUS_LABELS: Record<string, string> = {
+  pending_approval: '簽核中',
+  approved: '已核准',
+  returned: '已退回（待修改）',
+};
+
+export default async function CaseOverviewPage({
+  params,
+}: {
+  params: Promise<{ caseNumber: string }>;
+}) {
+  const { caseNumber } = await params;
+  const overview = await getCaseOverview(caseNumber);
+  if (!overview) notFound();
+
+  return (
+    <main className="mx-auto max-w-2xl p-8">
+      <h1 className="mb-6 text-2xl font-bold">案件總覽</h1>
+      <p className="mb-4 font-mono text-gray-600">{overview.caseNumber}</p>
+      <ul className="space-y-2">
+        {overview.forms.map((f) => (
+          <li
+            key={f.formType}
+            className="flex items-center justify-between rounded border p-3 text-sm"
+          >
+            <span>
+              {f.itemCode}｜{f.label}
+            </span>
+            {f.exists ? (
+              <Link href={`${ROUTE_PREFIX[f.formType]}/${f.id}`} className="text-blue-600 underline">
+                {STATUS_LABELS[f.status ?? ''] ?? f.status}
+              </Link>
+            ) : (
+              <span className="text-gray-400">尚未建立</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </main>
+  );
+}

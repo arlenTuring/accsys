@@ -48,7 +48,12 @@ export default async function PurchaseOrderDetailPage({
     <main className="mx-auto max-w-4xl space-y-4 p-8">
       <div>
         <h1 className="mb-1 text-2xl font-bold">採購單</h1>
-        <p className="font-mono text-gray-600">{detail.caseNumber}（項次 B1）</p>
+        <p className="font-mono text-gray-600">
+          <Link href={`/cases/${detail.caseNumber}`} className="underline">
+            {detail.caseNumber}
+          </Link>
+          （項次 B1）
+        </p>
       </div>
 
       <section className="rounded border p-4 text-sm">

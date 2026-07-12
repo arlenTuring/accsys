@@ -44,7 +44,11 @@ export default async function RequestDetailPage({
   return (
     <main className="mx-auto max-w-4xl p-8">
       <h1 className="mb-1 text-2xl font-bold">請購申請單</h1>
-      <p className="mb-4 font-mono text-gray-600">{detail.caseNumber}</p>
+      <p className="mb-4 font-mono text-gray-600">
+        <Link href={`/cases/${detail.caseNumber}`} className="underline">
+          {detail.caseNumber}
+        </Link>
+      </p>
 
       <section className="mb-4 rounded border p-4 text-sm">
         <p>申請單位：{detail.departmentName}</p>
