@@ -381,7 +381,7 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
     const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
 
     const formData = new FormData();
-    formData.set('file', new File([buffer], 'test.xlsx'));
+    formData.set('file', new File([new Uint8Array(buffer)], 'test.xlsx'));
 
     const result = await importBudgetCodesFromExcel(formData);
     expect(result.ok).toBe(true);
