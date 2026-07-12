@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
@@ -43,7 +44,11 @@ export default async function RequestDetailPage({
   return (
     <main className="mx-auto max-w-4xl p-8">
       <h1 className="mb-1 text-2xl font-bold">請購申請單</h1>
-      <p className="mb-4 font-mono text-gray-600">{detail.caseNumber}</p>
+      <p className="mb-4 font-mono text-gray-600">
+        <Link href={`/cases/${detail.caseNumber}`} className="underline">
+          {detail.caseNumber}
+        </Link>
+      </p>
 
       <section className="mb-4 rounded border p-4 text-sm">
         <p>申請單位：{detail.departmentName}</p>
@@ -102,6 +107,14 @@ export default async function RequestDetailPage({
           ))}
         </ol>
       </section>
+
+      {detail.status === 'approved' && (
+        <p>
+          <Link href={`/purchase-orders/new?requestId=${detail.id}`} className="text-blue-600 underline">
+            建立採購單
+          </Link>
+        </p>
+      )}
 
       {isCurrentApprover && <ApprovalActions requestId={detail.id} />}
     </main>
