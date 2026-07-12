@@ -216,10 +216,15 @@ export async function approveAcceptanceStep(acceptanceId: string): Promise<Actio
   if ('error' in loaded) return { ok: false, error: loaded.error };
   const { acceptance, step } = loaded;
 
-  await db
+  const { data: updatedSteps } = await db
     .from('approval_steps')
     .update({ status: 'approved', acted_at: new Date().toISOString() })
-    .eq('id', step.id);
+    .eq('id', step.id)
+    .eq('status', 'pending')
+    .select('id');
+  if (!updatedSteps || updatedSteps.length === 0) {
+    return { ok: false, error: '此表單已被處理，請重新整理頁面' };
+  }
 
   await db
     .from('notifications')
@@ -291,10 +296,15 @@ export async function returnAcceptanceStep(
   if ('error' in loaded) return { ok: false, error: loaded.error };
   const { acceptance, step } = loaded;
 
-  await db
+  const { data: updatedSteps } = await db
     .from('approval_steps')
     .update({ status: 'returned', comment: reason, acted_at: new Date().toISOString() })
-    .eq('id', step.id);
+    .eq('id', step.id)
+    .eq('status', 'pending')
+    .select('id');
+  if (!updatedSteps || updatedSteps.length === 0) {
+    return { ok: false, error: '此表單已被處理，請重新整理頁面' };
+  }
 
   await db
     .from('notifications')

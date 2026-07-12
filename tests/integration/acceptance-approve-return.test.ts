@@ -212,4 +212,29 @@ describe.skipIf(!hasIntegrationTestCredentials())('acceptance approve/return + p
     const result = await updateAcceptanceItemPropertyTag(itemId, 'PROP-0002');
     expect(result).toEqual({ ok: false, error: '只能在驗收單已核准後填寫財產編號' });
   });
+
+  it('only finalizes the approval once when approve is called twice concurrently for the same step', async () => {
+    const { acceptanceId } = await makeAcceptanceWithOneStep();
+    currentEmployee.value = { id: managerId, role: 'staff' };
+    const { approveAcceptanceStep } = await import('@/lib/acceptances/actions');
+
+    const [first, second] = await Promise.all([
+      approveAcceptanceStep(acceptanceId),
+      approveAcceptanceStep(acceptanceId),
+    ]);
+    const results = [first, second];
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(results.filter((r) => !r.ok)).toHaveLength(1);
+
+    // Both concurrent calls race for the FINAL (only) approval step, so the
+    // notification that fires is 'request_approved' to the applicant, not
+    // 'approval_requested' (there is no next step for a one-step chain).
+    const { data: notifs } = await admin
+      .from('notifications')
+      .select('id')
+      .eq('form_type', 'acceptance')
+      .eq('form_id', acceptanceId)
+      .eq('type', 'request_approved');
+    expect(notifs).toHaveLength(1);
+  });
 });

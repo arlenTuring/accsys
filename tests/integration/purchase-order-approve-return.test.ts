@@ -189,4 +189,26 @@ describe.skipIf(!hasIntegrationTestCredentials())('purchase order approve/return
     const result = await returnPurchaseOrderStep(orderId, '   ');
     expect(result).toEqual({ ok: false, error: '請填寫退回原因' });
   });
+
+  it('only advances the chain once when approve is called twice concurrently for the same step', async () => {
+    const orderId = await makeOrderWithTwoSteps();
+    currentEmployee.value = { id: managerId };
+    const { approvePurchaseOrderStep } = await import('@/lib/purchase-orders/actions');
+
+    const [first, second] = await Promise.all([
+      approvePurchaseOrderStep(orderId),
+      approvePurchaseOrderStep(orderId),
+    ]);
+    const results = [first, second];
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(results.filter((r) => !r.ok)).toHaveLength(1);
+
+    const { data: notifs } = await admin
+      .from('notifications')
+      .select('id')
+      .eq('form_type', 'purchase_order')
+      .eq('form_id', orderId)
+      .eq('type', 'approval_requested');
+    expect(notifs).toHaveLength(1);
+  });
 });
