@@ -343,10 +343,14 @@ export async function updateAcceptanceItemPropertyTag(
 
   const { data: item } = await db
     .from('acceptance_items')
-    .select('acceptance_id')
+    .select('acceptance_id, acceptances(status)')
     .eq('id', itemId)
     .maybeSingle();
   if (!item) return { ok: false, error: '找不到驗收明細' };
+  const acceptanceStatus = (item.acceptances as unknown as { status: string } | null)?.status;
+  if (acceptanceStatus !== 'approved') {
+    return { ok: false, error: '只能在驗收單已核准後填寫財產編號' };
+  }
 
   const { error } = await db
     .from('acceptance_items')

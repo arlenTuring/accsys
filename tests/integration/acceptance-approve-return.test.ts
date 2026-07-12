@@ -185,9 +185,15 @@ describe.skipIf(!hasIntegrationTestCredentials())('acceptance approve/return + p
   });
 
   it('lets finance update the property tag', async () => {
-    const { itemId } = await makeAcceptanceWithOneStep();
+    const { acceptanceId, itemId } = await makeAcceptanceWithOneStep();
+    currentEmployee.value = { id: managerId, role: 'staff' };
+    const { approveAcceptanceStep, updateAcceptanceItemPropertyTag } = await import(
+      '@/lib/acceptances/actions'
+    );
+    const approveResult = await approveAcceptanceStep(acceptanceId);
+    expect(approveResult).toEqual({ ok: true });
+
     currentEmployee.value = { id: applicantId, role: 'finance' };
-    const { updateAcceptanceItemPropertyTag } = await import('@/lib/acceptances/actions');
     const result = await updateAcceptanceItemPropertyTag(itemId, 'PROP-0001');
     expect(result).toEqual({ ok: true });
 
@@ -197,5 +203,13 @@ describe.skipIf(!hasIntegrationTestCredentials())('acceptance approve/return + p
       .eq('id', itemId)
       .single();
     expect(item!.property_tag).toBe('PROP-0001');
+  });
+
+  it('rejects a property-tag update while the acceptance is still pending_approval', async () => {
+    const { itemId } = await makeAcceptanceWithOneStep();
+    currentEmployee.value = { id: applicantId, role: 'finance' };
+    const { updateAcceptanceItemPropertyTag } = await import('@/lib/acceptances/actions');
+    const result = await updateAcceptanceItemPropertyTag(itemId, 'PROP-0002');
+    expect(result).toEqual({ ok: false, error: '只能在驗收單已核准後填寫財產編號' });
   });
 });
