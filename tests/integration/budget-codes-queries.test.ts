@@ -67,6 +67,7 @@ describe.skipIf(!hasIntegrationTestCredentials())('getBudgetCodeList', () => {
 
   afterAll(async () => {
     await admin.from('budget_codes').delete().in('id', [departmentScopedCodeId, projectScopedCodeId]);
+    await admin.from('departments').update({ manager_employee_id: null }).eq('id', departmentId);
     await admin.from('employees').delete().eq('id', managerId);
     await admin.from('departments').delete().eq('id', departmentId);
   });

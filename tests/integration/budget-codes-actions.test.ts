@@ -83,6 +83,7 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
     if (createdBudgetCodeIds.length > 0) {
       await admin.from('budget_codes').delete().in('id', createdBudgetCodeIds);
     }
+    await admin.from('departments').update({ manager_employee_id: null }).eq('id', departmentId);
     await admin
       .from('employees')
       .delete()
