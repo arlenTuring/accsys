@@ -69,4 +69,45 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget_codes and suppliers sc
       .insert({ name: '測試供應商' });
     expect(duplicateError).not.toBeNull();
   });
+
+  it('accepts a project-scoped budget code with department_id null and project_code set', async () => {
+    const { data, error } = await supabase
+      .from('budget_codes')
+      .insert({
+        code: `PROJ-TEST-${Date.now()}`,
+        department_id: null,
+        project_code: 'A123',
+        category: '材料',
+        fiscal_year: '115',
+      })
+      .select()
+      .single();
+    expect(error).toBeNull();
+    expect(data!.department_id).toBeNull();
+    expect(data!.project_code).toBe('A123');
+    await supabase.from('budget_codes').delete().eq('id', data!.id);
+  });
+
+  it('rejects a budget code with both department_id and project_code set', async () => {
+    const { data: dept } = await supabase.from('departments').select('id').limit(1).single();
+    const { error } = await supabase.from('budget_codes').insert({
+      code: `PROJ-TEST-BOTH-${Date.now()}`,
+      department_id: dept!.id,
+      project_code: 'A123',
+      category: '材料',
+      fiscal_year: '115',
+    });
+    expect(error).not.toBeNull();
+  });
+
+  it('rejects a budget code with neither department_id nor project_code set', async () => {
+    const { error } = await supabase.from('budget_codes').insert({
+      code: `PROJ-TEST-NEITHER-${Date.now()}`,
+      department_id: null,
+      project_code: null,
+      category: '材料',
+      fiscal_year: '115',
+    });
+    expect(error).not.toBeNull();
+  });
 });
