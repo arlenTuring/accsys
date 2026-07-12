@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { createSupabaseServiceRoleClient } from '@/lib/supabase/service-role';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { parseBudgetWorkbook, type ParsedBudgetRow } from '@/lib/budget-codes/parse-budget-workbook';
 
 export type BudgetCodeInput = {
   code: string;
@@ -108,4 +109,53 @@ export async function deleteBudgetCode(budgetCodeId: string): Promise<DeleteResu
   if (error) return { ok: false, error: '刪除預算編號失敗' };
   revalidatePath('/budget-codes');
   return { ok: true };
+}
+
+export type ImportRowError = { row: number; reason: string };
+export type ImportSummary = { successCount: number; errors: ImportRowError[] };
+export type ImportOutcome = { ok: true; summary: ImportSummary } | { ok: false; error: string };
+
+export async function importBudgetCodesFromExcel(formData: FormData): Promise<ImportOutcome> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料，請聯絡系統管理員' };
+  if (employee.role !== 'finance') return { ok: false, error: '只有財會人員可以維護預算編號' };
+
+  const file = formData.get('file');
+  if (!(file instanceof File)) return { ok: false, error: '請選擇檔案' };
+
+  let rows: ParsedBudgetRow[];
+  try {
+    const buffer = Buffer.from(await file.arrayBuffer());
+    rows = parseBudgetWorkbook(buffer);
+  } catch {
+    return { ok: false, error: '無法解析此 Excel 檔案，請確認格式是否正確' };
+  }
+
+  const db = createSupabaseServiceRoleClient();
+  const errors: ImportRowError[] = [];
+  let successCount = 0;
+
+  for (const row of rows) {
+    if (row.annualBudgetAmount === null) {
+      errors.push({ row: row.rowNumber, reason: '年度預算金額必須為正數' });
+      continue;
+    }
+    const result = await upsertOneBudgetCode(db, {
+      code: row.code,
+      departmentCode: row.departmentCode,
+      projectCode: row.projectCode,
+      category: row.category,
+      fiscalYear: row.fiscalYear,
+      annualBudgetAmount: row.annualBudgetAmount,
+      ownerEmployeeCode: row.ownerEmployeeCode,
+    });
+    if (result.ok) {
+      successCount += 1;
+    } else {
+      errors.push({ row: row.rowNumber, reason: result.error });
+    }
+  }
+
+  revalidatePath('/budget-codes');
+  return { ok: true, summary: { successCount, errors } };
 }

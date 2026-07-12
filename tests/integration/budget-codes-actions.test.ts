@@ -363,4 +363,56 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
     await admin.from('purchase_requests').delete().eq('id', pr!.id);
     await admin.from('procurement_cases').delete().eq('id', pcase!.id);
   });
+
+  it('imports valid rows and reports per-row errors for invalid ones in the same file', async () => {
+    currentEmployee.value = { id: financeEmployeeId, role: 'finance' };
+    const { importBudgetCodesFromExcel } = await import('@/lib/budget-codes/actions');
+    const XLSX = await import('xlsx');
+
+    const validCode = `BCT-IMPORT-OK-${Date.now()}`;
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ['預算編號', '部門代碼', '專案代碼', '類別', '年度', '年度預算金額', '負責人工號'],
+      [validCode, departmentCode, null, '人事費', '115', 100000, null],
+      [`BCT-IMPORT-BADDEPT-${Date.now()}`, 'NOPE-DEPT', null, '人事費', '115', 100000, null],
+      [`BCT-IMPORT-NEG-${Date.now()}`, departmentCode, null, '人事費', '115', -500, null],
+    ]);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, sheet, '預算編號');
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+
+    const formData = new FormData();
+    formData.set('file', new File([buffer], 'test.xlsx'));
+
+    const result = await importBudgetCodesFromExcel(formData);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.summary.successCount).toBe(1);
+    expect(result.summary.errors).toHaveLength(2);
+    expect(result.summary.errors[0].reason).toBe('部門代碼「NOPE-DEPT」查無此部門');
+    expect(result.summary.errors[1].reason).toBe('年度預算金額必須為正數');
+
+    const { data: createdRow } = await admin
+      .from('budget_codes')
+      .select('id')
+      .eq('code', validCode)
+      .single();
+    createdBudgetCodeIds.push(createdRow!.id);
+  });
+
+  it('rejects import from a non-finance employee', async () => {
+    currentEmployee.value = { id: staffEmployeeId, role: 'staff' };
+    const { importBudgetCodesFromExcel } = await import('@/lib/budget-codes/actions');
+    const formData = new FormData();
+    formData.set('file', new File([new Uint8Array([1])], 'test.xlsx'));
+    const result = await importBudgetCodesFromExcel(formData);
+    expect(result).toEqual({ ok: false, error: '只有財會人員可以維護預算編號' });
+  });
+
+  it('rejects import when no file is provided', async () => {
+    currentEmployee.value = { id: financeEmployeeId, role: 'finance' };
+    const { importBudgetCodesFromExcel } = await import('@/lib/budget-codes/actions');
+    const formData = new FormData();
+    const result = await importBudgetCodesFromExcel(formData);
+    expect(result).toEqual({ ok: false, error: '請選擇檔案' });
+  });
 });
