@@ -1,13 +1,7 @@
 import Link from 'next/link';
 import { getMyNotifications } from '@/lib/notifications/queries';
+import { FORM_ROUTE_PREFIX } from '@/lib/procurement/form-registry';
 import { MarkReadButton } from './notification-actions';
-
-const ROUTE_PREFIX: Record<string, string> = {
-  purchase_request: '/requests',
-  purchase_order: '/purchase-orders',
-  acceptance: '/acceptances',
-  expense_request: '/expense-requests',
-};
 
 export default async function NotificationsPage() {
   const notifications = await getMyNotifications();
@@ -20,7 +14,7 @@ export default async function NotificationsPage() {
         <ul className="divide-y rounded border">
           {notifications.map((n) => (
             <li key={n.id} className={`flex items-center justify-between p-4 ${n.isRead ? '' : 'bg-blue-50'}`}>
-              <Link href={`${ROUTE_PREFIX[n.formType]}/${n.formId}`} className="flex-1 hover:underline">
+              <Link href={`${FORM_ROUTE_PREFIX[n.formType]}/${n.formId}`} className="flex-1 hover:underline">
                 <span className="font-mono text-sm text-gray-500">{n.caseNumber}</span>
                 <span className="ml-2">{n.message}</span>
               </Link>

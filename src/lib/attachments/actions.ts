@@ -6,22 +6,9 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { validateAttachmentFile } from '@/lib/attachments/validate';
 import { createSignedAttachmentUrl, uploadAttachmentFile } from '@/lib/attachments/storage';
+import { FORM_ROUTE_PREFIX, FORM_TABLE } from '@/lib/procurement/form-registry';
 
 export type UploadResult = { ok: true; attachmentId: string } | { ok: false; error: string };
-
-const FORM_TABLE: Record<string, string> = {
-  purchase_request: 'purchase_requests',
-  purchase_order: 'purchase_orders',
-  acceptance: 'acceptances',
-  expense_request: 'expense_requests',
-};
-
-const FORM_ROUTE_PREFIX: Record<string, string> = {
-  purchase_request: '/requests',
-  purchase_order: '/purchase-orders',
-  acceptance: '/acceptances',
-  expense_request: '/expense-requests',
-};
 
 async function isFormParticipant(
   db: ReturnType<typeof createSupabaseServiceRoleClient>,
