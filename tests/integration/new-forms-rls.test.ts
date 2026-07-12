@@ -14,9 +14,7 @@ describe.skipIf(!hasIntegrationTestCredentials())('new forms RLS', () => {
   const financeEmail = `rls-po-finance-${Date.now()}@turing-drive.com`;
   let deptId: string;
   let applicantEmpId: string;
-  let outsiderEmpId: string;
   let approverEmpId: string;
-  let financeEmpId: string;
   let applicantAuthId: string;
   let outsiderAuthId: string;
   let approverAuthId: string;
@@ -105,9 +103,7 @@ describe.skipIf(!hasIntegrationTestCredentials())('new forms RLS', () => {
       ])
       .select();
     applicantEmpId = emps!.find((e) => e.google_email === applicantEmail)!.id;
-    outsiderEmpId = emps!.find((e) => e.google_email === outsiderEmail)!.id;
     approverEmpId = emps!.find((e) => e.google_email === approverEmail)!.id;
-    financeEmpId = emps!.find((e) => e.google_email === financeEmail)!.id;
 
     const { data: caseNumber } = await admin.rpc('next_case_number');
     const { data: pcase } = await admin

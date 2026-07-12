@@ -66,10 +66,34 @@ describe.skipIf(!hasIntegrationTestCredentials())('getCaseOverview', () => {
     const overview = await getCaseOverview(caseNumber);
     expect(overview).not.toBeNull();
     expect(overview!.forms).toEqual([
-      { formType: 'purchase_request', label: '請購單', itemCode: 'A1', exists: true, id: requestId, status: 'approved' },
-      { formType: 'purchase_order', label: '採購單', itemCode: 'B1', exists: false, id: null, status: null },
-      { formType: 'acceptance', label: '驗收單', itemCode: 'C1', exists: false, id: null, status: null },
-      { formType: 'expense_request', label: '費用申請單', itemCode: 'D1', exists: false, id: null, status: null },
+      { formType: 'purchase_request', label: '請購單', itemCode: 'A1', exists: true, id: requestId, status: 'approved', hasAttachments: false },
+      { formType: 'purchase_order', label: '採購單', itemCode: 'B1', exists: false, id: null, status: null, hasAttachments: false },
+      { formType: 'acceptance', label: '驗收單', itemCode: 'C1', exists: false, id: null, status: null, hasAttachments: false },
+      { formType: 'expense_request', label: '費用申請單', itemCode: 'D1', exists: false, id: null, status: null, hasAttachments: false },
     ]);
+  });
+
+  it('reports hasAttachments false for a form with no attachments', async () => {
+    const { getCaseOverview } = await import('@/lib/cases/queries');
+    const overview = await getCaseOverview(caseNumber);
+    const requestEntry = overview!.forms.find((f) => f.formType === 'purchase_request');
+    expect(requestEntry!.hasAttachments).toBe(false);
+  });
+
+  it('reports hasAttachments true once a form has at least one attachment', async () => {
+    await admin.from('attachments').insert({
+      form_type: 'purchase_request',
+      form_id: requestId,
+      uploaded_by_employee_id: employeeId,
+      storage_path: `purchase_request/${requestId}/test-${Date.now()}.pdf`,
+      file_name: 'test.pdf',
+      mime_type: 'application/pdf',
+      file_size_bytes: 100,
+    });
+    const { getCaseOverview } = await import('@/lib/cases/queries');
+    const overview = await getCaseOverview(caseNumber);
+    const requestEntry = overview!.forms.find((f) => f.formType === 'purchase_request');
+    expect(requestEntry!.hasAttachments).toBe(true);
+    await admin.from('attachments').delete().eq('form_id', requestId);
   });
 });

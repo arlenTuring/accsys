@@ -170,10 +170,6 @@ describe.skipIf(!hasIntegrationTestCredentials())('createExpenseRequest', () => 
 
   it('creates an expense request from an approved acceptance, excluding a Fail item', async () => {
     const { orderId } = await makeApprovedOrder('貨到付款');
-    const { data: poItems } = await admin
-      .from('purchase_order_items')
-      .select('id')
-      .eq('purchase_order_id', orderId);
     await admin.from('purchase_order_items').insert({
       purchase_order_id: orderId,
       line_no: 2,

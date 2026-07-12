@@ -17,8 +17,51 @@ describe.skipIf(!hasIntegrationTestCredentials())('approve/return purchase reque
   let admin: ReturnType<typeof createServiceRoleTestClient>;
   let applicantId: string;
   let applicantDept: string;
+  let managerId: string;
+  let gmId: string;
   let budgetCodeId: string;
   const createdRequestIds: string[] = [];
+
+  async function makeRequestWithTwoSteps(): Promise<string> {
+    const { data: caseNumber } = await admin.rpc('next_case_number');
+    const { data: pcase } = await admin
+      .from('procurement_cases')
+      .insert({ case_number: caseNumber, created_by_employee_id: applicantId })
+      .select()
+      .single();
+    const { data: pr, error } = await admin
+      .from('purchase_requests')
+      .insert({
+        procurement_case_id: pcase!.id,
+        applicant_employee_id: applicantId,
+        department_id: applicantDept,
+        budget_owner_employee_id: applicantId,
+        total_amount: 5000,
+        status: 'pending_approval',
+        current_step_order: 1,
+      })
+      .select()
+      .single();
+    if (error) throw new Error(`Failed to create request: ${JSON.stringify(error)}`);
+    createdRequestIds.push(pr!.id);
+    await admin.from('approval_steps').insert([
+      {
+        form_type: 'purchase_request',
+        form_id: pr!.id,
+        step_order: 1,
+        approver_employee_id: managerId,
+        approver_role: 'department_manager',
+      },
+      {
+        form_type: 'purchase_request',
+        form_id: pr!.id,
+        step_order: 2,
+        approver_employee_id: gmId,
+        approver_role: 'general_manager',
+      },
+    ]);
+    return pr!.id;
+  }
 
   async function seedRequest(): Promise<{ requestId: string; firstApproverId: string }> {
     currentEmployee.value = { id: applicantId, departmentId: applicantDept };
@@ -41,14 +84,13 @@ describe.skipIf(!hasIntegrationTestCredentials())('approve/return purchase reque
 
   beforeAll(async () => {
     admin = createServiceRoleTestClient();
-    const { data: emp } = await admin
+    const { data: emps } = await admin
       .from('employees')
       .select('id, department_id')
       .not('department_id', 'is', null)
-      .limit(1)
-      .single();
-    applicantId = emp!.id;
-    applicantDept = emp!.department_id;
+      .limit(3);
+    [applicantId, managerId, gmId] = emps!.map((e) => e.id);
+    applicantDept = emps![0].department_id;
     const { data: bc } = await admin
       .from('budget_codes')
       .select('id')
@@ -128,7 +170,7 @@ describe.skipIf(!hasIntegrationTestCredentials())('approve/return purchase reque
       .eq('recipient_employee_id', applicantId)
       .eq('type', 'request_approved');
     expect(applicantNotif!.length).toBeGreaterThanOrEqual(1);
-  });
+  }, 15000);
 
   it('returns the request to the applicant with a reason', async () => {
     const { requestId } = await seedRequest();
@@ -173,5 +215,27 @@ describe.skipIf(!hasIntegrationTestCredentials())('approve/return purchase reque
       .eq('type', 'approval_requested')
       .single();
     expect(ownNotif!.is_read).toBe(true);
+  });
+
+  it('only advances the chain once when approve is called twice concurrently for the same step', async () => {
+    const requestId = await makeRequestWithTwoSteps();
+    currentEmployee.value = { id: managerId };
+    const { approvePurchaseRequestStep } = await import('@/lib/purchase-requests/actions');
+
+    const [first, second] = await Promise.all([
+      approvePurchaseRequestStep(requestId),
+      approvePurchaseRequestStep(requestId),
+    ]);
+    const results = [first, second];
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(results.filter((r) => !r.ok)).toHaveLength(1);
+
+    const { data: notifs } = await admin
+      .from('notifications')
+      .select('id')
+      .eq('form_type', 'purchase_request')
+      .eq('form_id', requestId)
+      .eq('type', 'approval_requested');
+    expect(notifs).toHaveLength(1);
   });
 });

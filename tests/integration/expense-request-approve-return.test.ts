@@ -187,4 +187,29 @@ describe.skipIf(!hasIntegrationTestCredentials())('expense request approve/retur
     const result = await approveExpenseRequestStep(expenseRequestId);
     expect(result).toEqual({ ok: false, error: '您不是這張費用申請單目前的簽核人' });
   });
+
+  it('only finalizes the approval once when approve is called twice concurrently for the same step', async () => {
+    const expenseRequestId = await makeExpenseRequestWithOneStep();
+    currentEmployee.value = { id: managerId };
+    const { approveExpenseRequestStep } = await import('@/lib/expense-requests/actions');
+
+    const [first, second] = await Promise.all([
+      approveExpenseRequestStep(expenseRequestId),
+      approveExpenseRequestStep(expenseRequestId),
+    ]);
+    const results = [first, second];
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(results.filter((r) => !r.ok)).toHaveLength(1);
+
+    // This fixture is a one-step chain, so both concurrent calls race for the
+    // FINAL approval and the notification fired is 'request_approved', not
+    // 'approval_requested'.
+    const { data: notifs } = await admin
+      .from('notifications')
+      .select('id')
+      .eq('form_type', 'expense_request')
+      .eq('form_id', expenseRequestId)
+      .eq('type', 'request_approved');
+    expect(notifs).toHaveLength(1);
+  });
 });
