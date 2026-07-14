@@ -1,9 +1,8 @@
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-
-export type CaseFormType = 'purchase_request' | 'purchase_order' | 'acceptance' | 'expense_request';
+import { FORM_TYPES, FORM_TABLE, FORM_LABELS, type FormType } from '@/lib/procurement/form-registry';
 
 export type CaseFormStatus = {
-  formType: CaseFormType;
+  formType: FormType;
   label: string;
   itemCode: string;
   exists: boolean;
@@ -17,12 +16,12 @@ export type CaseOverview = {
   forms: CaseFormStatus[];
 };
 
-const FORM_DEFS: { formType: CaseFormType; table: string; label: string; itemCode: string }[] = [
-  { formType: 'purchase_request', table: 'purchase_requests', label: '請購單', itemCode: 'A1' },
-  { formType: 'purchase_order', table: 'purchase_orders', label: '採購單', itemCode: 'B1' },
-  { formType: 'acceptance', table: 'acceptances', label: '驗收單', itemCode: 'C1' },
-  { formType: 'expense_request', table: 'expense_requests', label: '費用申請單', itemCode: 'D1' },
-];
+const FORM_ITEM_CODES: Record<FormType, string> = {
+  purchase_request: 'A1',
+  purchase_order: 'B1',
+  acceptance: 'C1',
+  expense_request: 'D1',
+};
 
 export async function getCaseOverview(caseNumber: string): Promise<CaseOverview | null> {
   const supabase = await createSupabaseServerClient();
@@ -34,9 +33,9 @@ export async function getCaseOverview(caseNumber: string): Promise<CaseOverview 
   if (!pcase) return null;
 
   const forms: CaseFormStatus[] = [];
-  for (const def of FORM_DEFS) {
+  for (const formType of FORM_TYPES) {
     const { data } = await supabase
-      .from(def.table)
+      .from(FORM_TABLE[formType])
       .select('id, status')
       .eq('procurement_case_id', pcase.id)
       .maybeSingle();
@@ -45,14 +44,14 @@ export async function getCaseOverview(caseNumber: string): Promise<CaseOverview 
       const { count } = await supabase
         .from('attachments')
         .select('id', { count: 'exact', head: true })
-        .eq('form_type', def.formType)
+        .eq('form_type', formType)
         .eq('form_id', data.id);
       hasAttachments = (count ?? 0) > 0;
     }
     forms.push({
-      formType: def.formType,
-      label: def.label,
-      itemCode: def.itemCode,
+      formType,
+      label: FORM_LABELS[formType],
+      itemCode: FORM_ITEM_CODES[formType],
       exists: !!data,
       id: data?.id ?? null,
       status: data?.status ?? null,
