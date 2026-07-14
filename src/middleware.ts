@@ -4,6 +4,10 @@ import { getRequiredEnv } from '@/lib/env';
 import { isPublicPath } from '@/lib/auth/public-paths';
 
 export async function middleware(request: NextRequest) {
+  if (isPublicPath(request.nextUrl.pathname)) {
+    return NextResponse.next();
+  }
+
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -29,7 +33,7 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user && !isPublicPath(request.nextUrl.pathname)) {
+  if (!user) {
     return NextResponse.redirect(new URL('/login', request.url));
   }
 
