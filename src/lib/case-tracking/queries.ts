@@ -51,19 +51,21 @@ export async function getFinanceCaseTracking(
     caseQuery = caseQuery.lte('created_at', `${validTo}T23:59:59`);
   }
 
-  const { data: cases } = await caseQuery;
+  const { data: cases, error: casesError } = await caseQuery;
+  if (casesError) throw casesError;
   if (!cases || cases.length === 0) return [];
 
   const caseIds = cases.map((c) => c.id);
 
   const formResultsByType = await Promise.all(
     FORM_TYPES.map(async (formType) => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from(FORM_TABLE[formType])
         .select(
           'id, procurement_case_id, status, departments(code, name), applicant:employees!applicant_employee_id(name)'
         )
         .in('procurement_case_id', caseIds);
+      if (error) throw error;
       return { formType, rows: (data ?? []) as unknown as FormQueryRow[] };
     })
   );
@@ -108,6 +110,7 @@ export async function getFinanceCaseTracking(
 
 export async function getDepartmentFilterOptions(): Promise<DepartmentOption[]> {
   const supabase = await createSupabaseServerClient();
-  const { data } = await supabase.from('departments').select('code, name').order('code');
+  const { data, error } = await supabase.from('departments').select('code, name').order('code');
+  if (error) throw error;
   return data ?? [];
 }
