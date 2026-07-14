@@ -61,9 +61,14 @@ export default async function DashboardPage() {
           </Link>
         )}
         {employee.role === 'finance' && (
-          <Link href="/budget-codes" className="text-blue-600 underline">
-            預算編號管理
-          </Link>
+          <>
+            <Link href="/budget-codes" className="text-blue-600 underline">
+              預算編號管理
+            </Link>
+            <Link href="/case-tracking" className="text-blue-600 underline">
+              簽核追蹤
+            </Link>
+          </>
         )}
       </nav>
     </main>
