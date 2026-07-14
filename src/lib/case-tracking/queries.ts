@@ -45,10 +45,10 @@ export async function getFinanceCaseTracking(
     .select('id, case_number')
     .order('created_at', { ascending: false });
   if (dateRangeIsValid && validFrom) {
-    caseQuery = caseQuery.gte('created_at', validFrom);
+    caseQuery = caseQuery.gte('created_at', `${validFrom}T00:00:00+08:00`);
   }
   if (dateRangeIsValid && validTo) {
-    caseQuery = caseQuery.lte('created_at', `${validTo}T23:59:59`);
+    caseQuery = caseQuery.lte('created_at', `${validTo}T23:59:59+08:00`);
   }
 
   const { data: cases, error: casesError } = await caseQuery;
