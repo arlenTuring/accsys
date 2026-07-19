@@ -18,6 +18,8 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
   let managerId: string;
   let customOwnerId: string;
   let customOwnerCode: string;
+  let projectCode: string;
+  let projectId: string;
   let financeEmployeeId: string;
   let staffEmployeeId: string;
   const createdBudgetCodeIds: string[] = [];
@@ -77,6 +79,14 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
       .select()
       .single();
     staffEmployeeId = staffEmp!.id;
+
+    projectCode = `BCT-PROJ-${Date.now()}`;
+    const { data: project } = await admin
+      .from('projects')
+      .insert({ code: projectCode, name: '測試專案' })
+      .select()
+      .single();
+    projectId = project!.id;
   });
 
   afterAll(async () => {
@@ -89,6 +99,7 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
       .delete()
       .in('id', [managerId, customOwnerId, financeEmployeeId, staffEmployeeId]);
     await admin.from('departments').delete().eq('id', departmentId);
+    await admin.from('projects').delete().eq('id', projectId);
   });
 
   it('rejects a non-finance employee', async () => {
@@ -124,12 +135,12 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
 
     const { data: row } = await admin
       .from('budget_codes')
-      .select('department_id, project_code, owner_employee_id, annual_budget_amount')
+      .select('department_id, project_id, owner_employee_id, annual_budget_amount')
       .eq('code', code)
       .single();
     expect(row).toEqual({
       department_id: departmentId,
-      project_code: null,
+      project_id: null,
       owner_employee_id: managerId,
       annual_budget_amount: 500000,
     });
@@ -142,7 +153,7 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
     const result = await upsertBudgetCode({
       code,
       departmentCode: null,
-      projectCode: '115BD999',
+      projectCode,
       category: '專案費用',
       fiscalYear: '115',
       annualBudgetAmount: 200000,
@@ -153,12 +164,12 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
 
     const { data: row } = await admin
       .from('budget_codes')
-      .select('department_id, project_code, owner_employee_id')
+      .select('department_id, project_id, owner_employee_id')
       .eq('code', code)
       .single();
     expect(row).toEqual({
       department_id: null,
-      project_code: '115BD999',
+      project_id: projectId,
       owner_employee_id: customOwnerId,
     });
   });
@@ -169,7 +180,7 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
     const result = await upsertBudgetCode({
       code: `BCT-BOTH-${Date.now()}`,
       departmentCode,
-      projectCode: '115BD999',
+      projectCode,
       category: '人事費',
       fiscalYear: '115',
       annualBudgetAmount: 1000,

@@ -35,6 +35,7 @@ async function upsertOneBudgetCode(
   }
 
   let departmentId: string | null = null;
+  let projectId: string | null = null;
   let ownerEmployeeId: string | null = null;
 
   if (hasDept) {
@@ -46,6 +47,16 @@ async function upsertOneBudgetCode(
     if (!dept) return { ok: false, error: `部門代碼「${input.departmentCode}」查無此部門` };
     departmentId = dept.id;
     ownerEmployeeId = dept.manager_employee_id;
+  } else {
+    const { data: project } = await db
+      .from('projects')
+      .select('id')
+      .eq('code', input.projectCode)
+      .maybeSingle();
+    if (!project) {
+      return { ok: false, error: `專案代碼「${input.projectCode}」查無此專案，請先在專案管理新增` };
+    }
+    projectId = project.id;
   }
 
   if (input.ownerEmployeeCode) {
@@ -64,7 +75,7 @@ async function upsertOneBudgetCode(
       {
         code: input.code,
         department_id: departmentId,
-        project_code: hasProject ? input.projectCode : null,
+        project_id: projectId,
         category: input.category,
         fiscal_year: input.fiscalYear,
         annual_budget_amount: input.annualBudgetAmount,
