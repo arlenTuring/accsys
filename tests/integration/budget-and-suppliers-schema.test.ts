@@ -70,13 +70,19 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget_codes and suppliers sc
     expect(duplicateError).not.toBeNull();
   });
 
-  it('accepts a project-scoped budget code with department_id null and project_code set', async () => {
+  it('accepts a project-scoped budget code with department_id null and project_id set', async () => {
+    const { data: project } = await supabase
+      .from('projects')
+      .insert({ code: `A123-${Date.now()}`, name: '測試專案 A123' })
+      .select()
+      .single();
+
     const { data, error } = await supabase
       .from('budget_codes')
       .insert({
         code: `PROJ-TEST-${Date.now()}`,
         department_id: null,
-        project_code: 'A123',
+        project_id: project!.id,
         category: '材料',
         fiscal_year: '115',
       })
@@ -84,27 +90,34 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget_codes and suppliers sc
       .single();
     expect(error).toBeNull();
     expect(data!.department_id).toBeNull();
-    expect(data!.project_code).toBe('A123');
+    expect(data!.project_id).toBe(project!.id);
     await supabase.from('budget_codes').delete().eq('id', data!.id);
+    await supabase.from('projects').delete().eq('id', project!.id);
   });
 
-  it('rejects a budget code with both department_id and project_code set', async () => {
+  it('rejects a budget code with both department_id and project_id set', async () => {
     const { data: dept } = await supabase.from('departments').select('id').limit(1).single();
+    const { data: project } = await supabase
+      .from('projects')
+      .insert({ code: `A123-BOTH-${Date.now()}`, name: '測試專案 A123 both' })
+      .select()
+      .single();
     const { error } = await supabase.from('budget_codes').insert({
       code: `PROJ-TEST-BOTH-${Date.now()}`,
       department_id: dept!.id,
-      project_code: 'A123',
+      project_id: project!.id,
       category: '材料',
       fiscal_year: '115',
     });
     expect(error).not.toBeNull();
+    await supabase.from('projects').delete().eq('id', project!.id);
   });
 
-  it('rejects a budget code with neither department_id nor project_code set', async () => {
+  it('rejects a budget code with neither department_id nor project_id set', async () => {
     const { error } = await supabase.from('budget_codes').insert({
       code: `PROJ-TEST-NEITHER-${Date.now()}`,
       department_id: null,
-      project_code: null,
+      project_id: null,
       category: '材料',
       fiscal_year: '115',
     });
