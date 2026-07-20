@@ -15,20 +15,21 @@
 
 | 模組 | 說明 |
 |---|---|
-| 請購單 `/requests` | 建立請購申請、多層簽核、退回重送 |
-| 採購單 `/purchase-orders` | 由已核准請購單衍生，供應商比價、簽核 |
-| 驗收單 `/acceptances` | 採購單驗收、財產編號登錄（限已核准後填寫） |
-| 費用申請單 `/expense-requests` | 費用申報與核銷簽核 |
+| 請購單 `/requests` | 建立請購申請、多層簽核、退回重送、送出後第一關審核前可自行修改／撤回 |
+| 採購單 `/purchase-orders` | 由已核准請購單衍生，供應商比價、簽核、送出後第一關審核前可自行修改／撤回 |
+| 驗收單 `/acceptances` | 採購單驗收、財產編號登錄（限已核准後填寫）、送出後第一關審核前可自行修改／撤回 |
+| 費用申請單 `/expense-requests` | 費用申報與核銷簽核、送出後第一關審核前可自行修改／撤回；金額低於 NT$10,000 可免走採購流程直接建立獨立費用申請單 |
 | 附件上傳 | 四張表單皆可上傳附件（PDF／圖片） |
 | 案件總覽 `/cases/[caseNumber]` | 依案號串聯四張表單狀態，顯示「憑證待補」提醒 |
 | 待簽核清單 `/approvals` | 目前登入者所有待簽核項目彙總 |
 | 通知中心 `/notifications` | 簽核／退回等系統通知 |
 | 主檔資料總覽 `/admin/master-data`（限 `admin`） | 部門、員工、預算編號、供應商唯讀總覽 |
-| 預算編號管理 `/budget-codes`（限 `finance`） | 部門／專案預算編號的手動新增/編輯/刪除，以及 Excel 批次匯入 |
+| 預算編號管理 `/budget-codes`（限 `finance`／`admin`） | 部門／專案預算編號的手動新增/編輯/刪除、Excel 批次匯入、專案主檔管理 |
+| 財會簽核追蹤頁 `/case-tracking`（限 `finance`／`admin`） | 全公司案件依「簽核中／已完成／已撤回」分類，可依部門/日期/關鍵字篩選 |
 
 ### 角色權限
 
-員工角色分為 `staff`（一般員工）、`finance`（財會）、`admin`（系統管理員），由 `employees.role` 決定；另有 `is_general_manager`／`is_chairman` 標記用於簽核鏈判斷。
+員工角色分為 `staff`（一般員工）、`finance`（財會）、`admin`（系統管理員），由 `employees.role` 決定；另有 `is_general_manager`／`is_chairman` 標記用於簽核鏈判斷。`admin` 除了專屬的 `/admin/master-data`，也可存取 `finance` 專屬頁面（`/budget-codes`、`/case-tracking`），方便系統管理員做整體驗證，不需另外切換帳號角色。
 
 ## 專案結構
 
@@ -125,6 +126,7 @@ Node 20 缺少穩定的全域 WebSocket 支援，`npm test`／`npm run test:watc
 3. **工作流程清理篇** — 死路徑修正、登入錯誤訊息、共用表單型別模組、ESLint 修復、台灣時區案號、CAS 併發保護、憑證待補提醒、專案型預算編號支援
 4. **預算編號基礎資料管理** — 財會可透過網頁手動維護或 Excel 批次匯入預算編號
 5. **財會簽核追蹤頁** — `/case-tracking`，財會人員可依部門／日期／關鍵字篩選，追蹤全公司所有案件的簽核狀態（簽核中／已完成兩個頁籤）
+6. **預算後台強化與工作流程彈性** — 新增獨立 `projects` 主檔（取代原本 `budget_codes.project_code` 純文字欄位）、`/budget-codes` 支援專案下拉選單與專案管理區塊；新增金額低於 NT$10,000 可免走採購流程的獨立費用申請單；四張表單新增「送出後、第一關審核前可自行修改或撤回」能力；`/case-tracking` 新增「已撤回」頁籤；`admin` 角色開放存取 `/budget-codes`、`/case-tracking`
 
 尚未規劃的較大範圍功能，留待後續獨立規劃，不在目前範圍內：
 
@@ -136,4 +138,6 @@ Node 20 缺少穩定的全域 WebSocket 支援，`npm test`／`npm run test:watc
 
 - Email／SMTP 尚未正式啟用寄送（程式邏輯已完成，缺少環境變數時會靜默略過，不影響簽核流程本身）。
 - 專案型預算編號（透過 `npm run seed` 補匯入或 `/budget-codes` 匯入）若未指定負責人，需要有 `admin` 權限者到 Supabase Studio 手動指定，否則無法用於建立請購單。
+- 編輯「預算編號」欄位本身（不是編輯其他欄位）會因為 upsert-on-code 的設計而變成新增一筆，而不是改名——之後可考慮把編輯模式下的預算編號欄位改成唯讀。
+- 刪除預算編號沒有確認對話框（點了就刪，雖然被引用中的編號會被程式邏輯與資料庫外鍵雙重擋下）。
 - 上線前的帳號治理（Supabase Organization／Vercel Team 轉移）為非程式碼的帳務/帳號操作，留待正式上線前另行處理。
