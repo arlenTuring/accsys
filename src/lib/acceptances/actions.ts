@@ -475,3 +475,122 @@ export async function resubmitAcceptance(
   revalidatePath(`/acceptances/${acceptanceId}`);
   return { ok: true };
 }
+
+export async function updateAcceptance(
+  acceptanceId: string,
+  input: ResubmitAcceptanceInput
+): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  const db = createSupabaseServiceRoleClient();
+
+  const { data: acceptance } = await db
+    .from('acceptances')
+    .select(
+      'id, applicant_employee_id, status, current_step_order, department_id, budget_owner_employee_id, total_amount'
+    )
+    .eq('id', acceptanceId)
+    .maybeSingle();
+  if (!acceptance) return { ok: false, error: '找不到這張驗收單' };
+  if (acceptance.applicant_employee_id !== employee.id) {
+    return { ok: false, error: '只有申請人可以修改這張驗收單' };
+  }
+  if (acceptance.status !== 'pending_approval' || acceptance.current_step_order !== 1) {
+    return { ok: false, error: '只有尚未有人簽核的驗收單可以修改' };
+  }
+
+  const { data: existingItems } = await db
+    .from('acceptance_items')
+    .select('id, line_no, purchase_order_item_id, description, quantity, amount')
+    .eq('acceptance_id', acceptanceId)
+    .order('line_no');
+  if (!existingItems || existingItems.length === 0) {
+    return { ok: false, error: '找不到驗收明細' };
+  }
+
+  const passFailByItemId = new Map(input.items.map((i) => [i.acceptanceItemId, i.passFail]));
+  if (
+    passFailByItemId.size !== existingItems.length ||
+    existingItems.some((i) => !passFailByItemId.has(i.id))
+  ) {
+    return { ok: false, error: '請為每一項明細填寫驗收結果' };
+  }
+
+  const validation = validateAcceptanceInput({
+    items: existingItems.map((i) => ({ passFail: passFailByItemId.get(i.id)! })),
+  });
+  if (!validation.ok) return { ok: false, error: validation.error };
+
+  const chainResult = await buildApprovalChainForForm(db, {
+    applicantEmployeeId: employee.id,
+    departmentId: acceptance.department_id,
+    budgetOwnerEmployeeId: acceptance.budget_owner_employee_id,
+    totalAmount: Number(acceptance.total_amount),
+  });
+  if (!chainResult.ok) return { ok: false, error: chainResult.error };
+  const chain = chainResult.chain;
+  if (chain.length === 0) {
+    return { ok: false, error: '修改後找不到適用的簽核人，請聯絡系統管理員' };
+  }
+
+  const items = existingItems.map((i) => ({
+    line_no: i.line_no,
+    purchase_order_item_id: i.purchase_order_item_id,
+    description: i.description,
+    quantity: i.quantity,
+    amount: Number(i.amount),
+    pass_fail: passFailByItemId.get(i.id)!,
+  }));
+
+  const { error: txError } = await db.rpc('resubmit_acceptance', {
+    p_acceptance_id: acceptanceId,
+    p_contractor_supplier: input.contractorSupplierId,
+    p_acceptance_date: input.acceptanceDate,
+    p_items: items,
+    p_steps: chain.map((step, idx) => ({
+      step_order: idx + 1,
+      approver_employee_id: step.approverEmployeeId,
+      approver_role: step.approverRole,
+    })),
+  });
+  if (txError) return { ok: false, error: '修改失敗，請稍後再試' };
+
+  revalidatePath('/acceptances');
+  revalidatePath(`/acceptances/${acceptanceId}`);
+  return { ok: true };
+}
+
+export async function withdrawAcceptance(acceptanceId: string): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  const db = createSupabaseServiceRoleClient();
+
+  const { data: acceptance } = await db
+    .from('acceptances')
+    .select('id, applicant_employee_id, status, current_step_order')
+    .eq('id', acceptanceId)
+    .maybeSingle();
+  if (!acceptance) return { ok: false, error: '找不到這張驗收單' };
+  if (acceptance.applicant_employee_id !== employee.id) {
+    return { ok: false, error: '只有申請人可以撤回這張驗收單' };
+  }
+  if (acceptance.status !== 'pending_approval' || acceptance.current_step_order !== 1) {
+    return { ok: false, error: '只有尚未有人簽核的驗收單可以撤回' };
+  }
+
+  const { data: updated, error } = await db
+    .from('acceptances')
+    .update({ status: 'withdrawn', current_step_order: null, updated_at: new Date().toISOString() })
+    .eq('id', acceptanceId)
+    .eq('status', 'pending_approval')
+    .eq('current_step_order', 1)
+    .select('id');
+  if (error) return { ok: false, error: '撤回失敗，請稍後再試' };
+  if (!updated || updated.length === 0) {
+    return { ok: false, error: '此表單已被處理，請重新整理頁面' };
+  }
+
+  revalidatePath('/acceptances');
+  revalidatePath(`/acceptances/${acceptanceId}`);
+  return { ok: true };
+}

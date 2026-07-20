@@ -2,22 +2,36 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { createAcceptance } from '@/lib/acceptances/actions';
+import { createAcceptance, updateAcceptance } from '@/lib/acceptances/actions';
 
 export function AcceptanceForm({
   purchaseOrderId,
   items,
   suppliers,
+  mode = 'create',
+  acceptanceId,
+  initialValues,
 }: {
   purchaseOrderId: string;
   items: { id: string; description: string; quantity: number }[];
   suppliers: { id: string; name: string }[];
+  mode?: 'create' | 'edit';
+  acceptanceId?: string;
+  initialValues?: {
+    contractorSupplierId: string;
+    acceptanceDate: string;
+    passFail: Record<string, 'pass' | 'fail'>;
+  };
 }) {
   const router = useRouter();
-  const [contractorSupplierId, setContractorSupplierId] = useState(suppliers[0]?.id ?? '');
-  const [acceptanceDate, setAcceptanceDate] = useState(new Date().toISOString().slice(0, 10));
+  const [contractorSupplierId, setContractorSupplierId] = useState(
+    initialValues?.contractorSupplierId ?? suppliers[0]?.id ?? ''
+  );
+  const [acceptanceDate, setAcceptanceDate] = useState(
+    initialValues?.acceptanceDate ?? new Date().toISOString().slice(0, 10)
+  );
   const [passFail, setPassFail] = useState<Record<string, 'pass' | 'fail'>>(
-    Object.fromEntries(items.map((i) => [i.id, 'pass' as const]))
+    initialValues?.passFail ?? Object.fromEntries(items.map((i) => [i.id, 'pass' as const]))
   );
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -25,15 +39,26 @@ export function AcceptanceForm({
   const onSubmit = async () => {
     setError(null);
     setSubmitting(true);
-    const result = await createAcceptance({
-      purchaseOrderId,
-      contractorSupplierId,
-      acceptanceDate,
-      items: items.map((i) => ({ purchaseOrderItemId: i.id, passFail: passFail[i.id] ?? 'pass' })),
-    });
+    const result =
+      mode === 'edit' && acceptanceId
+        ? await updateAcceptance(acceptanceId, {
+            contractorSupplierId,
+            acceptanceDate,
+            items: items.map((i) => ({ acceptanceItemId: i.id, passFail: passFail[i.id] ?? 'pass' })),
+          })
+        : await createAcceptance({
+            purchaseOrderId,
+            contractorSupplierId,
+            acceptanceDate,
+            items: items.map((i) => ({ purchaseOrderItemId: i.id, passFail: passFail[i.id] ?? 'pass' })),
+          });
     setSubmitting(false);
     if (result.ok) {
-      router.push(`/acceptances/${result.acceptanceId}`);
+      router.push(
+        mode === 'edit' && acceptanceId
+          ? `/acceptances/${acceptanceId}`
+          : `/acceptances/${(result as unknown as { acceptanceId: string }).acceptanceId}`
+      );
     } else {
       setError(result.error);
     }
@@ -99,7 +124,7 @@ export function AcceptanceForm({
         disabled={submitting}
         className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:opacity-50"
       >
-        {submitting ? '送出中…' : '送出簽核'}
+        {submitting ? '送出中…' : mode === 'edit' ? '儲存修改' : '送出簽核'}
       </button>
     </div>
   );
