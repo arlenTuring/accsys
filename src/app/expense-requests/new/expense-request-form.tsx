@@ -2,28 +2,44 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { createExpenseRequest } from '@/lib/expense-requests/actions';
+import { createExpenseRequest, updateExpenseRequest } from '@/lib/expense-requests/actions';
 
 export function ExpenseRequestForm({
   purchaseOrderId,
   sourceItems,
   suppliers,
+  mode = 'create',
+  expenseRequestId,
+  initialValues,
 }: {
   purchaseOrderId: string;
   sourceItems: { id: string; description: string; amount: number }[];
   suppliers: { id: string; name: string }[];
+  mode?: 'create' | 'edit';
+  expenseRequestId?: string;
+  initialValues?: {
+    payeeType: 'employee' | 'supplier';
+    payeeSupplierId: string;
+    paymentMethod: string;
+    bankName: string;
+    bankAccount: string;
+    accountName: string;
+    invoiceMonth: string;
+    expectedPaymentDate: string;
+    included: Record<string, boolean>;
+  };
 }) {
   const router = useRouter();
-  const [payeeType, setPayeeType] = useState<'employee' | 'supplier'>('supplier');
-  const [payeeSupplierId, setPayeeSupplierId] = useState(suppliers[0]?.id ?? '');
-  const [paymentMethod, setPaymentMethod] = useState('匯款');
-  const [bankName, setBankName] = useState('');
-  const [bankAccount, setBankAccount] = useState('');
-  const [accountName, setAccountName] = useState('');
-  const [invoiceMonth, setInvoiceMonth] = useState('');
-  const [expectedPaymentDate, setExpectedPaymentDate] = useState('');
+  const [payeeType, setPayeeType] = useState<'employee' | 'supplier'>(initialValues?.payeeType ?? 'supplier');
+  const [payeeSupplierId, setPayeeSupplierId] = useState(initialValues?.payeeSupplierId ?? suppliers[0]?.id ?? '');
+  const [paymentMethod, setPaymentMethod] = useState(initialValues?.paymentMethod ?? '匯款');
+  const [bankName, setBankName] = useState(initialValues?.bankName ?? '');
+  const [bankAccount, setBankAccount] = useState(initialValues?.bankAccount ?? '');
+  const [accountName, setAccountName] = useState(initialValues?.accountName ?? '');
+  const [invoiceMonth, setInvoiceMonth] = useState(initialValues?.invoiceMonth ?? '');
+  const [expectedPaymentDate, setExpectedPaymentDate] = useState(initialValues?.expectedPaymentDate ?? '');
   const [included, setIncluded] = useState<Record<string, boolean>>(
-    Object.fromEntries(sourceItems.map((i) => [i.id, true]))
+    initialValues?.included ?? Object.fromEntries(sourceItems.map((i) => [i.id, true]))
   );
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -33,8 +49,7 @@ export function ExpenseRequestForm({
   const onSubmit = async () => {
     setError(null);
     setSubmitting(true);
-    const result = await createExpenseRequest({
-      purchaseOrderId,
+    const payload = {
       payeeType,
       payeeSupplierId: payeeType === 'supplier' ? payeeSupplierId : null,
       paymentMethod,
@@ -44,10 +59,18 @@ export function ExpenseRequestForm({
       invoiceMonth: invoiceMonth.trim() === '' ? null : invoiceMonth,
       expectedPaymentDate: expectedPaymentDate.trim() === '' ? null : expectedPaymentDate,
       includedSourceItemIds: sourceItems.filter((i) => included[i.id]).map((i) => i.id),
-    });
+    };
+    const result =
+      mode === 'edit' && expenseRequestId
+        ? await updateExpenseRequest(expenseRequestId, payload)
+        : await createExpenseRequest({ purchaseOrderId, ...payload });
     setSubmitting(false);
     if (result.ok) {
-      router.push(`/expense-requests/${result.expenseRequestId}`);
+      router.push(
+        mode === 'edit' && expenseRequestId
+          ? `/expense-requests/${expenseRequestId}`
+          : `/expense-requests/${(result as unknown as { expenseRequestId: string }).expenseRequestId}`
+      );
     } else {
       setError(result.error);
     }
@@ -167,7 +190,7 @@ export function ExpenseRequestForm({
         disabled={submitting}
         className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:opacity-50"
       >
-        {submitting ? '送出中…' : '送出簽核'}
+        {submitting ? '送出中…' : mode === 'edit' ? '儲存修改' : '送出簽核'}
       </button>
     </div>
   );
