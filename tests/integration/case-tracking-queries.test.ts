@@ -272,4 +272,81 @@ describe.skipIf(!hasIntegrationTestCredentials())('getFinanceCaseTracking', () =
     expect(options.some((d) => d.code === departmentACode)).toBe(true);
     expect(options.some((d) => d.code === departmentBCode)).toBe(true);
   });
+
+  it('marks a standalone_expense case as completed once its sole expense_request is approved', async () => {
+    const { data: budgetCode } = await admin
+      .from('budget_codes')
+      .insert({
+        code: `CTQ-SAE-BC-${Date.now()}`,
+        department_id: departmentAId,
+        category: '雜項購置',
+        fiscal_year: '115',
+        annual_budget_amount: 50000,
+        owner_employee_id: employeeAId,
+      })
+      .select()
+      .single();
+
+    const { data: caseNumber } = await admin.rpc('next_case_number');
+    const { data: pcase } = await admin
+      .from('procurement_cases')
+      .insert({ case_number: caseNumber, created_by_employee_id: employeeAId, case_type: 'standalone_expense' })
+      .select()
+      .single();
+
+    const { data: expenseRequest } = await admin
+      .from('expense_requests')
+      .insert({
+        procurement_case_id: pcase!.id,
+        budget_code_id: budgetCode!.id,
+        applicant_employee_id: employeeAId,
+        department_id: departmentAId,
+        budget_owner_employee_id: employeeAId,
+        payee_type: 'employee',
+        payment_method: '匯款',
+        total_amount: 500,
+        status: 'approved',
+      })
+      .select()
+      .single();
+
+    const { getFinanceCaseTracking } = await import('@/lib/case-tracking/queries');
+    const rows = await getFinanceCaseTracking({});
+    const row = rows.find((r) => r.caseNumber === caseNumber);
+    expect(row?.bucket).toBe('completed');
+
+    await admin.from('expense_requests').delete().eq('id', expenseRequest!.id);
+    await admin.from('procurement_cases').delete().eq('id', pcase!.id);
+    await admin.from('budget_codes').delete().eq('id', budgetCode!.id);
+  });
+
+  it('marks a case as withdrawn when any of its forms has been withdrawn, taking priority over completion status', async () => {
+    const { data: caseNumber } = await admin.rpc('next_case_number');
+    const { data: pcase } = await admin
+      .from('procurement_cases')
+      .insert({ case_number: caseNumber, created_by_employee_id: employeeAId })
+      .select()
+      .single();
+
+    const { data: pr } = await admin
+      .from('purchase_requests')
+      .insert({
+        procurement_case_id: pcase!.id,
+        applicant_employee_id: employeeAId,
+        department_id: departmentAId,
+        budget_owner_employee_id: employeeAId,
+        total_amount: 1000,
+        status: 'withdrawn',
+      })
+      .select()
+      .single();
+
+    const { getFinanceCaseTracking } = await import('@/lib/case-tracking/queries');
+    const rows = await getFinanceCaseTracking({});
+    const row = rows.find((r) => r.caseNumber === caseNumber);
+    expect(row?.bucket).toBe('withdrawn');
+
+    await admin.from('purchase_requests').delete().eq('id', pr!.id);
+    await admin.from('procurement_cases').delete().eq('id', pcase!.id);
+  });
 });

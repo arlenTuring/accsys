@@ -33,6 +33,7 @@ export type RequestDetail = {
   status: string;
   totalAmount: number;
   neededWithinDays: number | null;
+  applicantEmployeeId: string;
   applicantName: string;
   departmentName: string;
   currentStepOrder: number | null;
@@ -71,7 +72,7 @@ export async function getPurchaseRequestDetail(requestId: string): Promise<Reque
   const { data: pr } = await supabase
     .from('purchase_requests')
     .select(
-      'id, total_amount, status, needed_within_days, current_step_order, procurement_cases(case_number), applicant:employees!applicant_employee_id(name), departments(name)'
+      'id, total_amount, status, needed_within_days, current_step_order, applicant_employee_id, procurement_cases(case_number), applicant:employees!applicant_employee_id(name), departments(name)'
     )
     .eq('id', requestId)
     .maybeSingle();
@@ -98,6 +99,7 @@ export async function getPurchaseRequestDetail(requestId: string): Promise<Reque
     status: pr.status,
     totalAmount: Number(pr.total_amount),
     neededWithinDays: pr.needed_within_days,
+    applicantEmployeeId: pr.applicant_employee_id,
     applicantName: (pr.applicant as unknown as { name: string }).name,
     departmentName: (pr.departments as unknown as { name: string }).name,
     currentStepOrder: pr.current_step_order,

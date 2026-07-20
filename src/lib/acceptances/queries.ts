@@ -32,8 +32,10 @@ export type AcceptanceDetail = {
   caseNumber: string;
   status: string;
   totalAmount: number;
+  contractorSupplierId: string;
   contractorSupplierName: string;
   acceptanceDate: string;
+  applicantEmployeeId: string;
   applicantName: string;
   departmentName: string;
   currentStepOrder: number | null;
@@ -78,7 +80,7 @@ export async function getAcceptanceDetail(acceptanceId: string): Promise<Accepta
   const { data: acceptance } = await supabase
     .from('acceptances')
     .select(
-      'id, total_amount, status, acceptance_date, current_step_order, procurement_cases(case_number), applicant:employees!applicant_employee_id(name), departments(name), suppliers:suppliers!contractor_supplier_id(name)'
+      'id, total_amount, status, acceptance_date, current_step_order, applicant_employee_id, contractor_supplier_id, procurement_cases(case_number), applicant:employees!applicant_employee_id(name), departments(name), suppliers:suppliers!contractor_supplier_id(name)'
     )
     .eq('id', acceptanceId)
     .maybeSingle();
@@ -104,8 +106,10 @@ export async function getAcceptanceDetail(acceptanceId: string): Promise<Accepta
     caseNumber: (acceptance.procurement_cases as unknown as { case_number: string }).case_number,
     status: acceptance.status,
     totalAmount: Number(acceptance.total_amount),
+    contractorSupplierId: acceptance.contractor_supplier_id,
     contractorSupplierName: (acceptance.suppliers as unknown as { name: string }).name,
     acceptanceDate: acceptance.acceptance_date,
+    applicantEmployeeId: acceptance.applicant_employee_id,
     applicantName: (acceptance.applicant as unknown as { name: string }).name,
     departmentName: (acceptance.departments as unknown as { name: string }).name,
     currentStepOrder: acceptance.current_step_order,

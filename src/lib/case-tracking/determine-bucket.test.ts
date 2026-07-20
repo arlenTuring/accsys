@@ -20,7 +20,7 @@ describe('determineCaseBucket', () => {
       approved('acceptance'),
       approved('expense_request'),
     ];
-    expect(determineCaseBucket(forms)).toBe('completed');
+    expect(determineCaseBucket(forms, 'standard')).toBe('completed');
   });
 
   it('returns in_progress when one form is still pending_approval', () => {
@@ -30,7 +30,7 @@ describe('determineCaseBucket', () => {
       notExists('acceptance'),
       notExists('expense_request'),
     ];
-    expect(determineCaseBucket(forms)).toBe('in_progress');
+    expect(determineCaseBucket(forms, 'standard')).toBe('in_progress');
   });
 
   it('returns in_progress when a form was returned and nothing is pending_approval', () => {
@@ -40,7 +40,7 @@ describe('determineCaseBucket', () => {
       notExists('acceptance'),
       notExists('expense_request'),
     ];
-    expect(determineCaseBucket(forms)).toBe('in_progress');
+    expect(determineCaseBucket(forms, 'standard')).toBe('in_progress');
   });
 
   it('returns in_progress when later-stage forms have not been created yet, even if earlier ones are approved', () => {
@@ -50,6 +50,56 @@ describe('determineCaseBucket', () => {
       notExists('acceptance'),
       notExists('expense_request'),
     ];
-    expect(determineCaseBucket(forms)).toBe('in_progress');
+    expect(determineCaseBucket(forms, 'standard')).toBe('in_progress');
+  });
+
+  it('returns completed for a standalone_expense case once its sole expense_request is approved, even though the other three forms do not exist', () => {
+    const forms: CaseFormState[] = [
+      notExists('purchase_request'),
+      notExists('purchase_order'),
+      notExists('acceptance'),
+      approved('expense_request'),
+    ];
+    expect(determineCaseBucket(forms, 'standalone_expense')).toBe('completed');
+  });
+
+  it('returns in_progress for a standalone_expense case when its expense_request is not yet approved', () => {
+    const forms: CaseFormState[] = [
+      notExists('purchase_request'),
+      notExists('purchase_order'),
+      notExists('acceptance'),
+      withStatus('expense_request', 'pending_approval'),
+    ];
+    expect(determineCaseBucket(forms, 'standalone_expense')).toBe('in_progress');
+  });
+
+  it('returns withdrawn when a form is withdrawn, even though the other three are approved (priority over completed)', () => {
+    const forms: CaseFormState[] = [
+      approved('purchase_request'),
+      approved('purchase_order'),
+      approved('acceptance'),
+      withStatus('expense_request', 'withdrawn'),
+    ];
+    expect(determineCaseBucket(forms, 'standard')).toBe('withdrawn');
+  });
+
+  it('returns withdrawn when a form is withdrawn among otherwise in-progress forms (priority over in_progress)', () => {
+    const forms: CaseFormState[] = [
+      withStatus('purchase_request', 'withdrawn'),
+      notExists('purchase_order'),
+      notExists('acceptance'),
+      notExists('expense_request'),
+    ];
+    expect(determineCaseBucket(forms, 'standard')).toBe('withdrawn');
+  });
+
+  it('returns withdrawn for a standalone_expense case whose sole expense_request is withdrawn', () => {
+    const forms: CaseFormState[] = [
+      notExists('purchase_request'),
+      notExists('purchase_order'),
+      notExists('acceptance'),
+      withStatus('expense_request', 'withdrawn'),
+    ];
+    expect(determineCaseBucket(forms, 'standalone_expense')).toBe('withdrawn');
   });
 });

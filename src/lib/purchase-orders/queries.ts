@@ -10,6 +10,7 @@ export type OrderSummary = {
 
 export type OrderDetailItem = {
   lineNo: number;
+  itemId: string;
   budgetCode: string;
   itemCategory: string;
   description: string;
@@ -32,12 +33,14 @@ export type OrderDetail = {
   caseNumber: string;
   status: string;
   totalAmount: number;
+  supplierId: string;
   supplierName: string;
   paymentMethod: string;
   paymentTerms: string;
   expectedDeliveryDays: number | null;
   quoteCount: number;
   quoteCountReason: string | null;
+  applicantEmployeeId: string;
   applicantName: string;
   departmentName: string;
   currentStepOrder: number | null;
@@ -88,7 +91,7 @@ export async function getPurchaseOrderDetail(orderId: string): Promise<OrderDeta
   const { data: order } = await supabase
     .from('purchase_orders')
     .select(
-      'id, purchase_request_id, total_amount, status, payment_method, payment_terms, expected_delivery_days, quote_count, quote_count_reason, current_step_order, procurement_cases(case_number), applicant:employees!applicant_employee_id(name), departments(name), suppliers(name)'
+      'id, purchase_request_id, applicant_employee_id, supplier_id, total_amount, status, payment_method, payment_terms, expected_delivery_days, quote_count, quote_count_reason, current_step_order, procurement_cases(case_number), applicant:employees!applicant_employee_id(name), departments(name), suppliers(name)'
     )
     .eq('id', orderId)
     .maybeSingle();
@@ -96,7 +99,7 @@ export async function getPurchaseOrderDetail(orderId: string): Promise<OrderDeta
 
   const { data: items } = await supabase
     .from('purchase_order_items')
-    .select('line_no, item_category, description, quantity, unit_price, total_price, budget_codes(code)')
+    .select('id, line_no, item_category, description, quantity, unit_price, total_price, budget_codes(code)')
     .eq('purchase_order_id', orderId)
     .order('line_no');
 
@@ -114,18 +117,21 @@ export async function getPurchaseOrderDetail(orderId: string): Promise<OrderDeta
     caseNumber: (order.procurement_cases as unknown as { case_number: string }).case_number,
     status: order.status,
     totalAmount: Number(order.total_amount),
+    supplierId: order.supplier_id,
     supplierName: (order.suppliers as unknown as { name: string }).name,
     paymentMethod: order.payment_method,
     paymentTerms: order.payment_terms,
     expectedDeliveryDays: order.expected_delivery_days,
     quoteCount: order.quote_count,
     quoteCountReason: order.quote_count_reason,
+    applicantEmployeeId: order.applicant_employee_id,
     applicantName: (order.applicant as unknown as { name: string }).name,
     departmentName: (order.departments as unknown as { name: string }).name,
     currentStepOrder: order.current_step_order,
     purchaseRequestId: order.purchase_request_id,
     items: (items ?? []).map((i) => ({
       lineNo: i.line_no,
+      itemId: i.id,
       budgetCode: (i.budget_codes as unknown as { code: string }).code,
       itemCategory: i.item_category,
       description: i.description,

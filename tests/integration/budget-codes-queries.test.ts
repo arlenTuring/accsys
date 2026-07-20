@@ -15,10 +15,12 @@ describe.skipIf(!hasIntegrationTestCredentials())('getBudgetCodeList', () => {
   let admin: ReturnType<typeof createServiceRoleTestClient>;
   let departmentId: string;
   let managerId: string;
+  let projectId: string;
   let departmentScopedCodeId: string;
   let projectScopedCodeId: string;
   const departmentCode = `BCQ-${Date.now()}`;
   const managerEmployeeCode = `BCQ-MGR-${Date.now()}`;
+  const projectCode = `BCQ-PROJECT-X-${Date.now()}`;
 
   beforeAll(async () => {
     admin = createServiceRoleTestClient();
@@ -35,6 +37,13 @@ describe.skipIf(!hasIntegrationTestCredentials())('getBudgetCodeList', () => {
       .select()
       .single();
     departmentId = dept!.id;
+
+    const { data: project } = await admin
+      .from('projects')
+      .insert({ code: projectCode, name: '測試查詢專案' })
+      .select()
+      .single();
+    projectId = project!.id;
 
     const { data: deptCode } = await admin
       .from('budget_codes')
@@ -54,7 +63,7 @@ describe.skipIf(!hasIntegrationTestCredentials())('getBudgetCodeList', () => {
       .from('budget_codes')
       .insert({
         code: `BCQ-PROJ-${Date.now()}`,
-        project_code: 'BCQ-PROJECT-X',
+        project_id: projectId,
         category: '專案費用',
         fiscal_year: '115',
         annual_budget_amount: 50000,
@@ -67,12 +76,13 @@ describe.skipIf(!hasIntegrationTestCredentials())('getBudgetCodeList', () => {
 
   afterAll(async () => {
     await admin.from('budget_codes').delete().in('id', [departmentScopedCodeId, projectScopedCodeId]);
+    await admin.from('projects').delete().eq('id', projectId);
     await admin.from('departments').update({ manager_employee_id: null }).eq('id', departmentId);
     await admin.from('employees').delete().eq('id', managerId);
     await admin.from('departments').delete().eq('id', departmentId);
   });
 
-  it('reports the department code and owner name for a department-scoped budget code', async () => {
+  it('reports the department code/name and owner name for a department-scoped budget code', async () => {
     const { getBudgetCodeList } = await import('@/lib/budget-codes/queries');
     const list = await getBudgetCodeList();
     const item = list.find((b) => b.id === departmentScopedCodeId);
@@ -80,7 +90,9 @@ describe.skipIf(!hasIntegrationTestCredentials())('getBudgetCodeList', () => {
       id: departmentScopedCodeId,
       code: item!.code,
       departmentCode,
+      departmentName: '測試查詢部門',
       projectCode: null,
+      projectName: null,
       category: '人事費',
       fiscalYear: '115',
       annualBudgetAmount: 100000,
@@ -89,7 +101,7 @@ describe.skipIf(!hasIntegrationTestCredentials())('getBudgetCodeList', () => {
     });
   });
 
-  it('reports null department code and null owner for a project-scoped budget code with no owner', async () => {
+  it('reports the project code/name and null owner for a project-scoped budget code with no owner', async () => {
     const { getBudgetCodeList } = await import('@/lib/budget-codes/queries');
     const list = await getBudgetCodeList();
     const item = list.find((b) => b.id === projectScopedCodeId);
@@ -97,7 +109,9 @@ describe.skipIf(!hasIntegrationTestCredentials())('getBudgetCodeList', () => {
       id: projectScopedCodeId,
       code: item!.code,
       departmentCode: null,
-      projectCode: 'BCQ-PROJECT-X',
+      departmentName: null,
+      projectCode,
+      projectName: '測試查詢專案',
       category: '專案費用',
       fiscalYear: '115',
       annualBudgetAmount: 50000,

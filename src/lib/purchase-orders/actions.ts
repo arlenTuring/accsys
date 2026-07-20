@@ -404,6 +404,135 @@ export async function resubmitPurchaseOrder(
   return { ok: true };
 }
 
+export async function updatePurchaseOrder(
+  orderId: string,
+  input: ResubmitPurchaseOrderInput
+): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  const db = createSupabaseServiceRoleClient();
+
+  const { data: order } = await db
+    .from('purchase_orders')
+    .select(
+      'id, applicant_employee_id, status, current_step_order, department_id, budget_owner_employee_id'
+    )
+    .eq('id', orderId)
+    .maybeSingle();
+  if (!order) return { ok: false, error: '找不到這張採購單' };
+  if (order.applicant_employee_id !== employee.id) {
+    return { ok: false, error: '只有申請人可以修改這張採購單' };
+  }
+  if (order.status !== 'pending_approval' || order.current_step_order !== 1) {
+    return { ok: false, error: '只有尚未有人簽核的採購單可以修改' };
+  }
+
+  const { data: existingItems } = await db
+    .from('purchase_order_items')
+    .select('id, line_no, budget_code_id, item_category, description, quantity')
+    .eq('purchase_order_id', orderId)
+    .order('line_no');
+  if (!existingItems || existingItems.length === 0) {
+    return { ok: false, error: '找不到採購明細' };
+  }
+
+  const priceByItemId = new Map(input.items.map((i) => [i.purchaseOrderItemId, i.unitPrice]));
+  if (priceByItemId.size !== existingItems.length || existingItems.some((i) => !priceByItemId.has(i.id))) {
+    return { ok: false, error: '請為每一項明細填寫單價' };
+  }
+
+  const orderItems = existingItems.map((i) => {
+    const unitPrice = priceByItemId.get(i.id)!;
+    return {
+      line_no: i.line_no,
+      budget_code_id: i.budget_code_id,
+      item_category: i.item_category,
+      description: i.description,
+      quantity: i.quantity,
+      unit_price: unitPrice,
+      total_price: unitPrice * i.quantity,
+    };
+  });
+  const totalAmount = orderItems.reduce((sum, i) => sum + i.total_price, 0);
+
+  const validation = validatePurchaseOrderInput({
+    items: orderItems.map((i) => ({ unitPrice: i.unit_price })),
+    totalAmount,
+    quoteCount: input.quoteCount,
+    quoteCountReason: input.quoteCountReason,
+  });
+  if (!validation.ok) return { ok: false, error: validation.error };
+
+  const chainResult = await buildApprovalChainForForm(db, {
+    applicantEmployeeId: employee.id,
+    departmentId: order.department_id,
+    budgetOwnerEmployeeId: order.budget_owner_employee_id,
+    totalAmount,
+  });
+  if (!chainResult.ok) return { ok: false, error: chainResult.error };
+  const chain = chainResult.chain;
+  if (chain.length === 0) {
+    return { ok: false, error: '修改後找不到適用的簽核人，請聯絡系統管理員' };
+  }
+
+  const { error: txError } = await db.rpc('resubmit_purchase_order', {
+    p_order_id: orderId,
+    p_supplier: input.supplierId,
+    p_payment_method: input.paymentMethod,
+    p_payment_terms: input.paymentTerms,
+    p_expected_delivery_days: input.expectedDeliveryDays,
+    p_quote_count: input.quoteCount,
+    p_quote_count_reason: input.quoteCountReason,
+    p_total: totalAmount,
+    p_items: orderItems,
+    p_steps: chain.map((step, idx) => ({
+      step_order: idx + 1,
+      approver_employee_id: step.approverEmployeeId,
+      approver_role: step.approverRole,
+    })),
+  });
+  if (txError) return { ok: false, error: '修改失敗，請稍後再試' };
+
+  revalidatePath('/purchase-orders');
+  revalidatePath(`/purchase-orders/${orderId}`);
+  return { ok: true };
+}
+
+export async function withdrawPurchaseOrder(orderId: string): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  const db = createSupabaseServiceRoleClient();
+
+  const { data: order } = await db
+    .from('purchase_orders')
+    .select('id, applicant_employee_id, status, current_step_order')
+    .eq('id', orderId)
+    .maybeSingle();
+  if (!order) return { ok: false, error: '找不到這張採購單' };
+  if (order.applicant_employee_id !== employee.id) {
+    return { ok: false, error: '只有申請人可以撤回這張採購單' };
+  }
+  if (order.status !== 'pending_approval' || order.current_step_order !== 1) {
+    return { ok: false, error: '只有尚未有人簽核的採購單可以撤回' };
+  }
+
+  const { data: updated, error } = await db
+    .from('purchase_orders')
+    .update({ status: 'withdrawn', current_step_order: null, updated_at: new Date().toISOString() })
+    .eq('id', orderId)
+    .eq('status', 'pending_approval')
+    .eq('current_step_order', 1)
+    .select('id');
+  if (error) return { ok: false, error: '撤回失敗，請稍後再試' };
+  if (!updated || updated.length === 0) {
+    return { ok: false, error: '此表單已被處理，請重新整理頁面' };
+  }
+
+  revalidatePath('/purchase-orders');
+  revalidatePath(`/purchase-orders/${orderId}`);
+  return { ok: true };
+}
+
 export async function returnPurchaseOrderStep(orderId: string, reason: string): Promise<ActionResult> {
   const employee = await getCurrentEmployee(await createSupabaseServerClient());
   if (!employee) return { ok: false, error: '找不到您的員工資料' };

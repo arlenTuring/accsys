@@ -11,6 +11,7 @@ export type ExpenseRequestSummary = {
 
 export type ExpenseRequestDetailItem = {
   lineNo: number;
+  sourceItemId: string;
   description: string;
   amount: number;
 };
@@ -31,6 +32,7 @@ export type ExpenseRequestDetail = {
   totalAmount: number;
   payeeType: 'employee' | 'supplier';
   payeeName: string;
+  payeeSupplierId: string | null;
   paymentMethod: string;
   bankName: string | null;
   bankAccount: string | null;
@@ -38,6 +40,7 @@ export type ExpenseRequestDetail = {
   invoiceMonth: string | null;
   expectedPaymentDate: string | null;
   paymentBatchDate: string | null;
+  applicantEmployeeId: string;
   applicantName: string;
   departmentName: string;
   currentStepOrder: number | null;
@@ -87,7 +90,7 @@ export async function getExpenseRequestDetail(
   const { data: expenseRequest } = await supabase
     .from('expense_requests')
     .select(
-      'id, total_amount, status, payee_type, payment_method, bank_name, bank_account, account_name, invoice_month, expected_payment_date, payment_batch_date, current_step_order, procurement_cases(case_number), applicant:employees!applicant_employee_id(name), departments(name), payee_supplier:suppliers!payee_supplier_id(name), purchase_orders(payment_terms, updated_at)'
+      'id, total_amount, status, payee_type, payee_supplier_id, payment_method, bank_name, bank_account, account_name, invoice_month, expected_payment_date, payment_batch_date, current_step_order, applicant_employee_id, procurement_cases(case_number), applicant:employees!applicant_employee_id(name), departments(name), payee_supplier:suppliers!payee_supplier_id(name), purchase_orders(payment_terms, updated_at)'
     )
     .eq('id', expenseRequestId)
     .maybeSingle();
@@ -95,7 +98,7 @@ export async function getExpenseRequestDetail(
 
   const { data: items } = await supabase
     .from('expense_request_items')
-    .select('line_no, description, amount')
+    .select('line_no, purchase_order_item_id, description, amount')
     .eq('expense_request_id', expenseRequestId)
     .order('line_no');
 
@@ -113,13 +116,15 @@ export async function getExpenseRequestDetail(
   const order = expenseRequest.purchase_orders as unknown as {
     payment_terms: string;
     updated_at: string;
-  };
+  } | null;
 
-  const consistency = checkPaymentTermsConsistency({
-    paymentTerms: order.payment_terms,
-    orderApprovedDate: order.updated_at.slice(0, 10),
-    expectedPaymentDate: expenseRequest.expected_payment_date,
-  });
+  const consistency = order
+    ? checkPaymentTermsConsistency({
+        paymentTerms: order.payment_terms,
+        orderApprovedDate: order.updated_at.slice(0, 10),
+        expectedPaymentDate: expenseRequest.expected_payment_date,
+      })
+    : { consistent: true };
 
   return {
     id: expenseRequest.id,
@@ -129,6 +134,7 @@ export async function getExpenseRequestDetail(
     totalAmount: Number(expenseRequest.total_amount),
     payeeType: expenseRequest.payee_type as 'employee' | 'supplier',
     payeeName: payeeSupplier?.name ?? applicantName,
+    payeeSupplierId: expenseRequest.payee_supplier_id,
     paymentMethod: expenseRequest.payment_method,
     bankName: expenseRequest.bank_name,
     bankAccount: expenseRequest.bank_account,
@@ -136,13 +142,15 @@ export async function getExpenseRequestDetail(
     invoiceMonth: expenseRequest.invoice_month,
     expectedPaymentDate: expenseRequest.expected_payment_date,
     paymentBatchDate: expenseRequest.payment_batch_date,
+    applicantEmployeeId: expenseRequest.applicant_employee_id,
     applicantName,
     departmentName: (expenseRequest.departments as unknown as { name: string }).name,
     currentStepOrder: expenseRequest.current_step_order,
-    purchaseOrderPaymentTerms: order.payment_terms,
+    purchaseOrderPaymentTerms: order?.payment_terms ?? '（免走採購流程）',
     paymentTermsConsistent: consistency.consistent,
     items: (items ?? []).map((i) => ({
       lineNo: i.line_no,
+      sourceItemId: i.purchase_order_item_id,
       description: i.description,
       amount: Number(i.amount),
     })),
@@ -253,4 +261,59 @@ export async function getMyExpenseRequestApprovalQueue(): Promise<ExpenseRequest
       applicantName: (e.applicant as unknown as { name: string }).name,
       totalAmount: Number(e.total_amount),
     }));
+}
+
+export type ExpenseRequestSourceItem = {
+  id: string;
+  description: string;
+  amount: number;
+  // The underlying purchase_order_items.id this source item resolves to.
+  // For the acceptance-derived branch this differs from `id` (which is the
+  // acceptance_item's own id — the id space that createExpenseRequest /
+  // resubmitExpenseRequest / updateExpenseRequest all key
+  // `includedSourceItemIds` on). expense_request_items only stores
+  // `purchase_order_item_id` (see 20260711164720_expense_requests.sql), which
+  // is the same id space as `ExpenseRequestDetailItem.sourceItemId`. The edit
+  // page needs this field to correctly pre-check which source items are
+  // already included — matching on `id` alone would silently show every
+  // acceptance-derived item as unchecked.
+  purchaseOrderItemId: string;
+};
+
+export async function getExpenseRequestSourceItems(
+  expenseRequestId: string
+): Promise<ExpenseRequestSourceItem[]> {
+  const supabase = await createSupabaseServerClient();
+  const { data: expenseRequest } = await supabase
+    .from('expense_requests')
+    .select('acceptance_id, purchase_order_id')
+    .eq('id', expenseRequestId)
+    .maybeSingle();
+  if (!expenseRequest) return [];
+
+  if (expenseRequest.acceptance_id) {
+    const { data: items } = await supabase
+      .from('acceptance_items')
+      .select('id, purchase_order_item_id, description, amount')
+      .eq('acceptance_id', expenseRequest.acceptance_id);
+    return (items ?? []).map((i) => ({
+      id: i.id,
+      purchaseOrderItemId: i.purchase_order_item_id,
+      description: i.description,
+      amount: Number(i.amount),
+    }));
+  }
+  if (expenseRequest.purchase_order_id) {
+    const { data: items } = await supabase
+      .from('purchase_order_items')
+      .select('id, description, total_price')
+      .eq('purchase_order_id', expenseRequest.purchase_order_id);
+    return (items ?? []).map((i) => ({
+      id: i.id,
+      purchaseOrderItemId: i.id,
+      description: i.description,
+      amount: Number(i.total_price),
+    }));
+  }
+  return [];
 }

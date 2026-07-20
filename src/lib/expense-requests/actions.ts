@@ -25,6 +25,26 @@ export type NewExpenseRequest = {
   includedSourceItemIds: string[];
 };
 
+export const STANDALONE_EXPENSE_REQUEST_LIMIT = 10000;
+
+export type NewStandaloneExpenseRequestItem = {
+  description: string;
+  amount: number;
+};
+
+export type NewStandaloneExpenseRequest = {
+  budgetCodeId: string;
+  payeeType: 'employee' | 'supplier';
+  payeeSupplierId: string | null;
+  paymentMethod: string;
+  bankName: string | null;
+  bankAccount: string | null;
+  accountName: string | null;
+  invoiceMonth: string | null;
+  expectedPaymentDate: string | null;
+  items: NewStandaloneExpenseRequestItem[];
+};
+
 export type CreateResult =
   | { ok: true; expenseRequestId: string; caseNumber: string; paymentBatchDate: string }
   | { ok: false; error: string };
@@ -220,6 +240,176 @@ export async function createExpenseRequest(input: NewExpenseRequest): Promise<Cr
     });
     if (!notifyResult.ok) {
       await cleanup();
+      return { ok: false, error: '建立通知失敗' };
+    }
+  }
+
+  revalidatePath('/expense-requests');
+  revalidatePath('/approvals');
+  return {
+    ok: true,
+    expenseRequestId: expenseRequest.id,
+    caseNumber,
+    paymentBatchDate: batch.batchDate,
+  };
+}
+
+export async function createStandaloneExpenseRequest(
+  input: NewStandaloneExpenseRequest
+): Promise<CreateResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料，請聯絡系統管理員' };
+
+  const db = createSupabaseServiceRoleClient();
+
+  if (input.items.length === 0) {
+    return { ok: false, error: '費用申請單至少需要一個明細項次' };
+  }
+  const totalAmount = input.items.reduce((sum, i) => sum + i.amount, 0);
+  if (totalAmount >= STANDALONE_EXPENSE_REQUEST_LIMIT) {
+    return {
+      ok: false,
+      error: `免走採購流程的費用申請單總金額須低於 NT$ ${STANDALONE_EXPENSE_REQUEST_LIMIT.toLocaleString()}，請改用一般採購流程建立`,
+    };
+  }
+
+  const { data: budgetCode } = await db
+    .from('budget_codes')
+    .select('id, owner_employee_id')
+    .eq('id', input.budgetCodeId)
+    .maybeSingle();
+  if (!budgetCode) return { ok: false, error: '選取的預算編號無效' };
+  if (!budgetCode.owner_employee_id) {
+    return { ok: false, error: '選取的預算編號沒有指定預算負責人' };
+  }
+
+  const validation = validateExpenseRequestInput({
+    payeeType: input.payeeType,
+    payeeSupplierId: input.payeeSupplierId,
+    bankAccount: input.bankAccount,
+    includedItemCount: input.items.length,
+  });
+  if (!validation.ok) return { ok: false, error: validation.error };
+
+  const referenceDate = new Date().toISOString().slice(0, 10);
+  const expectedPaymentDate =
+    input.expectedPaymentDate ??
+    (input.invoiceMonth ? computeDefaultExpectedPaymentDate(input.invoiceMonth) : null);
+  const batch = computePaymentBatchDate({
+    payeeType: input.payeeType,
+    referenceDate,
+    expectedPaymentDate,
+    invoiceMonth: input.invoiceMonth,
+  });
+
+  const chainResult = await buildApprovalChainForForm(db, {
+    applicantEmployeeId: employee.id,
+    departmentId: employee.departmentId,
+    budgetOwnerEmployeeId: budgetCode.owner_employee_id,
+    totalAmount,
+  });
+  if (!chainResult.ok) return { ok: false, error: chainResult.error };
+  const chain = chainResult.chain;
+
+  const { data: caseNumber, error: numError } = await db.rpc('next_case_number');
+  if (numError || !caseNumber) return { ok: false, error: '產生案件單號失敗' };
+  const { data: pcase, error: caseError } = await db
+    .from('procurement_cases')
+    .insert({
+      case_number: caseNumber,
+      created_by_employee_id: employee.id,
+      case_type: 'standalone_expense',
+    })
+    .select()
+    .single();
+  if (caseError || !pcase) return { ok: false, error: '建立案件失敗' };
+
+  const cleanup = async (expenseRequestId?: string) => {
+    if (expenseRequestId) {
+      await db
+        .from('approval_steps')
+        .delete()
+        .eq('form_type', 'expense_request')
+        .eq('form_id', expenseRequestId);
+      await db
+        .from('notifications')
+        .delete()
+        .eq('form_type', 'expense_request')
+        .eq('form_id', expenseRequestId);
+      await db.from('expense_requests').delete().eq('id', expenseRequestId);
+    }
+    await db.from('procurement_cases').delete().eq('id', pcase.id);
+  };
+
+  const isAutoApproved = chain.length === 0;
+  const { data: expenseRequest, error: expenseError } = await db
+    .from('expense_requests')
+    .insert({
+      procurement_case_id: pcase.id,
+      purchase_order_id: null,
+      budget_code_id: input.budgetCodeId,
+      applicant_employee_id: employee.id,
+      department_id: employee.departmentId,
+      budget_owner_employee_id: budgetCode.owner_employee_id,
+      payee_type: input.payeeType,
+      payee_supplier_id: input.payeeType === 'supplier' ? input.payeeSupplierId : null,
+      payment_method: input.paymentMethod,
+      bank_name: input.payeeType === 'employee' ? input.bankName : null,
+      bank_account: input.payeeType === 'employee' ? input.bankAccount : null,
+      account_name: input.payeeType === 'employee' ? input.accountName : null,
+      invoice_month: input.invoiceMonth,
+      expected_payment_date: expectedPaymentDate,
+      payment_batch_date: batch.batchDate,
+      total_amount: totalAmount,
+      status: isAutoApproved ? 'approved' : 'pending_approval',
+      current_step_order: isAutoApproved ? null : 1,
+    })
+    .select()
+    .single();
+  if (expenseError || !expenseRequest) {
+    await cleanup();
+    return { ok: false, error: '建立費用申請單失敗' };
+  }
+
+  const { error: itemsError } = await db.from('expense_request_items').insert(
+    input.items.map((i, idx) => ({
+      expense_request_id: expenseRequest.id,
+      line_no: idx + 1,
+      purchase_order_item_id: null,
+      description: i.description,
+      amount: i.amount,
+    }))
+  );
+  if (itemsError) {
+    await cleanup(expenseRequest.id);
+    return { ok: false, error: '建立費用明細失敗' };
+  }
+
+  if (!isAutoApproved) {
+    const { error: stepsError } = await db.from('approval_steps').insert(
+      chain.map((step, idx) => ({
+        form_type: 'expense_request',
+        form_id: expenseRequest.id,
+        step_order: idx + 1,
+        approver_employee_id: step.approverEmployeeId,
+        approver_role: step.approverRole,
+      }))
+    );
+    if (stepsError) {
+      await cleanup(expenseRequest.id);
+      return { ok: false, error: '建立簽核流程失敗' };
+    }
+
+    const notifyResult = await notifyAndEmail(db, {
+      recipientEmployeeId: chain[0].approverEmployeeId,
+      type: 'approval_requested',
+      formType: 'expense_request',
+      formId: expenseRequest.id,
+      caseNumber,
+      message: `費用申請單 ${caseNumber} 待您簽核`,
+    });
+    if (!notifyResult.ok) {
+      await cleanup(expenseRequest.id);
       return { ok: false, error: '建立通知失敗' };
     }
   }
@@ -541,6 +731,158 @@ export async function resubmitExpenseRequest(
     caseNumber: caseRow!.case_number,
     message: `費用申請單 ${caseRow!.case_number} 已重新送出，待您簽核`,
   });
+
+  revalidatePath('/approvals');
+  revalidatePath(`/expense-requests/${expenseRequestId}`);
+  return { ok: true };
+}
+
+export async function updateExpenseRequest(
+  expenseRequestId: string,
+  input: ResubmitExpenseRequestInput
+): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  const db = createSupabaseServiceRoleClient();
+
+  const { data: expenseRequest } = await db
+    .from('expense_requests')
+    .select(
+      'id, applicant_employee_id, status, current_step_order, department_id, budget_owner_employee_id, purchase_order_id, acceptance_id'
+    )
+    .eq('id', expenseRequestId)
+    .maybeSingle();
+  if (!expenseRequest) return { ok: false, error: '找不到這張費用申請單' };
+  if (expenseRequest.applicant_employee_id !== employee.id) {
+    return { ok: false, error: '只有申請人可以修改這張費用申請單' };
+  }
+  if (expenseRequest.status !== 'pending_approval' || expenseRequest.current_step_order !== 1) {
+    return { ok: false, error: '只有尚未有人簽核的費用申請單可以修改' };
+  }
+
+  let sourceItems: SourceItem[] = [];
+  if (expenseRequest.acceptance_id) {
+    const { data: items } = await db
+      .from('acceptance_items')
+      .select('id, purchase_order_item_id, description, amount')
+      .eq('acceptance_id', expenseRequest.acceptance_id);
+    sourceItems = (items ?? []).map((i) => ({
+      id: i.id,
+      purchase_order_item_id: i.purchase_order_item_id,
+      description: i.description,
+      amount: Number(i.amount),
+    }));
+  } else if (expenseRequest.purchase_order_id) {
+    const { data: items } = await db
+      .from('purchase_order_items')
+      .select('id, description, total_price')
+      .eq('purchase_order_id', expenseRequest.purchase_order_id);
+    sourceItems = (items ?? []).map((i) => ({
+      id: i.id,
+      purchase_order_item_id: i.id,
+      description: i.description,
+      amount: Number(i.total_price),
+    }));
+  } else {
+    return { ok: false, error: '免走採購流程的費用申請單目前不支援編輯，請改用撤回後重新建立' };
+  }
+
+  const includedSet = new Set(input.includedSourceItemIds);
+  const includedItems = sourceItems.filter((i) => includedSet.has(i.id));
+
+  const validation = validateExpenseRequestInput({
+    payeeType: input.payeeType,
+    payeeSupplierId: input.payeeSupplierId,
+    bankAccount: input.bankAccount,
+    includedItemCount: includedItems.length,
+  });
+  if (!validation.ok) return { ok: false, error: validation.error };
+
+  const totalAmount = includedItems.reduce((sum, i) => sum + i.amount, 0);
+
+  const referenceDate = new Date().toISOString().slice(0, 10);
+  const expectedPaymentDate =
+    input.expectedPaymentDate ??
+    (input.invoiceMonth ? computeDefaultExpectedPaymentDate(input.invoiceMonth) : null);
+  const batch = computePaymentBatchDate({
+    payeeType: input.payeeType,
+    referenceDate,
+    expectedPaymentDate,
+    invoiceMonth: input.invoiceMonth,
+  });
+
+  const chainResult = await buildApprovalChainForForm(db, {
+    applicantEmployeeId: employee.id,
+    departmentId: expenseRequest.department_id,
+    budgetOwnerEmployeeId: expenseRequest.budget_owner_employee_id,
+    totalAmount,
+  });
+  if (!chainResult.ok) return { ok: false, error: chainResult.error };
+  const chain = chainResult.chain;
+  if (chain.length === 0) {
+    return { ok: false, error: '修改後找不到適用的簽核人，請聯絡系統管理員' };
+  }
+
+  const { error: txError } = await db.rpc('resubmit_expense_request', {
+    p_expense_request_id: expenseRequestId,
+    p_payee_type: input.payeeType,
+    p_payee_supplier: input.payeeType === 'supplier' ? input.payeeSupplierId : null,
+    p_payment_method: input.paymentMethod,
+    p_bank_name: input.payeeType === 'employee' ? input.bankName : null,
+    p_bank_account: input.payeeType === 'employee' ? input.bankAccount : null,
+    p_account_name: input.payeeType === 'employee' ? input.accountName : null,
+    p_invoice_month: input.invoiceMonth,
+    p_expected_payment_date: expectedPaymentDate,
+    p_payment_batch_date: batch.batchDate,
+    p_total: totalAmount,
+    p_items: includedItems.map((i, idx) => ({
+      line_no: idx + 1,
+      purchase_order_item_id: i.purchase_order_item_id,
+      description: i.description,
+      amount: i.amount,
+    })),
+    p_steps: chain.map((step, idx) => ({
+      step_order: idx + 1,
+      approver_employee_id: step.approverEmployeeId,
+      approver_role: step.approverRole,
+    })),
+  });
+  if (txError) return { ok: false, error: '修改失敗，請稍後再試' };
+
+  revalidatePath('/approvals');
+  revalidatePath(`/expense-requests/${expenseRequestId}`);
+  return { ok: true };
+}
+
+export async function withdrawExpenseRequest(expenseRequestId: string): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  const db = createSupabaseServiceRoleClient();
+
+  const { data: expenseRequest } = await db
+    .from('expense_requests')
+    .select('id, applicant_employee_id, status, current_step_order')
+    .eq('id', expenseRequestId)
+    .maybeSingle();
+  if (!expenseRequest) return { ok: false, error: '找不到這張費用申請單' };
+  if (expenseRequest.applicant_employee_id !== employee.id) {
+    return { ok: false, error: '只有申請人可以撤回這張費用申請單' };
+  }
+  if (expenseRequest.status !== 'pending_approval' || expenseRequest.current_step_order !== 1) {
+    return { ok: false, error: '只有尚未有人簽核的費用申請單可以撤回' };
+  }
+
+  const { data: updated, error } = await db
+    .from('expense_requests')
+    .update({ status: 'withdrawn', current_step_order: null, updated_at: new Date().toISOString() })
+    .eq('id', expenseRequestId)
+    .eq('status', 'pending_approval')
+    .eq('current_step_order', 1)
+    .select('id');
+  if (error) return { ok: false, error: '撤回失敗，請稍後再試' };
+  if (!updated || updated.length === 0) {
+    return { ok: false, error: '此表單已被處理，請重新整理頁面' };
+  }
 
   revalidatePath('/approvals');
   revalidatePath(`/expense-requests/${expenseRequestId}`);

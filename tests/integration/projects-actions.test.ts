@@ -1,0 +1,75 @@
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { createServiceRoleTestClient, hasIntegrationTestCredentials } from './supabase-test-client';
+
+const currentEmployee = vi.hoisted(() => ({ value: null as null | { id: string; role: string } }));
+vi.mock('@/lib/auth/current-employee', () => ({
+  getCurrentEmployee: async () => currentEmployee.value,
+}));
+vi.mock('@/lib/supabase/server', () => ({ createSupabaseServerClient: async () => ({}) }));
+vi.mock('next/cache', () => ({ revalidatePath: () => {} }));
+
+describe.skipIf(!hasIntegrationTestCredentials())('projects actions', () => {
+  let admin: ReturnType<typeof createServiceRoleTestClient>;
+  let financeEmployeeId: string;
+  let staffEmployeeId: string;
+  const createdProjectIds: string[] = [];
+
+  beforeAll(async () => {
+    admin = createServiceRoleTestClient();
+    const { data: anyDept } = await admin.from('departments').select('id').limit(1).single();
+    const { data: financeEmp } = await admin
+      .from('employees')
+      .insert({ employee_code: `PJT-FIN-${Date.now()}`, name: '測試財會人員', department_id: anyDept!.id, role: 'finance' })
+      .select()
+      .single();
+    financeEmployeeId = financeEmp!.id;
+    const { data: staffEmp } = await admin
+      .from('employees')
+      .insert({ employee_code: `PJT-STAFF-${Date.now()}`, name: '測試一般員工', department_id: anyDept!.id, role: 'staff' })
+      .select()
+      .single();
+    staffEmployeeId = staffEmp!.id;
+  });
+
+  afterAll(async () => {
+    if (createdProjectIds.length > 0) {
+      await admin.from('projects').delete().in('id', createdProjectIds);
+    }
+    await admin.from('employees').delete().in('id', [financeEmployeeId, staffEmployeeId]);
+  });
+
+  it('rejects a non-finance employee', async () => {
+    currentEmployee.value = { id: staffEmployeeId, role: 'staff' };
+    const { upsertProject } = await import('@/lib/projects/actions');
+    const result = await upsertProject({ code: `PJT-CODE-${Date.now()}`, name: '測試專案' });
+    expect(result).toEqual({ ok: false, error: '只有財會人員可以維護專案' });
+  });
+
+  it('creates a project', async () => {
+    currentEmployee.value = { id: financeEmployeeId, role: 'finance' };
+    const { upsertProject } = await import('@/lib/projects/actions');
+    const code = `PJT-CODE-${Date.now()}`;
+    const result = await upsertProject({ code, name: '測試專案 A' });
+    expect(result.ok).toBe(true);
+    if (result.ok) createdProjectIds.push(result.projectId);
+
+    const { data: row } = await admin.from('projects').select('name').eq('code', code).single();
+    expect(row).toEqual({ name: '測試專案 A' });
+  });
+
+  it('updates an existing project on repeated upsert rather than creating a duplicate', async () => {
+    currentEmployee.value = { id: financeEmployeeId, role: 'finance' };
+    const { upsertProject } = await import('@/lib/projects/actions');
+    const code = `PJT-UPDATE-${Date.now()}`;
+    const first = await upsertProject({ code, name: '舊名稱' });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    createdProjectIds.push(first.projectId);
+
+    const second = await upsertProject({ code, name: '新名稱' });
+    expect(second).toEqual({ ok: true, projectId: first.projectId });
+
+    const { count } = await admin.from('projects').select('id', { count: 'exact', head: true }).eq('code', code);
+    expect(count).toBe(1);
+  });
+});

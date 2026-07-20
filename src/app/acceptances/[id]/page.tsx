@@ -7,11 +7,14 @@ import { getAttachments } from '@/lib/attachments/queries';
 import { AttachmentsPanel } from '@/app/components/attachments-panel';
 import { ApprovalActions } from './approval-actions';
 import { PropertyTagForm } from './property-tag-form';
+import { withdrawAcceptance } from '@/lib/acceptances/actions';
+import { WithdrawButton } from '@/app/requests/[id]/withdraw-button';
 
 const STATUS_LABELS: Record<string, string> = {
   pending_approval: '簽核中',
   approved: '已核准',
   returned: '已退回（待修改）',
+  withdrawn: '已撤回',
 };
 const ROLE_LABELS: Record<string, string> = {
   department_manager: '申請單位主管',
@@ -45,6 +48,10 @@ export default async function AcceptanceDetailPage({
       : undefined;
   const isCurrentApprover =
     !!employee && !!currentStep && currentStep.approverEmployeeId === employee.id;
+
+  const isApplicant = !!employee && employee.id === detail.applicantEmployeeId;
+  const canSelfEdit =
+    isApplicant && detail.status === 'pending_approval' && detail.currentStepOrder === 1;
 
   return (
     <main className="mx-auto max-w-4xl space-y-4 p-8">
@@ -126,6 +133,15 @@ export default async function AcceptanceDetailPage({
       </section>
 
       <AttachmentsPanel formType="acceptance" formId={id} attachments={attachments} />
+
+      {canSelfEdit && (
+        <section className="flex gap-3">
+          <Link href={`/acceptances/${detail.id}/edit`} className="rounded border px-4 py-2 text-sm">
+            編輯
+          </Link>
+          <WithdrawButton requestId={detail.id} onWithdraw={withdrawAcceptance} redirectTo="/acceptances" />
+        </section>
+      )}
 
       {isCurrentApprover && <ApprovalActions acceptanceId={detail.id} />}
     </main>

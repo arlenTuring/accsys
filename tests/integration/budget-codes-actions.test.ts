@@ -18,6 +18,8 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
   let managerId: string;
   let customOwnerId: string;
   let customOwnerCode: string;
+  let projectCode: string;
+  let projectId: string;
   let financeEmployeeId: string;
   let staffEmployeeId: string;
   const createdBudgetCodeIds: string[] = [];
@@ -77,6 +79,14 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
       .select()
       .single();
     staffEmployeeId = staffEmp!.id;
+
+    projectCode = `BCT-PROJ-${Date.now()}`;
+    const { data: project } = await admin
+      .from('projects')
+      .insert({ code: projectCode, name: '測試專案' })
+      .select()
+      .single();
+    projectId = project!.id;
   });
 
   afterAll(async () => {
@@ -89,6 +99,7 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
       .delete()
       .in('id', [managerId, customOwnerId, financeEmployeeId, staffEmployeeId]);
     await admin.from('departments').delete().eq('id', departmentId);
+    await admin.from('projects').delete().eq('id', projectId);
   });
 
   it('rejects a non-finance employee', async () => {
@@ -124,12 +135,12 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
 
     const { data: row } = await admin
       .from('budget_codes')
-      .select('department_id, project_code, owner_employee_id, annual_budget_amount')
+      .select('department_id, project_id, owner_employee_id, annual_budget_amount')
       .eq('code', code)
       .single();
     expect(row).toEqual({
       department_id: departmentId,
-      project_code: null,
+      project_id: null,
       owner_employee_id: managerId,
       annual_budget_amount: 500000,
     });
@@ -142,7 +153,7 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
     const result = await upsertBudgetCode({
       code,
       departmentCode: null,
-      projectCode: '115BD999',
+      projectCode,
       category: '專案費用',
       fiscalYear: '115',
       annualBudgetAmount: 200000,
@@ -153,12 +164,12 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
 
     const { data: row } = await admin
       .from('budget_codes')
-      .select('department_id, project_code, owner_employee_id')
+      .select('department_id, project_id, owner_employee_id')
       .eq('code', code)
       .single();
     expect(row).toEqual({
       department_id: null,
-      project_code: '115BD999',
+      project_id: projectId,
       owner_employee_id: customOwnerId,
     });
   });
@@ -169,7 +180,7 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
     const result = await upsertBudgetCode({
       code: `BCT-BOTH-${Date.now()}`,
       departmentCode,
-      projectCode: '115BD999',
+      projectCode,
       category: '人事費',
       fiscalYear: '115',
       annualBudgetAmount: 1000,
@@ -371,11 +382,13 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
     const XLSX = await import('xlsx');
 
     const validCode = `BCT-IMPORT-OK-${Date.now()}`;
+    const badDeptCode = `BCT-IMPORT-BADDEPT-${Date.now()}`;
+    const negativeCode = `BCT-IMPORT-NEG-${Date.now()}`;
     const sheet = XLSX.utils.aoa_to_sheet([
       ['預算編號', '部門代碼', '專案代碼', '類別', '年度', '年度預算金額', '負責人工號'],
       [validCode, departmentCode, null, '人事費', '115', 100000, null],
-      [`BCT-IMPORT-BADDEPT-${Date.now()}`, 'NOPE-DEPT', null, '人事費', '115', 100000, null],
-      [`BCT-IMPORT-NEG-${Date.now()}`, departmentCode, null, '人事費', '115', -500, null],
+      [badDeptCode, 'NOPE-DEPT', null, '人事費', '115', 100000, null],
+      [negativeCode, departmentCode, null, '人事費', '115', -8000, null],
     ]);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, sheet, '預算編號');
@@ -387,10 +400,9 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
     const result = await importBudgetCodesFromExcel(formData);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.summary.successCount).toBe(1);
-    expect(result.summary.errors).toHaveLength(2);
+    expect(result.summary.successCount).toBe(2);
+    expect(result.summary.errors).toHaveLength(1);
     expect(result.summary.errors[0].reason).toBe('部門代碼「NOPE-DEPT」查無此部門');
-    expect(result.summary.errors[1].reason).toBe('年度預算金額必須為正數');
 
     const { data: createdRow } = await admin
       .from('budget_codes')
@@ -398,6 +410,14 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
       .eq('code', validCode)
       .single();
     createdBudgetCodeIds.push(createdRow!.id);
+
+    const { data: negRow } = await admin
+      .from('budget_codes')
+      .select('id, annual_budget_amount')
+      .eq('code', negativeCode)
+      .single();
+    createdBudgetCodeIds.push(negRow!.id);
+    expect(Number(negRow!.annual_budget_amount)).toBe(8000);
   });
 
   it('rejects import from a non-finance employee', async () => {
