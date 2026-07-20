@@ -76,11 +76,19 @@ describe.skipIf(!hasIntegrationTestCredentials())('createStandaloneExpenseReques
   afterAll(async () => {
     if (createdCaseIds.length > 0) {
       for (const caseId of createdCaseIds) {
-        await admin.from('expense_request_items').delete().in(
-          'expense_request_id',
-          (await admin.from('expense_requests').select('id').eq('procurement_case_id', caseId)).data?.map((r) => r.id) ?? []
-        );
-        await admin.from('approval_steps').delete().eq('form_id', caseId);
+        const { data: expenseRequests } = await admin
+          .from('expense_requests')
+          .select('id')
+          .eq('procurement_case_id', caseId);
+        const expenseRequestIds = expenseRequests?.map((r) => r.id) ?? [];
+        await admin.from('expense_request_items').delete().in('expense_request_id', expenseRequestIds);
+        if (expenseRequestIds.length > 0) {
+          await admin
+            .from('approval_steps')
+            .delete()
+            .eq('form_type', 'expense_request')
+            .in('form_id', expenseRequestIds);
+        }
         await admin.from('expense_requests').delete().eq('procurement_case_id', caseId);
         await admin.from('procurement_cases').delete().eq('id', caseId);
       }

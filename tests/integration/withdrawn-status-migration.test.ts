@@ -9,9 +9,12 @@ describe.skipIf(!hasIntegrationTestCredentials())('withdrawn status migration', 
     const { data: anyRow } = await admin.from(table).select('id, status').limit(1).maybeSingle();
     if (!anyRow) return;
     const originalStatus = anyRow.status;
-    const { error } = await admin.from(table).update({ status: 'withdrawn' }).eq('id', anyRow.id);
-    expect(error).toBeNull();
-    await admin.from(table).update({ status: originalStatus }).eq('id', anyRow.id);
+    try {
+      const { error } = await admin.from(table).update({ status: 'withdrawn' }).eq('id', anyRow.id);
+      expect(error).toBeNull();
+    } finally {
+      await admin.from(table).update({ status: originalStatus }).eq('id', anyRow.id);
+    }
   });
 
   it.each(tables)('%s rejects an invalid status value', async (table) => {

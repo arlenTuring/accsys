@@ -32,6 +32,7 @@ export type ExpenseRequestDetail = {
   totalAmount: number;
   payeeType: 'employee' | 'supplier';
   payeeName: string;
+  payeeSupplierId: string | null;
   paymentMethod: string;
   bankName: string | null;
   bankAccount: string | null;
@@ -89,7 +90,7 @@ export async function getExpenseRequestDetail(
   const { data: expenseRequest } = await supabase
     .from('expense_requests')
     .select(
-      'id, total_amount, status, payee_type, payment_method, bank_name, bank_account, account_name, invoice_month, expected_payment_date, payment_batch_date, current_step_order, applicant_employee_id, procurement_cases(case_number), applicant:employees!applicant_employee_id(name), departments(name), payee_supplier:suppliers!payee_supplier_id(name), purchase_orders(payment_terms, updated_at)'
+      'id, total_amount, status, payee_type, payee_supplier_id, payment_method, bank_name, bank_account, account_name, invoice_month, expected_payment_date, payment_batch_date, current_step_order, applicant_employee_id, procurement_cases(case_number), applicant:employees!applicant_employee_id(name), departments(name), payee_supplier:suppliers!payee_supplier_id(name), purchase_orders(payment_terms, updated_at)'
     )
     .eq('id', expenseRequestId)
     .maybeSingle();
@@ -133,6 +134,7 @@ export async function getExpenseRequestDetail(
     totalAmount: Number(expenseRequest.total_amount),
     payeeType: expenseRequest.payee_type as 'employee' | 'supplier',
     payeeName: payeeSupplier?.name ?? applicantName,
+    payeeSupplierId: expenseRequest.payee_supplier_id,
     paymentMethod: expenseRequest.payment_method,
     bankName: expenseRequest.bank_name,
     bankAccount: expenseRequest.bank_account,

@@ -36,7 +36,7 @@ export default async function EditExpenseRequestPage({ params }: { params: Promi
         expenseRequestId={id}
         initialValues={{
           payeeType: detail.payeeType,
-          payeeSupplierId: '',
+          payeeSupplierId: detail.payeeSupplierId ?? '',
           paymentMethod: detail.paymentMethod,
           bankName: detail.bankName ?? '',
           bankAccount: detail.bankAccount ?? '',
