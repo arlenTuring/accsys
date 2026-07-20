@@ -6,9 +6,15 @@ export type CaseFormState = {
   status: string | null;
 };
 
+export type CaseType = 'standard' | 'standalone_expense';
 export type CaseBucket = 'in_progress' | 'completed';
 
-export function determineCaseBucket(forms: CaseFormState[]): CaseBucket {
+export function determineCaseBucket(forms: CaseFormState[], caseType: CaseType): CaseBucket {
+  if (caseType === 'standalone_expense') {
+    const expenseForm = forms.find((f) => f.formType === 'expense_request');
+    const complete = !!expenseForm && expenseForm.exists && expenseForm.status === 'approved';
+    return complete ? 'completed' : 'in_progress';
+  }
   const allApproved = forms.every((form) => form.exists && form.status === 'approved');
   return allApproved ? 'completed' : 'in_progress';
 }

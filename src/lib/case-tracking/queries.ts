@@ -42,7 +42,7 @@ export async function getFinanceCaseTracking(
 
   let caseQuery = supabase
     .from('procurement_cases')
-    .select('id, case_number')
+    .select('id, case_number, case_type')
     .order('created_at', { ascending: false });
   if (dateRangeIsValid && validFrom) {
     caseQuery = caseQuery.gte('created_at', `${validFrom}T00:00:00+08:00`);
@@ -93,7 +93,7 @@ export async function getFinanceCaseTracking(
       department: firstExisting?.departments ?? null,
       applicant: firstExisting?.applicant?.name ?? null,
       forms,
-      bucket: determineCaseBucket(forms),
+      bucket: determineCaseBucket(forms, c.case_type as 'standard' | 'standalone_expense'),
     };
   });
 
