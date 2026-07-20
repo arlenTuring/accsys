@@ -157,7 +157,7 @@ export async function importBudgetCodesFromExcel(formData: FormData): Promise<Im
       projectCode: row.projectCode,
       category: row.category,
       fiscalYear: row.fiscalYear,
-      annualBudgetAmount: row.annualBudgetAmount,
+      annualBudgetAmount: Math.abs(row.annualBudgetAmount),
       ownerEmployeeCode: row.ownerEmployeeCode,
     });
     if (result.ok) {
