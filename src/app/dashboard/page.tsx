@@ -60,7 +60,7 @@ export default async function DashboardPage() {
             主檔資料總覽
           </Link>
         )}
-        {employee.role === 'finance' && (
+        {(employee.role === 'finance' || employee.role === 'admin') && (
           <>
             <Link href="/budget-codes" className="text-blue-600 underline">
               預算編號管理

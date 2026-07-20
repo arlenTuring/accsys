@@ -41,7 +41,7 @@ export default async function CaseTrackingPage({
   const supabase = await createSupabaseServerClient();
   const employee = await getCurrentEmployee(supabase);
   if (!employee) redirect('/login');
-  if (employee.role !== 'finance') redirect('/dashboard');
+  if (employee.role !== 'finance' && employee.role !== 'admin') redirect('/dashboard');
 
   const tab: CaseBucket =
     params.tab === 'completed' ? 'completed' : params.tab === 'withdrawn' ? 'withdrawn' : 'in_progress';

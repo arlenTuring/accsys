@@ -9,7 +9,7 @@ export default async function BudgetCodesPage() {
   const supabase = await createSupabaseServerClient();
   const employee = await getCurrentEmployee(supabase);
   if (!employee) redirect('/login');
-  if (employee.role !== 'finance') redirect('/dashboard');
+  if (employee.role !== 'finance' && employee.role !== 'admin') redirect('/dashboard');
 
   const [budgetCodes, projects] = await Promise.all([getBudgetCodeList(), getProjectList()]);
 
