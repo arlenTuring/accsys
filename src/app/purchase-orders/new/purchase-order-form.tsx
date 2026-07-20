@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { createPurchaseOrder } from '@/lib/purchase-orders/actions';
+import { createPurchaseOrder, updatePurchaseOrder } from '@/lib/purchase-orders/actions';
 import { classifyItemCategory } from '@/lib/procurement/item-category';
 import { requiredQuoteCount } from '@/lib/procurement/quote-requirement';
 
@@ -12,19 +12,33 @@ export function PurchaseOrderForm({
   purchaseRequestId,
   items,
   suppliers,
+  mode = 'create',
+  orderId,
+  initialValues,
 }: {
   purchaseRequestId: string;
   items: { id: string; description: string; quantity: number; budgetCode: string }[];
   suppliers: { id: string; name: string }[];
+  mode?: 'create' | 'edit';
+  orderId?: string;
+  initialValues?: {
+    prices: Record<string, string>;
+    supplierId: string;
+    paymentMethod: string;
+    paymentTerms: string;
+    expectedDeliveryDays: string;
+    quoteCount: string;
+    quoteCountReason: string;
+  };
 }) {
   const router = useRouter();
-  const [prices, setPrices] = useState<Record<string, string>>({});
-  const [supplierId, setSupplierId] = useState(suppliers[0]?.id ?? '');
-  const [paymentMethod, setPaymentMethod] = useState('匯款');
-  const [paymentTerms, setPaymentTerms] = useState('貨到付款');
-  const [expectedDeliveryDays, setExpectedDeliveryDays] = useState('14');
-  const [quoteCount, setQuoteCount] = useState('1');
-  const [quoteCountReason, setQuoteCountReason] = useState('');
+  const [prices, setPrices] = useState<Record<string, string>>(initialValues?.prices ?? {});
+  const [supplierId, setSupplierId] = useState(initialValues?.supplierId ?? suppliers[0]?.id ?? '');
+  const [paymentMethod, setPaymentMethod] = useState(initialValues?.paymentMethod ?? '匯款');
+  const [paymentTerms, setPaymentTerms] = useState(initialValues?.paymentTerms ?? '貨到付款');
+  const [expectedDeliveryDays, setExpectedDeliveryDays] = useState(initialValues?.expectedDeliveryDays ?? '14');
+  const [quoteCount, setQuoteCount] = useState(initialValues?.quoteCount ?? '1');
+  const [quoteCountReason, setQuoteCountReason] = useState(initialValues?.quoteCountReason ?? '');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -34,22 +48,39 @@ export function PurchaseOrderForm({
   const onSubmit = async () => {
     setError(null);
     setSubmitting(true);
-    const result = await createPurchaseOrder({
-      purchaseRequestId,
-      supplierId,
-      paymentMethod,
-      paymentTerms,
-      expectedDeliveryDays: expectedDeliveryDays === '' ? null : Number(expectedDeliveryDays),
-      quoteCount: Number(quoteCount),
-      quoteCountReason: quoteCountReason.trim() === '' ? null : quoteCountReason,
-      items: items.map((i) => ({
-        purchaseRequestItemId: i.id,
-        unitPrice: Number(prices[i.id] ?? 0),
-      })),
-    });
+    const itemsPayload = items.map((i) => ({
+      purchaseOrderItemId: i.id,
+      purchaseRequestItemId: i.id,
+      unitPrice: Number(prices[i.id] ?? 0),
+    }));
+    const result =
+      mode === 'edit' && orderId
+        ? await updatePurchaseOrder(orderId, {
+            supplierId,
+            paymentMethod,
+            paymentTerms,
+            expectedDeliveryDays: expectedDeliveryDays === '' ? null : Number(expectedDeliveryDays),
+            quoteCount: Number(quoteCount),
+            quoteCountReason: quoteCountReason.trim() === '' ? null : quoteCountReason,
+            items: itemsPayload.map((i) => ({ purchaseOrderItemId: i.purchaseOrderItemId, unitPrice: i.unitPrice })),
+          })
+        : await createPurchaseOrder({
+            purchaseRequestId,
+            supplierId,
+            paymentMethod,
+            paymentTerms,
+            expectedDeliveryDays: expectedDeliveryDays === '' ? null : Number(expectedDeliveryDays),
+            quoteCount: Number(quoteCount),
+            quoteCountReason: quoteCountReason.trim() === '' ? null : quoteCountReason,
+            items: itemsPayload.map((i) => ({ purchaseRequestItemId: i.purchaseRequestItemId, unitPrice: i.unitPrice })),
+          });
     setSubmitting(false);
     if (result.ok) {
-      router.push(`/purchase-orders/${result.orderId}`);
+      router.push(
+        mode === 'edit' && orderId
+          ? `/purchase-orders/${orderId}`
+          : `/purchase-orders/${(result as unknown as { orderId: string }).orderId}`
+      );
     } else {
       setError(result.error);
     }
@@ -161,7 +192,7 @@ export function PurchaseOrderForm({
         disabled={submitting}
         className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:opacity-50"
       >
-        {submitting ? '送出中…' : '送出簽核'}
+        {submitting ? '送出中…' : mode === 'edit' ? '儲存修改' : '送出簽核'}
       </button>
     </div>
   );

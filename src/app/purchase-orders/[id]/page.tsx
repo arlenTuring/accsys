@@ -5,6 +5,8 @@ import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getPurchaseOrderDetail } from '@/lib/purchase-orders/queries';
 import { getAttachments } from '@/lib/attachments/queries';
 import { AttachmentsPanel } from '@/app/components/attachments-panel';
+import { withdrawPurchaseOrder } from '@/lib/purchase-orders/actions';
+import { WithdrawButton } from '@/app/requests/[id]/withdraw-button';
 import { ApprovalActions } from './approval-actions';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -43,6 +45,9 @@ export default async function PurchaseOrderDetailPage({
       : undefined;
   const isCurrentApprover =
     !!employee && !!currentStep && currentStep.approverEmployeeId === employee.id;
+  const isApplicant = !!employee && employee.id === detail.applicantEmployeeId;
+  const canSelfEdit =
+    isApplicant && detail.status === 'pending_approval' && detail.currentStepOrder === 1;
 
   return (
     <main className="mx-auto max-w-4xl space-y-4 p-8">
@@ -140,6 +145,15 @@ export default async function PurchaseOrderDetailPage({
             建立費用申請單
           </Link>
         </p>
+      )}
+
+      {canSelfEdit && (
+        <section className="flex gap-3">
+          <Link href={`/purchase-orders/${detail.id}/edit`} className="rounded border px-4 py-2 text-sm">
+            編輯
+          </Link>
+          <WithdrawButton requestId={detail.id} onWithdraw={withdrawPurchaseOrder} redirectTo="/purchase-orders" />
+        </section>
       )}
 
       {isCurrentApprover && <ApprovalActions orderId={detail.id} />}
