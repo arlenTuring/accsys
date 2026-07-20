@@ -496,11 +496,17 @@ export async function withdrawPurchaseRequest(requestId: string): Promise<Action
     return { ok: false, error: '只有尚未有人簽核的請購單可以撤回' };
   }
 
-  const { error } = await db
+  const { data: updated, error } = await db
     .from('purchase_requests')
     .update({ status: 'withdrawn', current_step_order: null, updated_at: new Date().toISOString() })
-    .eq('id', requestId);
+    .eq('id', requestId)
+    .eq('status', 'pending_approval')
+    .eq('current_step_order', 1)
+    .select('id');
   if (error) return { ok: false, error: '撤回失敗，請稍後再試' };
+  if (!updated || updated.length === 0) {
+    return { ok: false, error: '此表單已被處理，請重新整理頁面' };
+  }
 
   revalidatePath('/requests');
   revalidatePath(`/requests/${requestId}`);
