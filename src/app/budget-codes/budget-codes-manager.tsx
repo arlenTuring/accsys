@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { deleteBudgetCode, upsertBudgetCode } from '@/lib/budget-codes/actions';
 import type { BudgetCodeListItem } from '@/lib/budget-codes/queries';
@@ -48,7 +48,9 @@ export function BudgetCodesManager({
   projects: ProjectListItem[];
 }) {
   const router = useRouter();
+  const formSectionRef = useRef<HTMLElement>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
+  const [editingCode, setEditingCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -56,6 +58,14 @@ export function BudgetCodesManager({
   const onEdit = (item: BudgetCodeListItem) => {
     setError(null);
     setForm(toFormState(item));
+    setEditingCode(item.code);
+    formSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const onCancelEdit = () => {
+    setError(null);
+    setForm(emptyForm);
+    setEditingCode(null);
   };
 
   const onSubmit = async () => {
@@ -73,6 +83,7 @@ export function BudgetCodesManager({
     setSaving(false);
     if (result.ok) {
       setForm(emptyForm);
+      setEditingCode(null);
       router.refresh();
     } else {
       setError(result.error);
@@ -90,8 +101,13 @@ export function BudgetCodesManager({
 
   return (
     <div className="space-y-8">
-      <section className="rounded border p-4">
-        <h2 className="mb-3 font-semibold">新增／編輯預算編號</h2>
+      <section
+        ref={formSectionRef}
+        className={`rounded border p-4 ${editingCode ? 'border-blue-400 bg-blue-50' : ''}`}
+      >
+        <h2 className="mb-3 font-semibold">
+          {editingCode ? `編輯預算編號：${editingCode}` : '新增預算編號'}
+        </h2>
         {error && <p className="mb-2 text-sm text-red-700">{error}</p>}
         <div className="grid grid-cols-2 gap-3">
           <label className="block text-sm">
@@ -169,12 +185,8 @@ export function BudgetCodesManager({
             {saving ? '儲存中…' : '儲存'}
           </button>
           {form.code && (
-            <button
-              type="button"
-              onClick={() => setForm(emptyForm)}
-              className="rounded border px-3 py-1 text-sm"
-            >
-              清空（新增模式）
+            <button type="button" onClick={onCancelEdit} className="rounded border px-3 py-1 text-sm">
+              {editingCode ? '取消編輯' : '清空'}
             </button>
           )}
         </div>
