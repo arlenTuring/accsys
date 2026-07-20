@@ -72,4 +72,34 @@ describe('determineCaseBucket', () => {
     ];
     expect(determineCaseBucket(forms, 'standalone_expense')).toBe('in_progress');
   });
+
+  it('returns withdrawn when a form is withdrawn, even though the other three are approved (priority over completed)', () => {
+    const forms: CaseFormState[] = [
+      approved('purchase_request'),
+      approved('purchase_order'),
+      approved('acceptance'),
+      withStatus('expense_request', 'withdrawn'),
+    ];
+    expect(determineCaseBucket(forms, 'standard')).toBe('withdrawn');
+  });
+
+  it('returns withdrawn when a form is withdrawn among otherwise in-progress forms (priority over in_progress)', () => {
+    const forms: CaseFormState[] = [
+      withStatus('purchase_request', 'withdrawn'),
+      notExists('purchase_order'),
+      notExists('acceptance'),
+      notExists('expense_request'),
+    ];
+    expect(determineCaseBucket(forms, 'standard')).toBe('withdrawn');
+  });
+
+  it('returns withdrawn for a standalone_expense case whose sole expense_request is withdrawn', () => {
+    const forms: CaseFormState[] = [
+      notExists('purchase_request'),
+      notExists('purchase_order'),
+      notExists('acceptance'),
+      withStatus('expense_request', 'withdrawn'),
+    ];
+    expect(determineCaseBucket(forms, 'standalone_expense')).toBe('withdrawn');
+  });
 });

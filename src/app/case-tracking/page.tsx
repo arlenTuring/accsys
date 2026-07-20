@@ -14,6 +14,7 @@ const STATUS_LABELS: Record<string, string> = {
   pending_approval: '簽核中',
   approved: '已核准',
   returned: '已退回（待修改）',
+  withdrawn: '已撤回',
 };
 
 function buildQuery(params: Record<string, string | undefined>): string {
@@ -42,7 +43,8 @@ export default async function CaseTrackingPage({
   if (!employee) redirect('/login');
   if (employee.role !== 'finance') redirect('/dashboard');
 
-  const tab: CaseBucket = params.tab === 'completed' ? 'completed' : 'in_progress';
+  const tab: CaseBucket =
+    params.tab === 'completed' ? 'completed' : params.tab === 'withdrawn' ? 'withdrawn' : 'in_progress';
   const filters: CaseTrackingFilters = {
     departmentCode: params.department || undefined,
     dateFrom: params.dateFrom || undefined,
@@ -57,6 +59,7 @@ export default async function CaseTrackingPage({
 
   const inProgressCount = allRows.filter((r) => r.bucket === 'in_progress').length;
   const completedCount = allRows.filter((r) => r.bucket === 'completed').length;
+  const withdrawnCount = allRows.filter((r) => r.bucket === 'withdrawn').length;
   const visibleRows = allRows.filter((r) => r.bucket === tab);
 
   const baseParams = {
@@ -90,6 +93,16 @@ export default async function CaseTrackingPage({
           }
         >
           已完成（{completedCount}）
+        </Link>
+        <Link
+          href={buildQuery({ ...baseParams, tab: 'withdrawn' })}
+          className={
+            tab === 'withdrawn'
+              ? 'border-b-2 border-blue-600 pb-2 font-semibold'
+              : 'pb-2 text-gray-500'
+          }
+        >
+          已撤回（{withdrawnCount}）
         </Link>
       </nav>
 

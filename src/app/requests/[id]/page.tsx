@@ -11,6 +11,7 @@ const STATUS_LABELS: Record<string, string> = {
   pending_approval: '簽核中',
   approved: '已核准',
   returned: '已退回（待修改）',
+  withdrawn: '已撤回',
 };
 const ROLE_LABELS: Record<string, string> = {
   department_manager: '申請單位主管',

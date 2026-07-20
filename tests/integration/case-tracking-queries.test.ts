@@ -319,4 +319,34 @@ describe.skipIf(!hasIntegrationTestCredentials())('getFinanceCaseTracking', () =
     await admin.from('procurement_cases').delete().eq('id', pcase!.id);
     await admin.from('budget_codes').delete().eq('id', budgetCode!.id);
   });
+
+  it('marks a case as withdrawn when any of its forms has been withdrawn, taking priority over completion status', async () => {
+    const { data: caseNumber } = await admin.rpc('next_case_number');
+    const { data: pcase } = await admin
+      .from('procurement_cases')
+      .insert({ case_number: caseNumber, created_by_employee_id: employeeAId })
+      .select()
+      .single();
+
+    const { data: pr } = await admin
+      .from('purchase_requests')
+      .insert({
+        procurement_case_id: pcase!.id,
+        applicant_employee_id: employeeAId,
+        department_id: departmentAId,
+        budget_owner_employee_id: employeeAId,
+        total_amount: 1000,
+        status: 'withdrawn',
+      })
+      .select()
+      .single();
+
+    const { getFinanceCaseTracking } = await import('@/lib/case-tracking/queries');
+    const rows = await getFinanceCaseTracking({});
+    const row = rows.find((r) => r.caseNumber === caseNumber);
+    expect(row?.bucket).toBe('withdrawn');
+
+    await admin.from('purchase_requests').delete().eq('id', pr!.id);
+    await admin.from('procurement_cases').delete().eq('id', pcase!.id);
+  });
 });
