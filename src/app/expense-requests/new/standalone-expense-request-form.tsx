@@ -2,10 +2,8 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  createStandaloneExpenseRequest,
-  STANDALONE_EXPENSE_REQUEST_LIMIT,
-} from '@/lib/expense-requests/actions';
+import { createStandaloneExpenseRequest } from '@/lib/expense-requests/actions';
+import { STANDALONE_EXPENSE_REQUEST_LIMIT } from '@/lib/expense-requests/constants';
 import type { BudgetCodeListItem } from '@/lib/budget-codes/queries';
 
 type Row = { description: string; amount: string };

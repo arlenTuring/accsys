@@ -11,6 +11,7 @@ import {
   computeDefaultExpectedPaymentDate,
   computePaymentBatchDate,
 } from '@/lib/procurement/payment-batch';
+import { STANDALONE_EXPENSE_REQUEST_LIMIT } from '@/lib/expense-requests/constants';
 
 export type NewExpenseRequest = {
   purchaseOrderId: string;
@@ -24,8 +25,6 @@ export type NewExpenseRequest = {
   expectedPaymentDate: string | null;
   includedSourceItemIds: string[];
 };
-
-export const STANDALONE_EXPENSE_REQUEST_LIMIT = 10000;
 
 export type NewStandaloneExpenseRequestItem = {
   description: string;
