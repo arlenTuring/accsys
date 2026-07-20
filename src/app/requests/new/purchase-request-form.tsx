@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { createPurchaseRequest } from '@/lib/purchase-requests/actions';
+import { createPurchaseRequest, updatePurchaseRequest } from '@/lib/purchase-requests/actions';
 
 export type BudgetCodeOption = {
   id: string;
@@ -29,10 +29,24 @@ const emptyRow: Row = {
   estimatedAmount: '',
 };
 
-export function PurchaseRequestForm({ budgetCodes }: { budgetCodes: BudgetCodeOption[] }) {
+export function PurchaseRequestForm({
+  budgetCodes,
+  mode = 'create',
+  requestId,
+  initialNeededWithinDays,
+  initialRows,
+}: {
+  budgetCodes: BudgetCodeOption[];
+  mode?: 'create' | 'edit';
+  requestId?: string;
+  initialNeededWithinDays?: number | null;
+  initialRows?: Row[];
+}) {
   const router = useRouter();
-  const [rows, setRows] = useState<Row[]>([{ ...emptyRow }]);
-  const [neededWithinDays, setNeededWithinDays] = useState('30');
+  const [rows, setRows] = useState<Row[]>(initialRows ?? [{ ...emptyRow }]);
+  const [neededWithinDays, setNeededWithinDays] = useState(
+    initialNeededWithinDays != null ? String(initialNeededWithinDays) : '30'
+  );
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -50,7 +64,7 @@ export function PurchaseRequestForm({ budgetCodes }: { budgetCodes: BudgetCodeOp
   const onSubmit = async () => {
     setError(null);
     setSubmitting(true);
-    const result = await createPurchaseRequest({
+    const payload = {
       neededWithinDays: neededWithinDays === '' ? null : Number(neededWithinDays),
       items: rows.map((r) => ({
         budgetCodeId: r.budgetCodeId,
@@ -58,10 +72,18 @@ export function PurchaseRequestForm({ budgetCodes }: { budgetCodes: BudgetCodeOp
         quantity: Number(r.quantity),
         estimatedAmount: Number(r.estimatedAmount),
       })),
-    });
+    };
+    const result =
+      mode === 'edit' && requestId
+        ? await updatePurchaseRequest(requestId, payload)
+        : await createPurchaseRequest(payload);
     setSubmitting(false);
     if (result.ok) {
-      router.push(`/requests/${result.requestId}`);
+      router.push(
+        mode === 'edit' && requestId
+          ? `/requests/${requestId}`
+          : `/requests/${(result as unknown as { requestId: string }).requestId}`
+      );
     } else {
       setError(result.error);
     }
@@ -164,7 +186,7 @@ export function PurchaseRequestForm({ budgetCodes }: { budgetCodes: BudgetCodeOp
         disabled={submitting}
         className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:opacity-50"
       >
-        {submitting ? '送出中…' : '送出簽核'}
+        {submitting ? '送出中…' : mode === 'edit' ? '儲存修改' : '送出簽核'}
       </button>
     </div>
   );

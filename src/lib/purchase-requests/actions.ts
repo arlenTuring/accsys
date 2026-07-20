@@ -391,6 +391,122 @@ export async function resubmitPurchaseRequest(
   return { ok: true };
 }
 
+export async function updatePurchaseRequest(
+  requestId: string,
+  input: NewPurchaseRequest
+): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  const db = createSupabaseServiceRoleClient();
+
+  const { data: pr } = await db
+    .from('purchase_requests')
+    .select('id, applicant_employee_id, status, current_step_order, department_id')
+    .eq('id', requestId)
+    .maybeSingle();
+  if (!pr) return { ok: false, error: '找不到這張請購單' };
+  if (pr.applicant_employee_id !== employee.id) {
+    return { ok: false, error: '只有申請人可以修改這張請購單' };
+  }
+  if (pr.status !== 'pending_approval' || pr.current_step_order !== 1) {
+    return { ok: false, error: '只有尚未有人簽核的請購單可以修改' };
+  }
+  if (input.items.length === 0) {
+    return { ok: false, error: '請購單至少需要一個明細項次' };
+  }
+
+  const budgetCodeIds = Array.from(new Set(input.items.map((i) => i.budgetCodeId)));
+  const { data: budgetCodes } = await db
+    .from('budget_codes')
+    .select('id, category, owner_employee_id')
+    .in('id', budgetCodeIds);
+  if (!budgetCodes || budgetCodes.length !== budgetCodeIds.length) {
+    return { ok: false, error: '選取的預算編號無效' };
+  }
+  const byId = new Map(budgetCodes.map((b) => [b.id, b]));
+  const validation = validatePurchaseRequestInput(
+    input.items.map((i) => ({
+      budgetCodeId: i.budgetCodeId,
+      budgetOwnerEmployeeId: byId.get(i.budgetCodeId)!.owner_employee_id ?? '',
+      itemCategory: byId.get(i.budgetCodeId)!.category,
+      description: i.description,
+      quantity: i.quantity,
+      estimatedAmount: i.estimatedAmount,
+    }))
+  );
+  if (!validation.ok) return { ok: false, error: validation.error };
+  const budgetOwnerId = byId.get(input.items[0].budgetCodeId)!.owner_employee_id;
+  if (!budgetOwnerId) return { ok: false, error: '選取的預算編號沒有指定預算負責人' };
+
+  const totalAmount = input.items.reduce((sum, i) => sum + i.estimatedAmount, 0);
+
+  const chainResult = await buildApprovalChainForForm(db, {
+    applicantEmployeeId: employee.id,
+    departmentId: pr.department_id,
+    budgetOwnerEmployeeId: budgetOwnerId,
+    totalAmount,
+  });
+  if (!chainResult.ok) return { ok: false, error: chainResult.error };
+  const chain = chainResult.chain;
+  if (chain.length === 0) {
+    return { ok: false, error: '修改後找不到適用的簽核人，請聯絡系統管理員' };
+  }
+
+  const { error: txError } = await db.rpc('resubmit_purchase_request', {
+    p_request_id: requestId,
+    p_budget_owner: budgetOwnerId,
+    p_needed_days: input.neededWithinDays,
+    p_total: totalAmount,
+    p_items: input.items.map((i, idx) => ({
+      line_no: idx + 1,
+      budget_code_id: i.budgetCodeId,
+      item_category: byId.get(i.budgetCodeId)!.category,
+      description: i.description,
+      quantity: i.quantity,
+      estimated_amount: i.estimatedAmount,
+    })),
+    p_steps: chain.map((step, idx) => ({
+      step_order: idx + 1,
+      approver_employee_id: step.approverEmployeeId,
+      approver_role: step.approverRole,
+    })),
+  });
+  if (txError) return { ok: false, error: '修改失敗，請稍後再試' };
+
+  revalidatePath('/requests');
+  revalidatePath(`/requests/${requestId}`);
+  return { ok: true };
+}
+
+export async function withdrawPurchaseRequest(requestId: string): Promise<ActionResult> {
+  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  if (!employee) return { ok: false, error: '找不到您的員工資料' };
+  const db = createSupabaseServiceRoleClient();
+
+  const { data: pr } = await db
+    .from('purchase_requests')
+    .select('id, applicant_employee_id, status, current_step_order')
+    .eq('id', requestId)
+    .maybeSingle();
+  if (!pr) return { ok: false, error: '找不到這張請購單' };
+  if (pr.applicant_employee_id !== employee.id) {
+    return { ok: false, error: '只有申請人可以撤回這張請購單' };
+  }
+  if (pr.status !== 'pending_approval' || pr.current_step_order !== 1) {
+    return { ok: false, error: '只有尚未有人簽核的請購單可以撤回' };
+  }
+
+  const { error } = await db
+    .from('purchase_requests')
+    .update({ status: 'withdrawn', current_step_order: null, updated_at: new Date().toISOString() })
+    .eq('id', requestId);
+  if (error) return { ok: false, error: '撤回失敗，請稍後再試' };
+
+  revalidatePath('/requests');
+  revalidatePath(`/requests/${requestId}`);
+  return { ok: true };
+}
+
 export async function returnPurchaseRequestStep(
   requestId: string,
   reason: string
