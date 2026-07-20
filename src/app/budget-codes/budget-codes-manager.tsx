@@ -4,7 +4,9 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { deleteBudgetCode, upsertBudgetCode } from '@/lib/budget-codes/actions';
 import type { BudgetCodeListItem } from '@/lib/budget-codes/queries';
+import type { ProjectListItem } from '@/lib/projects/queries';
 import { BudgetCodeImportForm } from './budget-code-import-form';
+import { ProjectManager } from './project-manager';
 
 type FormState = {
   code: string;
@@ -38,7 +40,13 @@ function toFormState(item: BudgetCodeListItem): FormState {
   };
 }
 
-export function BudgetCodesManager({ budgetCodes }: { budgetCodes: BudgetCodeListItem[] }) {
+export function BudgetCodesManager({
+  budgetCodes,
+  projects,
+}: {
+  budgetCodes: BudgetCodeListItem[];
+  projects: ProjectListItem[];
+}) {
   const router = useRouter();
   const [form, setForm] = useState<FormState>(emptyForm);
   const [error, setError] = useState<string | null>(null);
@@ -112,11 +120,18 @@ export function BudgetCodesManager({ budgetCodes }: { budgetCodes: BudgetCodeLis
           </label>
           <label className="block text-sm">
             專案代碼
-            <input
+            <select
               value={form.projectCode}
               onChange={(e) => setForm({ ...form, projectCode: e.target.value })}
               className="mt-1 w-full rounded border px-2 py-1"
-            />
+            >
+              <option value="">（不指定專案）</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.code}>
+                  {p.code}｜{p.name}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="block text-sm">
             年度
@@ -167,6 +182,8 @@ export function BudgetCodesManager({ budgetCodes }: { budgetCodes: BudgetCodeLis
 
       <BudgetCodeImportForm />
 
+      <ProjectManager projects={projects} />
+
       <section>
         <h2 className="mb-3 font-semibold">現有預算編號（{budgetCodes.length}）</h2>
         <table className="w-full text-sm">
@@ -185,7 +202,7 @@ export function BudgetCodesManager({ budgetCodes }: { budgetCodes: BudgetCodeLis
             {budgetCodes.map((b) => (
               <tr key={b.id} className="border-b">
                 <td className="py-1 pr-2">{b.code}</td>
-                <td className="py-1 pr-2">{b.departmentCode ?? b.projectCode}</td>
+                <td className="py-1 pr-2">{b.departmentName ?? b.projectName ?? '-'}</td>
                 <td className="py-1 pr-2">{b.category}</td>
                 <td className="py-1 pr-2">{b.fiscalYear}</td>
                 <td className="py-1 pr-2">{b.annualBudgetAmount ?? '-'}</td>
