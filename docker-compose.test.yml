@@ -1,10 +1,13 @@
 # Disposable PostgreSQL for integration tests only.
 # - Data lives in tmpfs: every `down` / restart starts from an empty DB.
 # - Bound to 127.0.0.1 only; never point this at a real database.
-# - Schema is created from db/schema.sql, then fake fixtures are loaded.
+# - Init creates the role model (db/roles.sql); `npm run test:db:up` then runs
+#   the real migrations as accsys_migrator and loads fake fixtures.
 #
 #   npm run test:db:up
-#   TEST_DATABASE_URL=postgres://accsys_test:accsys_test@127.0.0.1:25432/accsys_test npm run test:integration
+#   TEST_DATABASE_URL=postgres://accsys_app:accsys_app_test@127.0.0.1:25432/accsys_test \
+#   TEST_ADMIN_DATABASE_URL=postgres://accsys_test:accsys_test@127.0.0.1:25432/accsys_test \
+#     npm run test:integration
 #   npm run test:db:down
 name: accsys-test
 
@@ -15,13 +18,17 @@ services:
       POSTGRES_USER: accsys_test
       POSTGRES_PASSWORD: accsys_test
       POSTGRES_DB: accsys_test
+      ACCSYS_MIGRATOR_PASSWORD: accsys_migrator_test
+      ACCSYS_APP_PASSWORD: accsys_app_test
+      ACCSYS_BACKUP_PASSWORD: accsys_backup_test
     ports:
       - "127.0.0.1:25432:5432"
     tmpfs:
       - /var/lib/postgresql/data
     volumes:
-      - ./db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
-      - ./tests/integration/fixtures/base.sql:/docker-entrypoint-initdb.d/02_fixtures.sql:ro
+      - ./db/roles.sql:/accsys/roles.sql:ro
+      - ./db/docker-init/00-roles.sh:/docker-entrypoint-initdb.d/00-roles.sh:ro
+      - ./tests/integration/fixtures:/fixtures:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U accsys_test -d accsys_test"]
       interval: 2s

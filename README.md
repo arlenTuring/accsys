@@ -45,11 +45,13 @@ src/
     auth/                 Google OAuth、session、角色、白名單網域
     db/                   Postgres client（Drizzle schema + 查詢層）
     storage/              本機附件儲存（之後換 GCS）
+drizzle/                  版控 SQL migrations（由 src/lib/db/schema.ts 產生並人工審查）
 db/
-  schema.sql              Postgres DDL（唯一結構來源，可套用到任意 Postgres）
+  roles.sql               資料庫角色與權限（DBA 執行）
+  baseline-fingerprint.json  既有資料庫接管時比對用的結構指紋
+  legacy/schema-v0.sql    導入 migrations 前的建表腳本（僅歷史／演練，勿再使用）
   seed-local-dev.sql      本機 dev 登入種子（勿用於正式環境）
-  README.md               資料庫結構說明、ER 圖、GCP 搬遷步驟
-  init.sql                Docker 掛載說明（實際用 schema + seed 兩檔）
+  README.md               角色、migration 流程、接管既有 DB、敏感資料規則
 scripts/                  一次性資料匯入腳本（import-seed-data.ts 等）
 tests/integration/        資料庫整合測試（只連拋棄式 TEST_DATABASE_URL，見「執行測試」）
 docs/superpowers/         各階段開發計畫（specs／plans）與交接文件
@@ -90,10 +92,11 @@ cp .env.local.example .env.local
 # 編輯 SESSION_SECRET（至少 32 字元）；本機可設 NEXT_PUBLIC_DEV_LOGIN=true 與 DEV_LOGIN_EMAIL
 
 npm install
-npm run db:up          # 啟動本機 Postgres（需 Docker）
+npm run dev:all        # 啟動本機 Postgres、建立角色、套用 migrations、載入 dev 種子，再啟動 Next.js
 npm run seed           # 選用：匯入部門／員工／預算編號／供應商
-npm run dev
 ```
+
+既有的本機 DB（P1 前建立）第一次跑 `npm run dev:all` 時會自動建立角色、核對結構後登記 baseline，再套用新 migrations；結構不符會停下並列出差異，不會修改資料。之後請把 `.env.local` 的 `DATABASE_URL` 改為最小權限的 `accsys_app`（見 `.env.local.example`）。
 
 開啟 http://localhost:3000，未登入會自動導向 `/login`。`npm run dev`／`npm run start` 只綁定 127.0.0.1；需讓其他電腦連線時，應經 reverse proxy 與 HTTPS，不要直接改成 0.0.0.0。本機可開開發登入；正式環境用公司 Google 帳號登入後導向 `/dashboard`。
 
@@ -117,10 +120,14 @@ npm run app:up      # 以 Docker 啟動 Postgres + app 容器（http://127.0.0.1
 
 - **單元測試**（`npm test`）：不連資料庫、不讀 `.env.local`。
 - **整合測試**（`npm run test:integration`）：只允許 `TEST_DATABASE_URL`，且資料庫名稱必須以 `_test` 結尾；未設定時整批失敗，不會略過，也不會改用 `DATABASE_URL`。
+  - 業務測試以最小權限的 `accsys_app` 連線，確認 app 不需要 DDL／超級使用者權限。
+  - `migrations.test.ts` 以 `TEST_ADMIN_DATABASE_URL`（只允許本機、`_test`）建立暫存資料庫，演練：空庫升級、舊腳本建立的有資料副本接管升級（ID／筆數／金額／外鍵不變）、重跑 no-op、兩個 migrator 併發、已套用檔案被改、結構漂移、各角色權限。
 
 ```bash
-npm run test:db:up     # 拋棄式 Postgres（tmpfs，127.0.0.1:25432，載入 schema + 假資料）
-TEST_DATABASE_URL=postgres://accsys_test:accsys_test@127.0.0.1:25432/accsys_test npm run test:integration
+npm run test:db:up     # 拋棄式 Postgres（tmpfs，127.0.0.1:25432）：建立角色 → 真實 migrations → 假資料
+TEST_DATABASE_URL=postgres://accsys_app:accsys_app_test@127.0.0.1:25432/accsys_test \
+TEST_ADMIN_DATABASE_URL=postgres://accsys_test:accsys_test@127.0.0.1:25432/accsys_test \
+  npm run test:integration
 npm run test:db:down   # 刪除容器與資料
 ```
 
@@ -139,13 +146,14 @@ npm run test:db:down   # 刪除容器與資料
 
 完整說明見 **[db/README.md](db/README.md)**。
 
-- **結構定義**：`db/schema.sql`（18 張表 + 5 個 stored procedures）
-- **ORM 對應**：`src/lib/db/schema.ts`（Drizzle，需與 SQL 同步）
-- **本機**：`npm run db:up`（Docker 第一次啟動自動套用 schema）
-- **任意 Postgres**：`npm run db:schema:apply`（GCP VM、自建 DB 等）
+- **結構定義**：`src/lib/db/schema.ts`（Drizzle）→ `npm run db:generate` 產生 `drizzle/` SQL → 審查
+- **套用**：`npm run db:migrate`（獨立命令，使用 `MIGRATION_DATABASE_URL` / `accsys_migrator`；web 啟動不會自動跑）
+- **既有資料庫**：`npm run db:baseline` 核對結構後接管，再 `db:migrate`
+- **角色**：`db/roles.sql`；web 只用 `accsys_app`（無 DDL、無超級使用者）
+- **容器**：`npm run app:migrate`（一次性 migration job），再 `npm run app:up`
 - **示範資料**：`npm run seed:demo`；正式主檔：`npm run seed`（Excel）
 
-權限在應用層（Server Actions）檢查，不使用 Supabase RLS。之後搬 GCP 只需改 `DATABASE_URL`，不必先上 Cloud SQL 代管。
+授權在應用層檢查，不使用 RLS；資料庫以角色權限限制 app 帳號能做的事。
 
 ## 開發歷程
 

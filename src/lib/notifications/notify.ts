@@ -28,7 +28,7 @@ export async function notifyAndEmail(db: AppDb, input: NotifyInput): Promise<Not
     message: input.message,
   });
   if (error) {
-    return { ok: false, error: error.message };
+    return { ok: false, error: 'notification_insert_failed' };
   }
 
   const { data: recipient } = await db

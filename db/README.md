@@ -1,153 +1,94 @@
-# ACCSYS 資料庫結構
+# ACCSYS 資料庫
 
-ACCSYS 使用 **PostgreSQL 14+**（純 Postgres，無 Supabase RLS）。權限由 Next.js Server Actions 在應用層檢查，不在 DB 層做 row-level security。
+PostgreSQL 16（本機、測試與地端正式環境同一 major）。不使用 RLS；授權在應用層檢查，資料庫以角色權限限制「能做什麼」。
 
-## 檔案一覽
+## 檔案
 
-| 檔案 | 用途 |
-|------|------|
-| **`schema.sql`** | **DDL 唯一來源**：所有資料表、索引、check constraint、stored procedures |
-| `seed-local-dev.sql` | 本機開發用最小種子（dev 登入帳號），**勿用於正式環境** |
-| `init.sql` | 說明檔；Docker 實際掛載的是上面兩個 SQL |
-| `../src/lib/db/schema.ts` | Drizzle ORM 型別定義（應用程式讀寫用，需與 `schema.sql` 同步） |
-| `../scripts/apply-schema.ts` | 對任意 Postgres 套用 `schema.sql` |
-| `../scripts/seed-demo-data.ts` | UI 示範假資料（可重複執行） |
-| `../scripts/import-seed-data.ts` | 從 Excel 匯入正式主檔 |
+| 路徑 | 用途 |
+|---|---|
+| `src/lib/db/schema.ts` | **結構的唯一來源**（Drizzle）。約束／索引名稱與舊 SQL 腳本的 PostgreSQL 預設名稱一致 |
+| `drizzle/` | 版控的 SQL migrations 與 drizzle-kit snapshot。已套用的檔案**不可修改** |
+| `db/roles.sql` | 角色與權限（DBA 以超級使用者執行，可重複執行） |
+| `db/baseline-fingerprint.json` | baseline（0000+0001）的結構指紋，供既有資料庫接管時比對 |
+| `db/legacy/schema-v0.sql` | 導入 migrations 前的建表腳本，只保留作歷史與接管演練，**不可再用來建立或更新資料庫** |
+| `db/seed-local-dev.sql` | 本機開發 admin 種子，**禁止用於任何共享環境** |
+| `db/docker-init/00-roles.sh` | 本機／測試容器第一次啟動時建立角色與開發用密碼 |
+| `scripts/db-migrate.ts` | `npm run db:migrate` |
+| `scripts/db-baseline.ts` | `npm run db:baseline` |
+| `scripts/db-fingerprint.ts` | 輸出任一資料庫的結構指紋（唯讀） |
 
-> 舊版 `supabase/migrations/` 為歷史遺留，**不再使用**；新環境請只用 `db/schema.sql`。
+## 角色
 
-## 實體關係（簡圖）
+| 角色 | 登入 | 權限 | 用途 |
+|---|---|---|---|
+| `accsys_owner` | 否 | 擁有所有 schema 物件 | 只能經 `SET ROLE` 使用 |
+| `accsys_migrator` | 是 | `accsys_owner` 成員 | 只給 migration 工作使用（`MIGRATION_DATABASE_URL`） |
+| `accsys_app` | 是 | 業務表 SELECT/INSERT/UPDATE/DELETE、執行函式；無 DDL、無 TRUNCATE、看不到 `drizzle` schema；`audit_events` 只能 INSERT/SELECT | web 執行期（`DATABASE_URL`） |
+| `accsys_backup` | 是 | `pg_read_all_data`，交易預設唯讀 | `pg_dump` |
 
-```
-departments ──┬── employees (role, google_email)
-              └── budget_codes (department 或 project 擇一)
+`accsys_app` 在伺服器端被設定 `statement_timeout=30s`、`lock_timeout=10s`、`idle_in_transaction_session_timeout=60s`。
 
-procurement_cases (case_number CP{YYYMM}{####})
-  ├── purchase_requests ── purchase_request_items
-  ├── purchase_orders   ── purchase_order_items
-  ├── acceptances       ── acceptance_items
-  └── expense_requests  ── expense_request_items
+`audit_events` 另有 trigger：任何角色（含 owner）的 UPDATE／DELETE／TRUNCATE 都會失敗。
 
-approval_steps  ── 多型關聯 (form_type + form_id)
-notifications     ── 依 recipient_employee_id
-attachments       ── 依 form_type + form_id（檔案存 GCS / 本機目錄）
-```
+## 流程
 
-## 資料表（18 張）
-
-### 主檔
-
-| 表 | 說明 |
-|----|------|
-| `departments` | 部門代碼、名稱、主管 |
-| `employees` | 員工、Google 登入 email、角色 (`staff`/`finance`/`admin`)、GM/董事長標記 |
-| `projects` | 專案主檔（專案型預算用） |
-| `budget_codes` | 預算編號（部門型或專案型二擇一） |
-| `suppliers` | 供應商主檔 |
-
-### 採購流程
-
-| 表 | 說明 |
-|----|------|
-| `procurement_cases` | 案件根節點，案號唯一 |
-| `case_number_counters` | 案號流水號（台灣時區民國年月） |
-| `purchase_requests` / `_items` | 請購單 |
-| `purchase_orders` / `_items` | 採購單（一案件一張） |
-| `acceptances` / `_items` | 驗收單 |
-| `expense_requests` / `_items` | 費用申請（可連 PO 或獨立 budget_code） |
-
-### 共用
-
-| 表 | 說明 |
-|----|------|
-| `approval_steps` | 簽核步驟（pending / approved / returned） |
-| `notifications` | 站內通知 |
-| `attachments` | 附件 metadata（`storage_path` 指向物件儲存） |
-
-### Stored procedures
-
-| 函式 | 說明 |
-|------|------|
-| `next_case_number()` | 產生 `CP115080001` 格式案號 |
-| `resubmit_purchase_request()` | 退回後重送（transaction） |
-| `resubmit_purchase_order()` | 同上 |
-| `resubmit_acceptance()` | 同上 |
-| `resubmit_expense_request()` | 同上 |
-
-## 本機使用
+migration 一律由獨立命令執行，web 啟動時**不會**自動跑。
 
 ```bash
-# 1. 啟動 Docker Postgres（第一次會自動跑 schema + seed-local-dev）
-npm run db:up
+# 空資料庫（新環境）
+psql "postgres://DBA@HOST/accsys" -v ON_ERROR_STOP=1 -f db/roles.sql   # DBA，一次
+#   接著由 DBA 以 \password 設定 accsys_migrator / accsys_app / accsys_backup 密碼
+MIGRATION_DATABASE_URL=postgres://accsys_migrator:***@HOST/accsys npm run db:migrate
 
-# 2. 若 DB 已存在、需手動補 schema（例如自建 Postgres）
-npm run db:schema:apply
-
-# 3. 選用：UI 示範假資料
-npm run seed:demo
-
-# 4. 選用：Excel 主檔匯入
-npm run seed
+# 修改結構
+#   1. 改 src/lib/db/schema.ts
+#   2. npm run db:generate   → 產生 drizzle/NNNN_*.sql，人工審查
+#      （函式、trigger 等 Drizzle 無法描述者：npx drizzle-kit generate --custom --name xxx）
+#   3. 在拋棄式 DB 跑 npm run test:integration（含 migration 演練）
+#   4. 部署時先跑 db:migrate，再更新 app
 ```
 
-連線字串（預設）：
+`db:migrate` 的保護：
 
-```
-postgres://accsys:accsys@localhost:15432/accsys
-```
+- `pg_advisory_lock`：同時執行多個 migrator 時依序進行，每個 migration 只套用一次。
+- 已套用 migration 的 checksum 與 `drizzle/` 檔案不符、或有比已套用者更舊卻未套用的 migration → 拒絕執行。
+- 資料庫已有資料表但沒有 migration 紀錄 → 拒絕執行（避免重跑 CREATE TABLE），改走 `db:baseline`。
+- 以 `accsys_owner` 身分建立物件，`accsys_app` 由 default privileges 自動取得 DML。
 
-## 搬到 GCP（暫不使用 Cloud SQL 代管時）
+變更採 expand → backfill → validate → contract：先加新結構、補資料、驗證，舊結構等新程式穩定且回復窗口結束後才移除。禁止 drop-and-recreate。
 
-你可以先在 **Compute Engine VM** 或任何能跑 Postgres 的地方自建資料庫，應用程式（Cloud Run）只改 `DATABASE_URL` 即可。
-
-### 1. 建立空資料庫
+## 接管既有資料庫（以舊 `db/schema.sql` 建立者）
 
 ```bash
-createdb accsys
-# 或在 VM 上：sudo -u postgres createdb accsys
+pg_dump -Fc ... > before.dump                      # 先備份
+psql "postgres://DBA@HOST/accsys" -v ON_ERROR_STOP=1 -f db/roles.sql
+#   設定三個 LOGIN 角色密碼（\password）
+MIGRATION_DATABASE_URL=... npm run db:baseline     # 比對結構指紋；不符則列出差異、不寫入任何東西
+MIGRATION_DATABASE_URL=... npm run db:migrate      # 套用 0002 以後
+#   app 的 DATABASE_URL 改用 accsys_app
 ```
 
-### 2. 套用結構
+`db:baseline` 只寫 migration metadata（`drizzle.__drizzle_migrations`），不改資料或結構；已接管的資料庫重跑為 no-op。`db/roles.sql` 會把舊物件的擁有者改為 `accsys_owner`（需要超級使用者）。
+
+正式資料庫接管前，應先以 `pg_dump --schema-only` 或 `scripts/db-fingerprint.ts` 取得結構快照，在拋棄式環境演練整個流程。
+
+## 敏感資料規則
+
+| 類別 | 欄位 | 規則 |
+|---|---|---|
+| 金融 | `suppliers.bank_account`、`expense_requests.bank_account`（及 `bank_name`、`account_name`） | 不寫入 log、錯誤訊息或 `audit_events.details`；需要時只記遮罩後末 4 碼。列表／案件總覽不回傳，依職責顯示（P3） |
+| 個資 | `employees.google_email`、`employee_identities.email`、供應商聯絡人電話／email、`tax_id` | 不寫入 log；audit 只記 ID |
+| 憑證 | `app_sessions.token_hash` | 只存 SHA-256；原始 token 只在 cookie，不寫入 DB、log、audit |
+| 時間 | 事件時間 `timestamptz`；業務日期 `date` | 程式收到的是 PostgreSQL 字串（不轉成 JS `Date`），避免時區位移 |
+| 金額 | `numeric(14,2)` | 以字串進出資料庫；計算不可用浮點累加（P4 統一為整數分／decimal） |
+
+資料庫錯誤訊息（可能含 SQL、約束名稱、參數值）不回傳給呼叫端：`src/lib/db/app-client.ts` 只回 `database_error (ref xxxxxxxx)`，完整內容以同一個 ref 記在伺服器 log。
+
+## 備份與還原（暫行，尚未演練）
 
 ```bash
-export DATABASE_URL=postgres://USER:PASS@HOST:5432/accsys
-npm run db:schema:apply
-# 或
-psql "$DATABASE_URL" -f db/schema.sql
+pg_dump "postgres://accsys_backup:***@HOST/accsys" -Fc -f accsys.dump
+createdb -O accsys_owner accsys_restore && pg_restore -d accsys_restore --no-owner --role=accsys_owner accsys.dump
 ```
 
-### 3. 匯入主檔（不要用 seed-local-dev.sql）
-
-```bash
-npm run seed          # Excel 員工/預算/供應商
-# 不要執行 seed-local-dev.sql
-```
-
-### 4. 設定 Cloud Run
-
-在 Secret Manager 或環境變數設定 `DATABASE_URL`，指向你的 Postgres 實例（需開 Private IP / Cloud SQL Auth Proxy 或防火牆白名單）。
-
-### 之後若改 Cloud SQL
-
-流程相同：`psql` 或 `npm run db:schema:apply` 套 schema，再 `pg_dump` / `pg_restore` 遷移資料。應用程式不需改 schema 定義。
-
-## 備份與還原
-
-```bash
-# 備份
-pg_dump "$DATABASE_URL" -Fc -f accsys-backup.dump
-
-# 還原到新 DB
-pg_restore -d "$NEW_DATABASE_URL" --clean --if-exists accsys-backup.dump
-```
-
-## 與 Drizzle 的關係
-
-- **SQL 是 source of truth**（`db/schema.sql`）
-- `src/lib/db/schema.ts` 供 TypeScript 型別與 Drizzle 查詢
-- 修改結構時：先改 `schema.sql` → 同步改 `schema.ts` → 套用到各環境
-
-```bash
-# 可選：比對 Drizzle 產生的 migration（目前專案以 SQL 為主）
-npx drizzle-kit generate
-```
+完整的備份（WAL／PITR、異機保存、還原演練）屬 P7。

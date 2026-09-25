@@ -20,6 +20,21 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
+# One-off migration job (`docker compose ... run --rm migrate`). Never part of
+# web startup. Needs MIGRATION_DATABASE_URL for the accsys_migrator account.
+FROM ${NODE_IMAGE} AS migrator
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json tsconfig.json ./
+COPY drizzle ./drizzle
+COPY db/baseline-fingerprint.json ./db/
+COPY scripts/db-migrate.ts scripts/db-baseline.ts scripts/db-fingerprint.ts ./scripts/
+COPY scripts/lib/migrations.ts ./scripts/lib/
+USER node
+ENTRYPOINT ["node_modules/.bin/tsx"]
+CMD ["scripts/db-migrate.ts"]
+
 FROM ${NODE_IMAGE} AS runner
 WORKDIR /app
 ENV NODE_ENV=production \

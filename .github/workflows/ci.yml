@@ -39,7 +39,9 @@ jobs:
           --health-cmd "pg_isready -U accsys_test -d accsys_test"
           --health-interval 2s --health-timeout 5s --health-retries 30
     env:
-      TEST_DATABASE_URL: postgres://accsys_test:accsys_test@127.0.0.1:5432/accsys_test
+      TEST_ADMIN_DATABASE_URL: postgres://accsys_test:accsys_test@127.0.0.1:5432/accsys_test
+      TEST_DATABASE_URL: postgres://accsys_app:accsys_app_test@127.0.0.1:5432/accsys_test
+      MIGRATION_DATABASE_URL: postgres://accsys_migrator:accsys_migrator_test@127.0.0.1:5432/accsys_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -47,11 +49,22 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - name: Load schema and fake fixtures into the disposable DB
+      - name: Schema has no ungenerated changes
         run: |
-          psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/schema.sql
-          psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/integration/fixtures/base.sql
-      # Fails (does not skip) when the DB is missing or tests fail.
+          npx drizzle-kit generate --name ci_drift_probe
+          test -z "$(git status --porcelain drizzle)" || { git status --porcelain drizzle; exit 1; }
+          npx drizzle-kit check
+      - name: Create roles, run real migrations, load fake fixtures
+        run: |
+          psql "$TEST_ADMIN_DATABASE_URL" -v ON_ERROR_STOP=1 -q -f db/roles.sql
+          psql "$TEST_ADMIN_DATABASE_URL" -v ON_ERROR_STOP=1 -q \
+            -c "alter role accsys_migrator password 'accsys_migrator_test'" \
+            -c "alter role accsys_app password 'accsys_app_test'" \
+            -c "alter role accsys_backup password 'accsys_backup_test'"
+          npm run db:migrate
+          npm run db:migrate   # second run must be a no-op
+          psql "$TEST_ADMIN_DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/integration/fixtures/base.sql
+      # Runs as accsys_app. Fails (does not skip) when the DB is missing or tests fail.
       - run: npm run test:integration
 
   image:
@@ -59,3 +72,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t accsys-app:ci .
+      - run: docker build --target migrator -t accsys-migrate:ci .

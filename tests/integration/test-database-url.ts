@@ -42,3 +42,28 @@ export function resolveTestDatabaseUrl(
 
   return { ok: true, url: raw };
 }
+
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+
+/**
+ * Superuser URL of the disposable test server, used only by the migration
+ * drills to create and drop scratch databases. Must be local and `_test`.
+ */
+export function resolveAdminDatabaseUrl(
+  env: Record<string, string | undefined>
+): { ok: true; url: string } | { ok: false; error: string } {
+  const raw = env.TEST_ADMIN_DATABASE_URL?.trim();
+  if (!raw) {
+    return {
+      ok: false,
+      error: 'TEST_ADMIN_DATABASE_URL is required for migration tests (superuser of the disposable test server).',
+    };
+  }
+  const base = resolveTestDatabaseUrl({ TEST_DATABASE_URL: raw });
+  if (!base.ok) return { ok: false, error: base.error.replace('TEST_DATABASE_URL', 'TEST_ADMIN_DATABASE_URL') };
+  const host = new URL(raw).hostname;
+  if (!LOCAL_HOSTS.has(host)) {
+    return { ok: false, error: `TEST_ADMIN_DATABASE_URL must point at a local server, not "${host}"` };
+  }
+  return { ok: true, url: raw };
+}

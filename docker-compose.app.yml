@@ -12,7 +12,8 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
     environment:
-      DATABASE_URL: postgres://accsys:accsys@db:5432/accsys
+      # Least-privilege runtime account (DML only); see db/roles.sql.
+      DATABASE_URL: postgres://accsys_app:${ACCSYS_APP_PASSWORD:-accsys_app_dev}@db:5432/accsys
       # Required; compose refuses to start without them. Put them in a
       # git-ignored `.env` next to this file or export them in the shell.
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET (32+ random chars)}
@@ -31,6 +32,24 @@ services:
     pids_limit: 256
     mem_limit: 1g
     cpus: 2
+
+  # One-off: docker compose -f docker-compose.yml -f docker-compose.app.yml run --rm migrate
+  migrate:
+    profiles: ["tools"]
+    build:
+      context: .
+      target: migrator
+    image: accsys-migrate:local
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MIGRATION_DATABASE_URL: postgres://accsys_migrator:${ACCSYS_MIGRATOR_PASSWORD:-accsys_migrator_dev}@db:5432/accsys
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
 
 volumes:
   accsys_attachments:

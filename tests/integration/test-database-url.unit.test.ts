@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveTestDatabaseUrl } from './test-database-url';
+import { resolveAdminDatabaseUrl, resolveTestDatabaseUrl } from './test-database-url';
 
 const TEST_URL = 'postgres://u:p@127.0.0.1:25432/accsys_test';
 
@@ -31,5 +31,23 @@ describe('resolveTestDatabaseUrl', () => {
   it('refuses non-postgres schemes and malformed URLs', () => {
     expect(resolveTestDatabaseUrl({ TEST_DATABASE_URL: 'mysql://u:p@h/accsys_test' }).ok).toBe(false);
     expect(resolveTestDatabaseUrl({ TEST_DATABASE_URL: 'not a url' }).ok).toBe(false);
+  });
+});
+
+describe('resolveAdminDatabaseUrl', () => {
+  it('accepts a local _test database', () => {
+    expect(resolveAdminDatabaseUrl({ TEST_ADMIN_DATABASE_URL: TEST_URL }).ok).toBe(true);
+  });
+
+  it('fails when missing', () => {
+    expect(resolveAdminDatabaseUrl({}).ok).toBe(false);
+  });
+
+  it('refuses remote hosts even for _test databases', () => {
+    expect(resolveAdminDatabaseUrl({ TEST_ADMIN_DATABASE_URL: 'postgres://u:p@db.corp:5432/accsys_test' }).ok).toBe(false);
+  });
+
+  it('refuses non-_test databases', () => {
+    expect(resolveAdminDatabaseUrl({ TEST_ADMIN_DATABASE_URL: 'postgres://u:p@127.0.0.1:5432/postgres' }).ok).toBe(false);
   });
 });

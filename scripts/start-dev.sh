@@ -69,7 +69,7 @@ if [[ ! -d node_modules ]]; then
 fi
 
 echo "🐘 啟動 Postgres (accsys-db, host port 15432)…"
-docker compose up -d
+docker compose up -d db
 
 echo "⏳ 等待資料庫 healthy…"
 for i in $(seq 1 40); do
@@ -85,6 +85,34 @@ if [[ "$STATUS" != "healthy" ]]; then
   exit 1
 fi
 echo "   DB OK"
+
+# Schema: roles (older volumes) -> adopt legacy schema if needed -> migrations -> dev seed.
+PSQL=(docker exec -i accsys-db psql -U accsys -d accsys -v ON_ERROR_STOP=1 -q)
+MIGRATOR_URL="postgres://accsys_migrator:${ACCSYS_MIGRATOR_PASSWORD:-accsys_migrator_dev}@127.0.0.1:15432/accsys"
+
+if [[ -z "$("${PSQL[@]}" -Atc "select 1 from pg_roles where rolname = 'accsys_migrator'")" ]]; then
+  echo "🔐 本機 DB 建立於角色模型之前，建立 accsys_* 角色…"
+  "${PSQL[@]}" -f /accsys/roles.sql
+  "${PSQL[@]}" -c "alter role accsys_migrator password '${ACCSYS_MIGRATOR_PASSWORD:-accsys_migrator_dev}'" \
+               -c "alter role accsys_app password '${ACCSYS_APP_PASSWORD:-accsys_app_dev}'" \
+               -c "alter role accsys_backup password '${ACCSYS_BACKUP_PASSWORD:-accsys_backup_dev}'"
+fi
+
+HAS_HISTORY="$("${PSQL[@]}" -Atc "select to_regclass('drizzle.__drizzle_migrations') is not null")"
+TABLE_COUNT="$("${PSQL[@]}" -Atc "select count(*) from pg_tables where schemaname = 'public'")"
+if [[ "$HAS_HISTORY" != "t" && "$TABLE_COUNT" -gt 0 ]]; then
+  echo "🧾 既有本機 DB 尚無 migration 紀錄，核對結構後登記 baseline…"
+  MIGRATION_DATABASE_URL="$MIGRATOR_URL" npm run -s db:baseline
+fi
+
+echo "🧱 套用資料庫 migrations…"
+MIGRATION_DATABASE_URL="$MIGRATOR_URL" npm run -s db:migrate
+"${PSQL[@]}" -f /accsys/seed-local-dev.sql
+
+if grep -q '^DATABASE_URL=postgres://accsys:' .env.local 2>/dev/null; then
+  echo "⚠️  .env.local 的 DATABASE_URL 仍使用 DB 超級使用者 accsys。建議改為最小權限帳號："
+  echo "   DATABASE_URL=postgres://accsys_app:accsys_app_dev@127.0.0.1:15432/accsys"
+fi
 
 if [[ "$DO_SEED" -eq 1 ]]; then
   echo "🌱 匯入示範假資料…"

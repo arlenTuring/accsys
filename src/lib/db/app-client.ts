@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { getSql } from '@/lib/db';
 
 export type DbError = { message: string };
@@ -101,8 +102,16 @@ function parseSelectList(raw: string | undefined): { columns: string[]; embeds: 
   return { columns: columns.length ? columns : ['*'], embeds };
 }
 
-function toError(err: unknown): DbError {
-  return { message: err instanceof Error ? err.message : 'database_error' };
+/**
+ * Database errors never reach callers verbatim: PostgreSQL messages can contain
+ * SQL fragments, constraint names and parameter values. The detail is logged
+ * server-side under a short reference; callers get a stable code only.
+ */
+export function toError(err: unknown): DbError {
+  const ref = randomUUID().slice(0, 8);
+  const pgCode = (err as { code?: unknown } | null)?.code;
+  console.error(`[db] error ref=${ref} code=${typeof pgCode === 'string' ? pgCode : 'unknown'}`, err);
+  return { message: `database_error (ref ${ref})` };
 }
 
 class TableQuery implements PromiseLike<DbResult<DbRow[]>> {

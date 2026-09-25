@@ -1,0 +1,34 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1790311645798,
+      "tag": "0000_baseline_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790311658374,
+      "tag": "0001_baseline_functions",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790311704203,
+      "tag": "0002_identity_sessions_audit",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790311711259,
+      "tag": "0003_audit_append_only",
+      "breakpoints": true
+    }
+  ]
+}

@@ -14,14 +14,22 @@ services:
       # Host 15432 to avoid colliding with other local Postgres on 5432
       - "127.0.0.1:15432:5432"
     environment:
+      # `accsys` is the local superuser (DBA); the app and migrations use the
+      # least-privilege roles from db/roles.sql. Dev-only passwords.
       POSTGRES_USER: accsys
       POSTGRES_PASSWORD: accsys
       POSTGRES_DB: accsys
+      ACCSYS_MIGRATOR_PASSWORD: ${ACCSYS_MIGRATOR_PASSWORD:-accsys_migrator_dev}
+      ACCSYS_APP_PASSWORD: ${ACCSYS_APP_PASSWORD:-accsys_app_dev}
+      ACCSYS_BACKUP_PASSWORD: ${ACCSYS_BACKUP_PASSWORD:-accsys_backup_dev}
     volumes:
       - accsys_pgdata:/var/lib/postgresql/data
-      - ./db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
-      # Local-dev admin seed. Must not be used on any shared environment.
-      - ./db/seed-local-dev.sql:/docker-entrypoint-initdb.d/02_seed_local_dev.sql:ro
+      # First start of an empty volume creates the roles only; the schema comes
+      # from `npm run db:migrate` (scripts/start-dev.sh runs it).
+      - ./db/roles.sql:/accsys/roles.sql:ro
+      - ./db/docker-init/00-roles.sh:/docker-entrypoint-initdb.d/00-roles.sh:ro
+      # Local-dev admin seed, applied by scripts/start-dev.sh. Never on a shared environment.
+      - ./db/seed-local-dev.sql:/accsys/seed-local-dev.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U accsys -d accsys"]
       interval: 5s

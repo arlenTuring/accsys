@@ -1,3 +1,8 @@
+-- LEGACY (pre-migration) creation script. Do NOT use it to create or update a
+-- database: use `npm run db:migrate` (new DB) or `npm run db:baseline` (DB that
+-- was created from this file). Kept for history and for the adoption drill in
+-- tests/integration/migrations.test.ts. Original header follows.
+--
 -- ACCSYS PostgreSQL schema (portable, no Supabase / RLS).
 -- Source of truth for DDL. Apply to any Postgres 14+ instance.
 --

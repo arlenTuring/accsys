@@ -84,7 +84,8 @@ describe('notifyAndEmail', () => {
       caseNumber: 'CP1150700001',
       message: '待簽核',
     });
-    expect(result).toEqual({ ok: false, error: 'boom' });
+    // The raw database message must not be passed through to callers.
+    expect(result).toEqual({ ok: false, error: 'notification_insert_failed' });
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
