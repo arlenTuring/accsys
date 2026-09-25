@@ -1,11 +1,18 @@
+# Local development / single-host baseline. Not the production deployment
+# (reverse proxy, TLS, secrets, backups and least-privilege DB roles come in P1/P7).
+#
+#   npm run db:up      # PostgreSQL only (for `npm run dev`)
+#   npm run app:up     # PostgreSQL + app container (adds docker-compose.app.yml)
+#
+# Every published port binds to 127.0.0.1 only; nothing is reachable from the LAN.
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:16.15-alpine3.24
     container_name: accsys-db
     restart: unless-stopped
     ports:
       # Host 15432 to avoid colliding with other local Postgres on 5432
-      - "15432:5432"
+      - "127.0.0.1:15432:5432"
     environment:
       POSTGRES_USER: accsys
       POSTGRES_PASSWORD: accsys
@@ -13,6 +20,7 @@ services:
     volumes:
       - accsys_pgdata:/var/lib/postgresql/data
       - ./db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      # Local-dev admin seed. Must not be used on any shared environment.
       - ./db/seed-local-dev.sql:/docker-entrypoint-initdb.d/02_seed_local_dev.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U accsys -d accsys"]

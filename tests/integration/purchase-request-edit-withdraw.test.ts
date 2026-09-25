@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createServiceRoleTestClient, hasIntegrationTestCredentials } from './supabase-test-client';
+import { createServiceRoleTestClient } from './supabase-test-client';
 
 const currentEmployee = vi.hoisted(() => ({ value: null as null | { id: string; role: string; departmentId: string } }));
 vi.mock('@/lib/auth/current-employee', () => ({
@@ -9,7 +9,7 @@ vi.mock('@/lib/supabase/server', () => ({ createSupabaseServerClient: async () =
 vi.mock('next/cache', () => ({ revalidatePath: () => {} }));
 vi.mock('@/lib/notifications/notify', () => ({ notifyAndEmail: async () => ({ ok: true }) }));
 
-describe.skipIf(!hasIntegrationTestCredentials())('purchase request edit/withdraw', () => {
+describe('purchase request edit/withdraw', () => {
   let admin: ReturnType<typeof createServiceRoleTestClient>;
   let departmentId: string;
   let managerId: string;

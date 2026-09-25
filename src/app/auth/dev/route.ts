@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
-import { getDevPersonaEmail } from '@/lib/auth/dev-personas';
+import { getDevPersonaEmail, isDevLoginAllowed } from '@/lib/auth/dev-personas';
 import { getSession } from '@/lib/auth/session';
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const origin = url.origin;
-  if (process.env.NODE_ENV === 'production') {
-    return NextResponse.redirect(`${origin}/login?error=auth_failed`);
+  if (!isDevLoginAllowed()) {
+    return NextResponse.json({ error: 'not_found' }, { status: 404 });
   }
 
   const personaEmail = getDevPersonaEmail(url.searchParams.get('as'));

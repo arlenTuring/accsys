@@ -1,10 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createServiceRoleTestClient,
-  hasIntegrationTestCredentials,
 } from './supabase-test-client';
 
-describe.skipIf(!hasIntegrationTestCredentials())('attachments schema + storage bucket', () => {
+describe('attachments schema', () => {
   let supabase: ReturnType<typeof createServiceRoleTestClient>;
   let employeeId: string;
   const formId = crypto.randomUUID();
@@ -19,11 +18,9 @@ describe.skipIf(!hasIntegrationTestCredentials())('attachments schema + storage 
     await supabase.from('attachments').delete().eq('form_id', formId);
   });
 
-  it('has a private attachments Storage bucket', async () => {
-    const { data, error } = await supabase.storage.getBucket('attachments');
-    expect(error).toBeNull();
-    expect(data!.public).toBe(false);
-  });
+  // Was: "has a private Supabase Storage bucket". Files now live in a local
+  // directory; privacy is enforced by authorized download by attachment ID (P3).
+  it.todo('serves attachment bytes only after authorizing the attachment ID (P3)');
 
   it('inserts an attachment row', async () => {
     const { data, error } = await supabase

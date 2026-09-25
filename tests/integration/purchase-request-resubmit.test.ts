@@ -1,8 +1,8 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   createServiceRoleTestClient,
-  hasIntegrationTestCredentials,
 } from './supabase-test-client';
+import { getSql } from '@/lib/db';
 
 const currentEmployee = vi.hoisted(
   () => ({ value: null as null | { id: string; departmentId?: string } })
@@ -13,7 +13,7 @@ vi.mock('@/lib/auth/current-employee', () => ({
 vi.mock('@/lib/supabase/server', () => ({ createSupabaseServerClient: async () => ({}) }));
 vi.mock('next/cache', () => ({ revalidatePath: () => {} }));
 
-describe.skipIf(!hasIntegrationTestCredentials())('resubmitPurchaseRequest', () => {
+describe('resubmitPurchaseRequest', () => {
   let admin: ReturnType<typeof createServiceRoleTestClient>;
   let applicantId: string;
   let applicantDept: string;
@@ -25,17 +25,12 @@ describe.skipIf(!hasIntegrationTestCredentials())('resubmitPurchaseRequest', () 
     const { data: emp } = await admin
       .from('employees')
       .select('id, department_id')
-      .not('department_id', 'is', null)
       .limit(1)
       .single();
     applicantId = emp!.id;
     applicantDept = emp!.department_id;
-    const { data: bc } = await admin
-      .from('budget_codes')
-      .select('id')
-      .not('owner_employee_id', 'is', null)
-      .limit(1)
-      .single();
+    const [bc] = await getSql()<{ id: string }[]>`
+      select id from budget_codes where owner_employee_id is not null limit 1`;
     budgetCodeId = bc!.id;
   });
 

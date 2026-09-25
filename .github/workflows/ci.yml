@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:unit
+      - run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+
+  integration:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16.15-alpine3.24
+        env:
+          POSTGRES_USER: accsys_test
+          POSTGRES_PASSWORD: accsys_test
+          POSTGRES_DB: accsys_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U accsys_test -d accsys_test"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      TEST_DATABASE_URL: postgres://accsys_test:accsys_test@127.0.0.1:5432/accsys_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Load schema and fake fixtures into the disposable DB
+        run: |
+          psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/schema.sql
+          psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/integration/fixtures/base.sql
+      # Fails (does not skip) when the DB is missing or tests fail.
+      - run: npm run test:integration
+
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t accsys-app:ci .

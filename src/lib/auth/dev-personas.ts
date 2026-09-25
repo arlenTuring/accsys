@@ -64,6 +64,18 @@ export function getDevPersonaEmail(id: string | null | undefined): string | null
   return DEV_PERSONAS.find((p) => p.id === id)?.email ?? null;
 }
 
+/** UI hint only (inlined into client bundles). Never use this to authorize. */
 export function isDevLoginEnabled(): boolean {
   return process.env.NEXT_PUBLIC_DEV_LOGIN === 'true';
+}
+
+/**
+ * Server-side gate for /auth/dev. Requires `next dev` (NODE_ENV=development)
+ * AND the explicit opt-in flag, so a test/staging/production build or a dev
+ * server without the flag can never hand out sessions without Google login.
+ */
+export function isDevLoginAllowed(
+  env: { NODE_ENV?: string; NEXT_PUBLIC_DEV_LOGIN?: string } = process.env
+): boolean {
+  return env.NODE_ENV === 'development' && env.NEXT_PUBLIC_DEV_LOGIN === 'true';
 }

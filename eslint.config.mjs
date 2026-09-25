@@ -19,6 +19,8 @@ const eslintConfig = [
       '.worktrees/**',
       '.claude/worktrees/**',
       'next-env.d.ts',
+      // Vendored, minified pdfjs-dist worker (copied from node_modules); not our source.
+      'public/pdf.worker.min.mjs',
     ],
   },
 ];

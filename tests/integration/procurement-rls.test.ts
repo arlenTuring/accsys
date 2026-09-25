@@ -2,10 +2,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createAnonTestClient,
   createServiceRoleTestClient,
-  hasIntegrationTestCredentials,
 } from './supabase-test-client';
 
-describe.skipIf(!hasIntegrationTestCredentials())('procurement RLS', () => {
+describe('procurement RLS', () => {
   let admin: ReturnType<typeof createServiceRoleTestClient>;
   const password = 'Test-password-123!';
   const applicantEmail = `rls-pr-applicant-${Date.now()}@turing-drive.com`;

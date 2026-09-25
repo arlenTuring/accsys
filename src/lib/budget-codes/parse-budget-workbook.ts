@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import { loadWorkbook, readRows, type CellPrimitive } from '@/lib/excel/read-rows';
 
 export type ParsedBudgetRow = {
   rowNumber: number;
@@ -11,35 +11,34 @@ export type ParsedBudgetRow = {
   ownerEmployeeCode: string | null;
 };
 
-function cell(row: unknown[], index: number): string {
+function cell(row: CellPrimitive[], index: number): string {
   return String(row[index] ?? '').trim();
 }
 
-function cellOrNull(row: unknown[], index: number): string | null {
+function cellOrNull(row: CellPrimitive[], index: number): string | null {
   const value = cell(row, index);
   return value === '' ? null : value;
 }
 
-export function parseBudgetWorkbook(buffer: Buffer): ParsedBudgetRow[] {
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true });
+export async function parseBudgetWorkbook(buffer: Buffer): Promise<ParsedBudgetRow[]> {
+  const workbook = await loadWorkbook(buffer);
+  // First non-empty row of the first sheet is the header.
+  const rows = readRows(workbook.worksheets[0]).slice(1);
 
   const result: ParsedBudgetRow[] = [];
-  for (let i = 1; i < rows.length; i += 1) {
-    const row = rows[i];
-    const code = cell(row, 0);
+  for (const { rowNumber, cells } of rows) {
+    const code = cell(cells, 0);
     if (code === '') continue;
-    const rawAmount = row[5];
+    const rawAmount = cells[5];
     result.push({
-      rowNumber: i + 1,
+      rowNumber,
       code,
-      departmentCode: cellOrNull(row, 1),
-      projectCode: cellOrNull(row, 2),
-      category: cell(row, 3),
-      fiscalYear: cell(row, 4),
+      departmentCode: cellOrNull(cells, 1),
+      projectCode: cellOrNull(cells, 2),
+      category: cell(cells, 3),
+      fiscalYear: cell(cells, 4),
       annualBudgetAmount: typeof rawAmount === 'number' ? rawAmount : null,
-      ownerEmployeeCode: cellOrNull(row, 6),
+      ownerEmployeeCode: cellOrNull(cells, 6),
     });
   }
   return result;

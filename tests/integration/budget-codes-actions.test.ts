@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   createServiceRoleTestClient,
-  hasIntegrationTestCredentials,
 } from './supabase-test-client';
 
 const currentEmployee = vi.hoisted(() => ({ value: null as null | { id: string; role: string } }));
@@ -11,7 +10,7 @@ vi.mock('@/lib/auth/current-employee', () => ({
 vi.mock('@/lib/supabase/server', () => ({ createSupabaseServerClient: async () => ({}) }));
 vi.mock('next/cache', () => ({ revalidatePath: () => {} }));
 
-describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => {
+describe('budget-codes actions', () => {
   let admin: ReturnType<typeof createServiceRoleTestClient>;
   let departmentCode: string;
   let departmentId: string;
@@ -379,20 +378,19 @@ describe.skipIf(!hasIntegrationTestCredentials())('budget-codes actions', () => 
   it('imports valid rows and reports per-row errors for invalid ones in the same file', async () => {
     currentEmployee.value = { id: financeEmployeeId, role: 'finance' };
     const { importBudgetCodesFromExcel } = await import('@/lib/budget-codes/actions');
-    const XLSX = await import('xlsx');
+    const { default: ExcelJS } = await import('exceljs');
 
     const validCode = `BCT-IMPORT-OK-${Date.now()}`;
     const badDeptCode = `BCT-IMPORT-BADDEPT-${Date.now()}`;
     const negativeCode = `BCT-IMPORT-NEG-${Date.now()}`;
-    const sheet = XLSX.utils.aoa_to_sheet([
+    const workbook = new ExcelJS.Workbook();
+    workbook.addWorksheet('預算編號').addRows([
       ['預算編號', '部門代碼', '專案代碼', '類別', '年度', '年度預算金額', '負責人工號'],
       [validCode, departmentCode, null, '人事費', '115', 100000, null],
       [badDeptCode, 'NOPE-DEPT', null, '人事費', '115', 100000, null],
       [negativeCode, departmentCode, null, '人事費', '115', -8000, null],
     ]);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, sheet, '預算編號');
-    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
 
     const formData = new FormData();
     formData.set('file', new File([new Uint8Array(buffer)], 'test.xlsx'));

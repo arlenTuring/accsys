@@ -51,15 +51,15 @@ db/
   README.md               資料庫結構說明、ER 圖、GCP 搬遷步驟
   init.sql                Docker 掛載說明（實際用 schema + seed 兩檔）
 scripts/                  一次性資料匯入腳本（import-seed-data.ts 等）
-tests/integration/        資料庫整合測試（需 DATABASE_URL 且 RUN_DB_INTEGRATION=1）
+tests/integration/        資料庫整合測試（只連拋棄式 TEST_DATABASE_URL，見「執行測試」）
 docs/superpowers/         各階段開發計畫（specs／plans）與交接文件
 ```
 
 ## 環境需求
 
-- Node.js >= 20
-- npm
-- Docker Desktop（本機 Postgres）
+- Node.js 24 LTS（版本固定於 `.nvmrc`：`nvm install && nvm use`）；Node 20 已於 2026-04-30 停止支援
+- npm（以 `package-lock.json` 為準，安裝一律 `npm ci`）
+- Docker（本機 Postgres、整合測試 DB、app 容器）
 
 ### 環境變數（`.env.local`）
 
@@ -70,7 +70,7 @@ ALLOWED_GOOGLE_DOMAIN=turing-drive.com
 STORAGE_LOCAL_PATH=./data/attachments
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
-# 本機略過 Google（正式環境勿開）
+# 本機略過 Google：只在 `next dev` 且旗標為 true 時生效；build／容器一律 404，共享環境勿開
 DEV_LOGIN_EMAIL=
 NEXT_PUBLIC_DEV_LOGIN=false
 # Email 通知（目前程式碼已支援，尚未正式啟用寄送）
@@ -95,7 +95,7 @@ npm run seed           # 選用：匯入部門／員工／預算編號／供應�
 npm run dev
 ```
 
-開啟 http://localhost:3000，未登入會自動導向 `/login`。本機可開開發登入；正式環境用公司 Google 帳號登入後導向 `/dashboard`。
+開啟 http://localhost:3000，未登入會自動導向 `/login`。`npm run dev`／`npm run start` 只綁定 127.0.0.1；需讓其他電腦連線時，應經 reverse proxy 與 HTTPS，不要直接改成 0.0.0.0。本機可開開發登入；正式環境用公司 Google 帳號登入後導向 `/dashboard`。
 
 ## 開發指令
 
@@ -105,18 +105,35 @@ npm run db:down  # 停止本機 Postgres
 npm run dev      # 啟動開發伺服器
 npm run build    # 產生正式環境建置
 npm run start    # 啟動已建置的正式環境伺服器
-npm run lint      # ESLint 檢查
-npm test          # 執行測試套件
+npm run lint        # ESLint 檢查
+npm run typecheck   # TypeScript（應用程式 + 測試）
+npm test            # 單元測試（= test:unit，不連 DB）
 npm run test:watch  # 監看模式
+npm run check       # lint + typecheck + 單元測試 + production build
+npm run app:up      # 以 Docker 啟動 Postgres + app 容器（http://127.0.0.1:3000）
 ```
 
 ### 執行測試
 
-預設只跑單元測試。資料庫整合測試需本機 Postgres，並加上 `RUN_DB_INTEGRATION=1`：
+- **單元測試**（`npm test`）：不連資料庫、不讀 `.env.local`。
+- **整合測試**（`npm run test:integration`）：只允許 `TEST_DATABASE_URL`，且資料庫名稱必須以 `_test` 結尾；未設定時整批失敗，不會略過，也不會改用 `DATABASE_URL`。
 
 ```bash
-export $(grep -v '^#' .env.local | xargs) && RUN_DB_INTEGRATION=1 npm test
+npm run test:db:up     # 拋棄式 Postgres（tmpfs，127.0.0.1:25432，載入 schema + 假資料）
+TEST_DATABASE_URL=postgres://accsys_test:accsys_test@127.0.0.1:25432/accsys_test npm run test:integration
+npm run test:db:down   # 刪除容器與資料
 ```
+
+舊 Supabase RLS 測試（`tests/integration/*-rls.test.ts`）依賴已移除的 Supabase Auth／RLS，無法執行，已列於 `vitest.integration.config.ts` 的 `LEGACY_SUPABASE_RLS_TESTS` 並排除於 typecheck。它們**不算通過**，替代測試如下：
+
+| 舊測試 | 原本驗證 | 替代（應用層授權測試） |
+|---|---|---|
+| master-data-rls | 員工可讀部門；staff 不可新增部門；admin 可新增／刪除 | P3：主檔 query／action 角色正負測試 |
+| procurement-rls | 申請人、指定簽核人可讀請購單，無關員工不可；簽核人可讀全部步驟；前端不可直接寫入；收件人只能讀／標記自己的通知 | P3：請購 query／action 逐案授權與通知授權測試；P4：簽核交易內 actor 檢查。「前端不可直接寫 DB」改由 DB 不對瀏覽器開放 + P1 runtime 最小權限保證 |
+| new-forms-rls | 採購／驗收／費用單及附件只給申請人、簽核人、finance；明細隨表頭授權；未授權者不可下載附件 | P3：三種表單、明細與附件 ID 授權測試（含直接 URL、他人附件 ID） |
+| projects-rls | 員工可讀專案；staff 不可新增；admin 可新增／刪除 | P3：projects action 角色正負測試（`projects-actions.test.ts` 已部分涵蓋） |
+
+替代測試完成後（P5）才刪除舊檔。
 
 ## 資料庫
 

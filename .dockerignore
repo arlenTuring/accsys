@@ -1,0 +1,24 @@
+# Never send secrets, local data or build output into the image build context.
+.env
+.env.*
+!.env.local.example
+data/
+*.dump
+*.sql.gz
+node_modules/
+.next/
+*.tsbuildinfo
+.git/
+.gitignore
+.claude/
+.worktrees/
+.superpowers/
+.DS_Store
+coverage/
+docs/
+reference/
+supabase/
+tests/
+Dockerfile
+.dockerignore
+docker-compose*.yml

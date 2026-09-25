@@ -8,7 +8,7 @@ const SEED_FILE = 'reference/20260709_請採驗費用申請單.xlsx';
 
 async function main() {
   const db = createAppDb();
-  const { employees, budgetCodes, suppliers } = parseSeedWorkbook(SEED_FILE);
+  const { employees, budgetCodes, suppliers } = await parseSeedWorkbook(SEED_FILE);
 
   const departmentByCode = new Map<string, { name: string; managerName: string }>();
   for (const emp of employees) {

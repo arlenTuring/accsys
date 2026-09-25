@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { createServiceRoleTestClient, hasIntegrationTestCredentials } from './supabase-test-client';
+import { createServiceRoleTestClient } from './supabase-test-client';
 
-describe.skipIf(!hasIntegrationTestCredentials())('withdrawn status migration', () => {
+describe('withdrawn status migration', () => {
   const admin = createServiceRoleTestClient();
   const tables = ['purchase_requests', 'purchase_orders', 'acceptances', 'expense_requests'] as const;
 

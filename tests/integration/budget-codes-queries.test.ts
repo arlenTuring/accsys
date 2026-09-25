@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   createServiceRoleTestClient,
-  hasIntegrationTestCredentials,
 } from './supabase-test-client';
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -11,7 +10,7 @@ vi.mock('@/lib/supabase/server', () => ({
   },
 }));
 
-describe.skipIf(!hasIntegrationTestCredentials())('getBudgetCodeList', () => {
+describe('getBudgetCodeList', () => {
   let admin: ReturnType<typeof createServiceRoleTestClient>;
   let departmentId: string;
   let managerId: string;

@@ -1,10 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createServiceRoleTestClient,
-  hasIntegrationTestCredentials,
 } from './supabase-test-client';
 
-describe.skipIf(!hasIntegrationTestCredentials())('budget_codes and suppliers schema', () => {
+describe('budget_codes and suppliers schema', () => {
   let supabase: ReturnType<typeof createServiceRoleTestClient>;
   const departmentCode = `TEST-BC-${Date.now()}`;
   let departmentId: string;

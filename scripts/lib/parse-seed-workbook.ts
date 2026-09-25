@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import { loadWorkbook, readRows, type CellPrimitive } from '../../src/lib/excel/read-rows';
 
 export type ParsedEmployee = {
   employeeCode: string;
@@ -30,18 +30,14 @@ export type ParsedSeedWorkbook = {
   suppliers: ParsedSupplier[];
 };
 
-function cell(row: unknown[], index: number): string {
+function cell(row: CellPrimitive[], index: number): string {
   return String(row[index] ?? '').trim();
 }
 
-export function parseSeedWorkbook(filePath: string): ParsedSeedWorkbook {
-  const workbook = XLSX.readFile(filePath);
+export async function parseSeedWorkbook(filePath: string): Promise<ParsedSeedWorkbook> {
+  const workbook = await loadWorkbook(filePath);
 
-  const linkSheet = workbook.Sheets['link'];
-  const linkRows: unknown[][] = XLSX.utils.sheet_to_json(linkSheet, {
-    header: 1,
-    raw: true,
-  });
+  const linkRows = readRows(workbook.getWorksheet('link')).map((r) => r.cells);
 
   const employees: ParsedEmployee[] = [];
   const budgetCodes: ParsedBudgetCode[] = [];
@@ -73,11 +69,7 @@ export function parseSeedWorkbook(filePath: string): ParsedSeedWorkbook {
     }
   }
 
-  const supplierSheet = workbook.Sheets['供應商資料'];
-  const supplierRows: unknown[][] = XLSX.utils.sheet_to_json(supplierSheet, {
-    header: 1,
-    raw: true,
-  });
+  const supplierRows = readRows(workbook.getWorksheet('供應商資料')).map((r) => r.cells);
 
   const suppliers: ParsedSupplier[] = supplierRows
     .slice(1)

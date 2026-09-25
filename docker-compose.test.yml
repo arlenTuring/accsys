@@ -1,0 +1,29 @@
+# Disposable PostgreSQL for integration tests only.
+# - Data lives in tmpfs: every `down` / restart starts from an empty DB.
+# - Bound to 127.0.0.1 only; never point this at a real database.
+# - Schema is created from db/schema.sql, then fake fixtures are loaded.
+#
+#   npm run test:db:up
+#   TEST_DATABASE_URL=postgres://accsys_test:accsys_test@127.0.0.1:25432/accsys_test npm run test:integration
+#   npm run test:db:down
+name: accsys-test
+
+services:
+  db-test:
+    image: postgres:16.15-alpine3.24
+    environment:
+      POSTGRES_USER: accsys_test
+      POSTGRES_PASSWORD: accsys_test
+      POSTGRES_DB: accsys_test
+    ports:
+      - "127.0.0.1:25432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./tests/integration/fixtures/base.sql:/docker-entrypoint-initdb.d/02_fixtures.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U accsys_test -d accsys_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 30

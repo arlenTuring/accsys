@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { createServiceRoleTestClient, hasIntegrationTestCredentials } from './supabase-test-client';
+import { createServiceRoleTestClient } from './supabase-test-client';
 
-describe.skipIf(!hasIntegrationTestCredentials())('standalone expense requests migration', () => {
+describe('standalone expense requests migration', () => {
   const admin = createServiceRoleTestClient();
   const createdCaseIds: string[] = [];
 

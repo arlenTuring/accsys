@@ -1,7 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   createServiceRoleTestClient,
-  hasIntegrationTestCredentials,
 } from './supabase-test-client';
 
 const currentEmployee = vi.hoisted(() => ({ value: null as null | { id: string } }));
@@ -11,7 +10,7 @@ vi.mock('@/lib/auth/current-employee', () => ({
 vi.mock('@/lib/supabase/server', () => ({ createSupabaseServerClient: async () => ({}) }));
 vi.mock('next/cache', () => ({ revalidatePath: () => {} }));
 
-describe.skipIf(!hasIntegrationTestCredentials())('createExpenseRequest', () => {
+describe('createExpenseRequest', () => {
   let admin: ReturnType<typeof createServiceRoleTestClient>;
   let applicantId: string;
   let departmentId: string;
@@ -27,7 +26,6 @@ describe.skipIf(!hasIntegrationTestCredentials())('createExpenseRequest', () => 
     const { data: emp } = await admin
       .from('employees')
       .select('id, department_id')
-      .not('department_id', 'is', null)
       .limit(1)
       .single();
     applicantId = emp!.id;

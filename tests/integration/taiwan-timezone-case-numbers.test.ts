@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { createServiceRoleTestClient, hasIntegrationTestCredentials } from './supabase-test-client';
+import { createServiceRoleTestClient } from './supabase-test-client';
 
-describe.skipIf(!hasIntegrationTestCredentials())('next_case_number Taiwan timezone', () => {
+describe('next_case_number Taiwan timezone', () => {
   it('uses the Asia/Taipei calendar date, not the UTC date, for the year-month component', async () => {
     const supabase = createServiceRoleTestClient();
     const { data: taipeiNow, error } = await supabase.rpc('taipei_now');

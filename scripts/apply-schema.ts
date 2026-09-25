@@ -6,11 +6,12 @@ import postgres from 'postgres';
 config({ path: '.env.local' });
 config();
 
-const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) {
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) {
   console.error('DATABASE_URL is required (set in .env.local)');
   process.exit(1);
 }
+const DATABASE_URL: string = databaseUrl;
 
 const schemaPath = resolve(process.cwd(), 'db/schema.sql');
 const sqlText = readFileSync(schemaPath, 'utf8');

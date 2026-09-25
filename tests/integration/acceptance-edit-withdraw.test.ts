@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createServiceRoleTestClient, hasIntegrationTestCredentials } from './supabase-test-client';
+import { createServiceRoleTestClient } from './supabase-test-client';
 
 const currentEmployee = vi.hoisted(() => ({ value: null as null | { id: string; role: string; departmentId: string } }));
 vi.mock('@/lib/auth/current-employee', () => ({
@@ -9,7 +9,7 @@ vi.mock('@/lib/supabase/server', () => ({ createSupabaseServerClient: async () =
 vi.mock('next/cache', () => ({ revalidatePath: () => {} }));
 vi.mock('@/lib/notifications/notify', () => ({ notifyAndEmail: async () => ({ ok: true }) }));
 
-describe.skipIf(!hasIntegrationTestCredentials())('acceptance edit/withdraw', () => {
+describe('acceptance edit/withdraw', () => {
   // Fixture chain (approved PR -> approved PO with a 2-step approval loop ->
   // acceptance) makes more round trips than sibling edit/withdraw suites, so
   // the default 5s per-test timeout is too tight.

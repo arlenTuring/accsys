@@ -1,10 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createServiceRoleTestClient,
-  hasIntegrationTestCredentials,
 } from './supabase-test-client';
 
-describe.skipIf(!hasIntegrationTestCredentials())('procurement_cases + next_case_number', () => {
+describe('procurement_cases + next_case_number', () => {
   let supabase: ReturnType<typeof createServiceRoleTestClient>;
   const createdCaseIds: string[] = [];
   let employeeId: string;

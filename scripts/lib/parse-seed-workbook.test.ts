@@ -1,6 +1,6 @@
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { parseSeedWorkbook } from './parse-seed-workbook';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { parseSeedWorkbook, type ParsedSeedWorkbook } from './parse-seed-workbook';
 
 const FIXTURE_PATH = path.join(
   process.cwd(),
@@ -9,7 +9,10 @@ const FIXTURE_PATH = path.join(
 );
 
 describe('parseSeedWorkbook', () => {
-  const result = parseSeedWorkbook(FIXTURE_PATH);
+  let result: ParsedSeedWorkbook;
+  beforeAll(async () => {
+    result = await parseSeedWorkbook(FIXTURE_PATH);
+  });
 
   it('parses all 39 employees from the link sheet', () => {
     expect(result.employees).toHaveLength(39);

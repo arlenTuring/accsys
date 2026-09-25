@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   createServiceRoleTestClient,
-  hasIntegrationTestCredentials,
 } from './supabase-test-client';
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -11,7 +10,7 @@ vi.mock('@/lib/supabase/server', () => ({
   },
 }));
 
-describe.skipIf(!hasIntegrationTestCredentials())('getCaseOverview', () => {
+describe('getCaseOverview', () => {
   let admin: ReturnType<typeof createServiceRoleTestClient>;
   let employeeId: string;
   let departmentId: string;
@@ -24,7 +23,6 @@ describe.skipIf(!hasIntegrationTestCredentials())('getCaseOverview', () => {
     const { data: emp } = await admin
       .from('employees')
       .select('id, department_id')
-      .not('department_id', 'is', null)
       .limit(1)
       .single();
     employeeId = emp!.id;

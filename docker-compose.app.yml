@@ -1,0 +1,36 @@
+# App container overlay for docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.app.yml up -d --build
+# Kept separate so `npm run db:up` works without app secrets being set.
+services:
+  app:
+    build: .
+    image: accsys-app:local
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      DATABASE_URL: postgres://accsys:accsys@db:5432/accsys
+      # Required; compose refuses to start without them. Put them in a
+      # git-ignored `.env` next to this file or export them in the shell.
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET (32+ random chars)}
+      ALLOWED_GOOGLE_DOMAIN: ${ALLOWED_GOOGLE_DOMAIN:?set ALLOWED_GOOGLE_DOMAIN}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      STORAGE_LOCAL_PATH: /data/attachments
+    volumes:
+      - accsys_attachments:/data/attachments
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+      - /app/.next/cache:size=64m,uid=1000,gid=1000,mode=0700
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 2
+
+volumes:
+  accsys_attachments:

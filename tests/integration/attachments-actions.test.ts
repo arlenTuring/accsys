@@ -1,7 +1,8 @@
+import { rm } from 'node:fs/promises';
+import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   createServiceRoleTestClient,
-  hasIntegrationTestCredentials,
 } from './supabase-test-client';
 
 const currentEmployee = vi.hoisted(() => ({
@@ -13,7 +14,7 @@ vi.mock('@/lib/auth/current-employee', () => ({
 vi.mock('@/lib/supabase/server', () => ({ createSupabaseServerClient: async () => ({}) }));
 vi.mock('next/cache', () => ({ revalidatePath: () => {} }));
 
-describe.skipIf(!hasIntegrationTestCredentials())('attachments actions', () => {
+describe('attachments actions', () => {
   let admin: ReturnType<typeof createServiceRoleTestClient>;
   let applicantId: string;
   let outsiderId: string;
@@ -27,7 +28,6 @@ describe.skipIf(!hasIntegrationTestCredentials())('attachments actions', () => {
     const { data: emps } = await admin
       .from('employees')
       .select('id, department_id')
-      .not('department_id', 'is', null)
       .limit(2);
     applicantId = emps![0].id;
     outsiderId = emps![1].id;
@@ -75,8 +75,9 @@ describe.skipIf(!hasIntegrationTestCredentials())('attachments actions', () => {
   });
 
   afterAll(async () => {
-    if (createdStoragePaths.length > 0) {
-      await admin.storage.from('attachments').remove(createdStoragePaths);
+    const storageRoot = process.env.STORAGE_LOCAL_PATH!;
+    for (const storagePath of createdStoragePaths) {
+      await rm(path.join(storageRoot, storagePath), { force: true });
     }
     await admin.from('attachments').delete().eq('form_id', orderId);
     await admin.from('purchase_orders').delete().eq('id', orderId);

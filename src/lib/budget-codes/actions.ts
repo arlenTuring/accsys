@@ -142,7 +142,7 @@ export async function importBudgetCodesFromExcel(formData: FormData): Promise<Im
   let rows: ParsedBudgetRow[];
   try {
     const buffer = Buffer.from(await file.arrayBuffer());
-    rows = parseBudgetWorkbook(buffer);
+    rows = await parseBudgetWorkbook(buffer);
   } catch {
     return { ok: false, error: '無法解析此 Excel 檔案，請確認格式是否正確' };
   }

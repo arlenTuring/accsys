@@ -1,10 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createServiceRoleTestClient,
-  hasIntegrationTestCredentials,
 } from './supabase-test-client';
 
-describe.skipIf(!hasIntegrationTestCredentials())('approval_steps + notifications schema', () => {
+describe('approval_steps + notifications schema', () => {
   let supabase: ReturnType<typeof createServiceRoleTestClient>;
   let employeeId: string;
   const formId = crypto.randomUUID();

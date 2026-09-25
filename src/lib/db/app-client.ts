@@ -1,6 +1,9 @@
 import { getSql } from '@/lib/db';
 
 export type DbError = { message: string };
+// Legacy Supabase-compatible layer (removed in P5). Rows stay loosely typed so
+// existing callers keep compiling; new code should use Drizzle via getDb().
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- legacy compat rows, see above
 export type DbRow = Record<string, any>;
 export type DbResult<T = DbRow[]> = { data: T; error: DbError | null; count?: number | null };
 
@@ -193,7 +196,7 @@ class TableQuery implements PromiseLike<DbResult<DbRow[]>> {
 
   then<TResult1 = DbResult<DbRow[]>, TResult2 = never>(
     onfulfilled?: ((value: DbResult<DbRow[]>) => TResult1 | PromiseLike<TResult1>) | null | undefined,
-    onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null | undefined
+    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null | undefined
   ): Promise<TResult1 | TResult2> {
     return Promise.resolve(this.execute() as Promise<DbResult<DbRow[]>>).then(
       onfulfilled ?? undefined,
@@ -223,7 +226,7 @@ class TableQuery implements PromiseLike<DbResult<DbRow[]>> {
     return ` where ${parts.join(' and ')}`;
   }
 
-  private async execute(): Promise<DbResult<any>> {
+  private async execute(): Promise<DbResult<unknown>> {
     try {
       if (this.op === 'select') return await this.execSelect();
       if (this.op === 'insert' || this.op === 'upsert') return await this.execInsert();
@@ -234,7 +237,7 @@ class TableQuery implements PromiseLike<DbResult<DbRow[]>> {
     }
   }
 
-  private async execSelect(): Promise<DbResult> {
+  private async execSelect(): Promise<DbResult<unknown>> {
     const params: unknown[] = [];
     const t = ident(this.table);
     if (this.countOnly) {
@@ -285,7 +288,7 @@ class TableQuery implements PromiseLike<DbResult<DbRow[]>> {
     return this.wrapRows(rows);
   }
 
-  private async execInsert(): Promise<DbResult> {
+  private async execInsert(): Promise<DbResult<unknown>> {
     const rowsIn = Array.isArray(this.payload) ? this.payload : [this.payload];
     if (rowsIn.length === 0) return { data: [], error: null };
     const keys = Object.keys(rowsIn[0] as Record<string, unknown>);
@@ -311,7 +314,7 @@ class TableQuery implements PromiseLike<DbResult<DbRow[]>> {
     return this.wrapRows(this.returning ? rows : []);
   }
 
-  private async execUpdate(): Promise<DbResult> {
+  private async execUpdate(): Promise<DbResult<unknown>> {
     const rec = this.payload as Record<string, unknown>;
     const keys = Object.keys(rec);
     const params: unknown[] = [];
@@ -325,14 +328,14 @@ class TableQuery implements PromiseLike<DbResult<DbRow[]>> {
     return this.wrapRows(this.returning ? rows : []);
   }
 
-  private async execDelete(): Promise<DbResult> {
+  private async execDelete(): Promise<DbResult<unknown>> {
     const params: unknown[] = [];
     const sqlText = `delete from ${ident(this.table)} as t${this.whereSql('t', params)}`;
     await getSql().unsafe(sqlText, params as never[]);
     return { data: [], error: null };
   }
 
-  private wrapRows(rows: unknown[]): DbResult<any> {
+  private wrapRows(rows: DbRow[]): DbResult<unknown> {
     if (this.mode === 'maybe') {
       return { data: rows[0] ?? null, error: null };
     }
@@ -346,6 +349,7 @@ class TableQuery implements PromiseLike<DbResult<DbRow[]>> {
 
 export type AppDb = {
   from: (table: string) => TableQuery;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- legacy compat rpc results, see DbRow
   rpc: (fn: string, args?: Record<string, unknown>) => Promise<DbResult<any>>;
 };
 
