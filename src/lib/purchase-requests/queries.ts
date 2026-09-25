@@ -1,4 +1,4 @@
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 
 export type RequestSummary = {
@@ -50,8 +50,8 @@ export type QueueItem = {
 };
 
 export async function getMyRequests(): Promise<RequestSummary[]> {
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+  const supabase = createAppDb();
+  const employee = await getCurrentEmployee();
   if (!employee) return [];
   const { data } = await supabase
     .from('purchase_requests')
@@ -68,7 +68,7 @@ export async function getMyRequests(): Promise<RequestSummary[]> {
 }
 
 export async function getPurchaseRequestDetail(requestId: string): Promise<RequestDetail | null> {
-  const supabase = await createSupabaseServerClient();
+  const supabase = createAppDb();
   const { data: pr } = await supabase
     .from('purchase_requests')
     .select(
@@ -123,8 +123,8 @@ export async function getPurchaseRequestDetail(requestId: string): Promise<Reque
 }
 
 export async function getMyApprovalQueue(): Promise<QueueItem[]> {
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+  const supabase = createAppDb();
+  const employee = await getCurrentEmployee();
   if (!employee) return [];
   const { data: steps } = await supabase
     .from('approval_steps')

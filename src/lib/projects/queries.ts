@@ -1,4 +1,4 @@
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 
 export type ProjectListItem = {
   id: string;
@@ -7,7 +7,7 @@ export type ProjectListItem = {
 };
 
 export async function getProjectList(): Promise<ProjectListItem[]> {
-  const supabase = await createSupabaseServerClient();
+  const supabase = createAppDb();
   const { data } = await supabase.from('projects').select('id, code, name').order('code');
-  return data ?? [];
+  return (data ?? []) as ProjectListItem[];
 }

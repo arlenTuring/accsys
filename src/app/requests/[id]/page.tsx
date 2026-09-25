@@ -1,6 +1,5 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getPurchaseRequestDetail } from '@/lib/purchase-requests/queries';
 import { withdrawPurchaseRequest } from '@/lib/purchase-requests/actions';
@@ -34,8 +33,7 @@ export default async function RequestDetailPage({
   const detail = await getPurchaseRequestDetail(id);
   if (!detail) notFound();
 
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+    const employee = await getCurrentEmployee();
 
   const currentStep =
     detail.status === 'pending_approval' && detail.currentStepOrder !== null

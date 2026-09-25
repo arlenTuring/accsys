@@ -1,4 +1,4 @@
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 
 export type AttachmentRow = {
   id: string;
@@ -10,7 +10,7 @@ export type AttachmentRow = {
 };
 
 export async function getAttachments(formType: string, formId: string): Promise<AttachmentRow[]> {
-  const supabase = await createSupabaseServerClient();
+  const supabase = createAppDb();
   const { data } = await supabase
     .from('attachments')
     .select(

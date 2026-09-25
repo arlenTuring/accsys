@@ -1,8 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { createSupabaseServiceRoleClient } from '@/lib/supabase/service-role';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { parseBudgetWorkbook, type ParsedBudgetRow } from '@/lib/budget-codes/parse-budget-workbook';
 
@@ -19,7 +18,7 @@ export type BudgetCodeInput = {
 export type UpsertResult = { ok: true; budgetCodeId: string } | { ok: false; error: string };
 
 async function upsertOneBudgetCode(
-  db: ReturnType<typeof createSupabaseServiceRoleClient>,
+  db: ReturnType<typeof createAppDb>,
   input: BudgetCodeInput
 ): Promise<UpsertResult> {
   if (!input.code.trim()) return { ok: false, error: '預算編號為必填' };
@@ -90,13 +89,13 @@ async function upsertOneBudgetCode(
 }
 
 export async function upsertBudgetCode(input: BudgetCodeInput): Promise<UpsertResult> {
-  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: '找不到您的員工資料，請聯絡系統管理員' };
   if (employee.role !== 'finance' && employee.role !== 'admin') {
     return { ok: false, error: '只有財會人員可以維護預算編號' };
   }
 
-  const db = createSupabaseServiceRoleClient();
+  const db = createAppDb();
   const result = await upsertOneBudgetCode(db, input);
   if (result.ok) revalidatePath('/budget-codes');
   return result;
@@ -105,13 +104,13 @@ export async function upsertBudgetCode(input: BudgetCodeInput): Promise<UpsertRe
 export type DeleteResult = { ok: true } | { ok: false; error: string };
 
 export async function deleteBudgetCode(budgetCodeId: string): Promise<DeleteResult> {
-  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: '找不到您的員工資料，請聯絡系統管理員' };
   if (employee.role !== 'finance' && employee.role !== 'admin') {
     return { ok: false, error: '只有財會人員可以維護預算編號' };
   }
 
-  const db = createSupabaseServiceRoleClient();
+  const db = createAppDb();
   const { count } = await db
     .from('purchase_request_items')
     .select('id', { count: 'exact', head: true })
@@ -131,7 +130,7 @@ export type ImportSummary = { successCount: number; errors: ImportRowError[] };
 export type ImportOutcome = { ok: true; summary: ImportSummary } | { ok: false; error: string };
 
 export async function importBudgetCodesFromExcel(formData: FormData): Promise<ImportOutcome> {
-  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: '找不到您的員工資料，請聯絡系統管理員' };
   if (employee.role !== 'finance' && employee.role !== 'admin') {
     return { ok: false, error: '只有財會人員可以維護預算編號' };
@@ -148,7 +147,7 @@ export async function importBudgetCodesFromExcel(formData: FormData): Promise<Im
     return { ok: false, error: '無法解析此 Excel 檔案，請確認格式是否正確' };
   }
 
-  const db = createSupabaseServiceRoleClient();
+  const db = createAppDb();
   const errors: ImportRowError[] = [];
   let successCount = 0;
 

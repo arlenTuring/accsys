@@ -1,6 +1,5 @@
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getAcceptanceDetail } from '@/lib/acceptances/queries';
 import { getAttachments } from '@/lib/attachments/queries';
@@ -37,8 +36,7 @@ export default async function AcceptanceDetailPage({
   const detail = await getAcceptanceDetail(id);
   if (!detail) notFound();
 
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+    const employee = await getCurrentEmployee();
   const attachments = await getAttachments('acceptance', id);
   const canEditPropertyTag = employee?.role === 'finance' || employee?.role === 'admin';
 

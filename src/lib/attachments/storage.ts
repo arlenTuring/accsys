@@ -1,25 +1,41 @@
-import { createSupabaseServiceRoleClient } from '@/lib/supabase/service-role';
+import { mkdir, writeFile, readFile } from 'fs/promises';
+import path from 'path';
+import { getRequiredEnv } from '@/lib/env';
 
-const BUCKET = 'attachments';
-const SIGNED_URL_EXPIRY_SECONDS = 300;
+function storageRoot() {
+  return getRequiredEnv('STORAGE_LOCAL_PATH');
+}
 
 export async function uploadAttachmentFile(
   storagePath: string,
   file: File
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const db = createSupabaseServiceRoleClient();
-  const { error } = await db.storage.from(BUCKET).upload(storagePath, file, {
-    contentType: file.type,
-  });
-  if (error) return { ok: false, error: error.message };
-  return { ok: true };
+  try {
+    const fullPath = path.join(storageRoot(), storagePath);
+    await mkdir(path.dirname(fullPath), { recursive: true });
+    const buffer = Buffer.from(await file.arrayBuffer());
+    await writeFile(fullPath, buffer);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'upload_failed' };
+  }
 }
 
+/** Local: app route that streams the file. Swap to GCS signed URLs in production. */
 export async function createSignedAttachmentUrl(storagePath: string): Promise<string | null> {
-  const db = createSupabaseServiceRoleClient();
-  const { data, error } = await db.storage
-    .from(BUCKET)
-    .createSignedUrl(storagePath, SIGNED_URL_EXPIRY_SECONDS);
-  if (error || !data) return null;
-  return data.signedUrl;
+  try {
+    const fullPath = path.join(storageRoot(), storagePath);
+    await readFile(fullPath);
+    return `/api/attachments/file?path=${encodeURIComponent(storagePath)}`;
+  } catch {
+    return null;
+  }
+}
+
+export async function readAttachmentBytes(storagePath: string): Promise<Buffer | null> {
+  try {
+    return await readFile(path.join(storageRoot(), storagePath));
+  } catch {
+    return null;
+  }
 }

@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getEligiblePurchaseRequestsForOrder } from '@/lib/purchase-orders/queries';
 import { PurchaseOrderForm } from './purchase-order-form';
@@ -10,8 +10,8 @@ export default async function NewPurchaseOrderPage({
   searchParams: Promise<{ requestId?: string }>;
 }) {
   const { requestId } = await searchParams;
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+  const supabase = createAppDb();
+  const employee = await getCurrentEmployee();
   if (!employee) redirect('/login');
 
   const eligible = await getEligiblePurchaseRequestsForOrder();

@@ -1,4 +1,4 @@
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 
 export type BudgetCodeListItem = {
   id: string;
@@ -15,7 +15,7 @@ export type BudgetCodeListItem = {
 };
 
 export async function getBudgetCodeList(): Promise<BudgetCodeListItem[]> {
-  const supabase = await createSupabaseServerClient();
+  const supabase = createAppDb();
   const { data } = await supabase
     .from('budget_codes')
     .select(

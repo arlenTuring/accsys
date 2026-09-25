@@ -1,4 +1,4 @@
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { checkPaymentTermsConsistency } from '@/lib/procurement/payment-terms';
 
@@ -67,8 +67,8 @@ export type ExpenseRequestQueueItem = {
 };
 
 export async function getMyExpenseRequests(): Promise<ExpenseRequestSummary[]> {
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+  const supabase = createAppDb();
+  const employee = await getCurrentEmployee();
   if (!employee) return [];
   const { data } = await supabase
     .from('expense_requests')
@@ -86,7 +86,7 @@ export async function getMyExpenseRequests(): Promise<ExpenseRequestSummary[]> {
 export async function getExpenseRequestDetail(
   expenseRequestId: string
 ): Promise<ExpenseRequestDetail | null> {
-  const supabase = await createSupabaseServerClient();
+  const supabase = createAppDb();
   const { data: expenseRequest } = await supabase
     .from('expense_requests')
     .select(
@@ -168,8 +168,8 @@ export async function getExpenseRequestDetail(
 export async function getEligiblePurchaseOrdersForExpenseRequest(): Promise<
   EligiblePurchaseOrderForExpense[]
 > {
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+  const supabase = createAppDb();
+  const employee = await getCurrentEmployee();
   if (!employee) return [];
 
   const { data: orders } = await supabase
@@ -234,8 +234,8 @@ export async function getEligiblePurchaseOrdersForExpenseRequest(): Promise<
 }
 
 export async function getMyExpenseRequestApprovalQueue(): Promise<ExpenseRequestQueueItem[]> {
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+  const supabase = createAppDb();
+  const employee = await getCurrentEmployee();
   if (!employee) return [];
   const { data: steps } = await supabase
     .from('approval_steps')
@@ -283,7 +283,7 @@ export type ExpenseRequestSourceItem = {
 export async function getExpenseRequestSourceItems(
   expenseRequestId: string
 ): Promise<ExpenseRequestSourceItem[]> {
-  const supabase = await createSupabaseServerClient();
+  const supabase = createAppDb();
   const { data: expenseRequest } = await supabase
     .from('expense_requests')
     .select('acceptance_id, purchase_order_id')

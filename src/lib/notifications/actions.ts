@@ -1,12 +1,12 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 
 export async function markNotificationRead(notificationId: string): Promise<void> {
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+  const supabase = createAppDb();
+  const employee = await getCurrentEmployee();
   if (!employee) return;
   await supabase
     .from('notifications')

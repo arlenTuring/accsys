@@ -1,4 +1,4 @@
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 
 export type AcceptanceSummary = {
@@ -59,8 +59,8 @@ export type AcceptanceQueueItem = {
 };
 
 export async function getMyAcceptances(): Promise<AcceptanceSummary[]> {
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+  const supabase = createAppDb();
+  const employee = await getCurrentEmployee();
   if (!employee) return [];
   const { data } = await supabase
     .from('acceptances')
@@ -76,7 +76,7 @@ export async function getMyAcceptances(): Promise<AcceptanceSummary[]> {
 }
 
 export async function getAcceptanceDetail(acceptanceId: string): Promise<AcceptanceDetail | null> {
-  const supabase = await createSupabaseServerClient();
+  const supabase = createAppDb();
   const { data: acceptance } = await supabase
     .from('acceptances')
     .select(
@@ -134,8 +134,8 @@ export async function getAcceptanceDetail(acceptanceId: string): Promise<Accepta
 }
 
 export async function getEligiblePurchaseOrdersForAcceptance(): Promise<EligiblePurchaseOrder[]> {
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+  const supabase = createAppDb();
+  const employee = await getCurrentEmployee();
   if (!employee) return [];
 
   const { data: orders } = await supabase
@@ -172,8 +172,8 @@ export async function getEligiblePurchaseOrdersForAcceptance(): Promise<Eligible
 }
 
 export async function getMyAcceptanceApprovalQueue(): Promise<AcceptanceQueueItem[]> {
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+  const supabase = createAppDb();
+  const employee = await getCurrentEmployee();
   if (!employee) return [];
   const { data: steps } = await supabase
     .from('approval_steps')

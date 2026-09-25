@@ -1,18 +1,13 @@
 import { config } from 'dotenv';
-import { createClient } from '@supabase/supabase-js';
+import { createAppDb } from '../src/lib/db/app-client';
 import { parseSeedWorkbook } from './lib/parse-seed-workbook';
-import { getRequiredEnv } from '../src/lib/env';
 
 config({ path: '.env.local' });
 
 const SEED_FILE = 'reference/20260709_請採驗費用申請單.xlsx';
 
 async function main() {
-  const supabase = createClient(
-    getRequiredEnv('NEXT_PUBLIC_SUPABASE_URL'),
-    getRequiredEnv('SUPABASE_SERVICE_ROLE_KEY')
-  );
-
+  const db = createAppDb();
   const { employees, budgetCodes, suppliers } = parseSeedWorkbook(SEED_FILE);
 
   const departmentByCode = new Map<string, { name: string; managerName: string }>();
@@ -26,17 +21,17 @@ async function main() {
   }
 
   for (const [code, dept] of departmentByCode) {
-    const { error } = await supabase
-      .from('departments')
-      .upsert({ code, name: dept.name }, { onConflict: 'code' });
+    const { error } = await db.from('departments').upsert({ code, name: dept.name }, { onConflict: 'code' });
     if (error) throw error;
   }
 
-  const { data: departmentRows, error: departmentReadError } = await supabase
+  const { data: departmentRows, error: departmentReadError } = await db
     .from('departments')
     .select('id, code');
   if (departmentReadError) throw departmentReadError;
-  const departmentIdByCode = new Map(departmentRows.map((d) => [d.code, d.id]));
+  const departmentIdByCode = new Map(
+    (departmentRows as { id: string; code: string }[]).map((d) => [d.code, d.id])
+  );
 
   for (const emp of employees) {
     const departmentId = departmentIdByCode.get(emp.departmentCode);
@@ -45,7 +40,7 @@ async function main() {
       continue;
     }
 
-    const { error } = await supabase.from('employees').upsert(
+    const { error } = await db.from('employees').upsert(
       {
         employee_code: emp.employeeCode,
         name: emp.name,
@@ -59,31 +54,29 @@ async function main() {
     if (error) throw error;
   }
 
-  const { data: employeeRows, error: employeeReadError } = await supabase
-    .from('employees')
-    .select('id, name');
+  const { data: employeeRows, error: employeeReadError } = await db.from('employees').select('id, name');
   if (employeeReadError) throw employeeReadError;
 
   for (const [code, dept] of departmentByCode) {
     const departmentId = departmentIdByCode.get(code);
-    const manager = employeeRows.find((e) => e.name === dept.managerName);
+    const manager = (employeeRows as { id: string; name: string }[]).find((e) => e.name === dept.managerName);
     if (!manager) {
       console.warn(`跳過部門主管設定：部門 ${code} 找不到員工「${dept.managerName}」`);
       continue;
     }
-    const { error } = await supabase
-      .from('departments')
-      .update({ manager_employee_id: manager.id })
-      .eq('id', departmentId);
+    const { error } = await db.from('departments').update({ manager_employee_id: manager.id }).eq('id', departmentId);
     if (error) throw error;
   }
 
-  const { data: refreshedDepartments, error: refreshedDeptError } = await supabase
+  const { data: refreshedDepartments, error: refreshedDeptError } = await db
     .from('departments')
     .select('id, code, manager_employee_id');
   if (refreshedDeptError) throw refreshedDeptError;
   const managerIdByDeptCode = new Map(
-    refreshedDepartments.map((d) => [d.code, d.manager_employee_id])
+    (refreshedDepartments as { code: string; manager_employee_id: string | null }[]).map((d) => [
+      d.code,
+      d.manager_employee_id,
+    ])
   );
 
   const uniqueBudgetCodes = new Map(budgetCodes.map((b) => [b.code, b]));
@@ -91,11 +84,21 @@ async function main() {
   let importedProjectScopedBudgetCodeCount = 0;
   for (const budget of uniqueBudgetCodes.values()) {
     const departmentId = departmentIdByCode.get(budget.departmentCode);
-    const { error } = await supabase.from('budget_codes').upsert(
+    let projectId: string | null = null;
+    if (!departmentId && budget.departmentCode) {
+      const { error: projectError } = await db
+        .from('projects')
+        .upsert({ code: budget.departmentCode, name: budget.departmentCode }, { onConflict: 'code' });
+      if (projectError) throw projectError;
+      const { data: project } = await db.from('projects').select('id').eq('code', budget.departmentCode).maybeSingle();
+      projectId = (project as { id: string } | null)?.id ?? null;
+    }
+
+    const { error } = await db.from('budget_codes').upsert(
       {
         code: budget.code,
         department_id: departmentId ?? null,
-        project_code: departmentId ? null : budget.departmentCode,
+        project_id: projectId,
         category: budget.category,
         fiscal_year: budget.fiscalYear,
         annual_budget_amount: budget.annualBudgetAmount,
@@ -109,7 +112,7 @@ async function main() {
   }
 
   for (const supplier of suppliers) {
-    const { error } = await supabase.from('suppliers').upsert(
+    const { error } = await db.from('suppliers').upsert(
       {
         name: supplier.name,
         phone: supplier.phone,
@@ -126,12 +129,12 @@ async function main() {
   );
   if (importedProjectScopedBudgetCodeCount > 0) {
     console.log(
-      `提醒：${importedProjectScopedBudgetCodeCount} 個專案型預算編號目前沒有預算負責人（owner_employee_id 為 null），無法用於建立請購單，需要有 admin 權限的人到 Supabase Studio 手動指定每一筆的負責人。`
+      `提醒：${importedProjectScopedBudgetCodeCount} 個專案型預算編號目前沒有預算負責人，無法用於建立請購單，請在資料庫指定 owner_employee_id。`
     );
   }
   console.log(
-    '提醒：所有員工預設角色為 staff，且尚未設定 google_email。請於 Supabase Studio 手動：' +
-      '(1) 補上每位員工的 google_email 才能登入，(2) 將財會與系統管理員設為對應角色 (finance / admin)。'
+    '提醒：所有員工預設角色為 staff，且尚未設定 google_email。請在資料庫手動：' +
+      '(1) 補上每位員工的 google_email 才能登入，(2) 將財會與系統管理員設為 finance / admin。'
   );
 }
 

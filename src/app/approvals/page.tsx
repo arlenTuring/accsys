@@ -21,22 +21,34 @@ export default async function ApprovalsPage() {
   ];
 
   return (
-    <main className="mx-auto max-w-4xl p-8">
-      <h1 className="mb-6 text-2xl font-bold">待我簽核</h1>
+    <main className="page-shell">
+      <section className="mb-6">
+        <p className="section-title">簽核</p>
+        <h1 className="page-title">待我簽核</h1>
+        <p className="page-subtitle">
+          {queue.length > 0 ? `共 ${queue.length} 件等待您的審核` : '目前沒有待簽核的表單'}
+        </p>
+      </section>
+
       {queue.length === 0 ? (
-        <p className="text-gray-500">目前沒有待簽核的表單。</p>
+        <div className="card text-sm text-td-muted">目前沒有待簽核的表單。</div>
       ) : (
-        <ul className="divide-y rounded border">
+        <ul className="card divide-y divide-td-border !p-0">
           {queue.map((q) => (
             <li key={`${q.formType}-${q.id}`}>
               <Link
                 href={`${FORM_ROUTE_PREFIX[q.formType]}/${q.id}`}
-                className="flex justify-between p-4 hover:bg-gray-50"
+                className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 transition hover:bg-td-blue-light/40"
               >
-                <span className="w-24 text-gray-500">{FORM_LABELS[q.formType]}</span>
-                <span className="font-mono">{q.caseNumber}</span>
-                <span>{q.applicantName}</span>
-                <span>NT$ {q.totalAmount.toLocaleString()}</span>
+                <span className="w-24 text-xs font-semibold uppercase tracking-wide text-td-muted">
+                  {FORM_LABELS[q.formType]}
+                </span>
+                <span className="mono-case">{q.caseNumber}</span>
+                <span className="text-sm text-td-blue-dark">{q.applicantName}</span>
+                <span className="badge-pending">待簽核</span>
+                <span className="text-sm font-medium text-td-blue-dark">
+                  NT$ {q.totalAmount.toLocaleString()}
+                </span>
               </Link>
             </li>
           ))}

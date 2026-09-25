@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getEligiblePurchaseOrdersForExpenseRequest } from '@/lib/expense-requests/queries';
 import { getBudgetCodeList } from '@/lib/budget-codes/queries';
@@ -13,8 +13,8 @@ export default async function NewExpenseRequestPage({
   searchParams: Promise<{ orderId?: string; mode?: string }>;
 }) {
   const { orderId, mode } = await searchParams;
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+  const supabase = createAppDb();
+  const employee = await getCurrentEmployee();
   if (!employee) redirect('/login');
 
   if (mode === 'standalone') {

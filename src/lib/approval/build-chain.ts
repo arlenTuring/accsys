@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { AppDb } from '@/lib/db/app-client';
 import { CHAIRMAN_THRESHOLD, generateApprovalChain, type ApprovalChainStep } from './chain';
 
 export type BuildChainResult =
@@ -6,7 +6,7 @@ export type BuildChainResult =
   | { ok: false; error: string };
 
 export async function buildApprovalChainForForm(
-  db: SupabaseClient,
+  db: AppDb,
   input: {
     applicantEmployeeId: string;
     departmentId: string;

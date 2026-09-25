@@ -1,8 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { createSupabaseServiceRoleClient } from '@/lib/supabase/service-role';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { buildApprovalChainForForm } from '@/lib/approval/build-chain';
 import { notifyAndEmail } from '@/lib/notifications/notify';
@@ -29,10 +28,10 @@ export type CreateResult =
   | { ok: false; error: string };
 
 export async function createPurchaseOrder(input: NewPurchaseOrder): Promise<CreateResult> {
-  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: '找不到您的員工資料，請聯絡系統管理員' };
 
-  const db = createSupabaseServiceRoleClient();
+  const db = createAppDb();
 
   const { data: pr } = await db
     .from('purchase_requests')
@@ -185,7 +184,7 @@ type LoadStepResult =
     };
 
 async function loadCurrentStep(
-  db: ReturnType<typeof createSupabaseServiceRoleClient>,
+  db: ReturnType<typeof createAppDb>,
   orderId: string,
   callerId: string
 ): Promise<LoadStepResult> {
@@ -207,13 +206,13 @@ async function loadCurrentStep(
   if (!step || step.approver_employee_id !== callerId) {
     return { error: '您不是這張採購單目前的簽核人' };
   }
-  return { order, step };
+  return { order, step } as never;
 }
 
 export async function approvePurchaseOrderStep(orderId: string): Promise<ActionResult> {
-  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: '找不到您的員工資料' };
-  const db = createSupabaseServiceRoleClient();
+  const db = createAppDb();
 
   const loaded = await loadCurrentStep(db, orderId, employee.id);
   if ('error' in loaded) return { ok: false, error: loaded.error };
@@ -300,9 +299,9 @@ export async function resubmitPurchaseOrder(
   orderId: string,
   input: ResubmitPurchaseOrderInput
 ): Promise<ActionResult> {
-  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: '找不到您的員工資料' };
-  const db = createSupabaseServiceRoleClient();
+  const db = createAppDb();
 
   const { data: order } = await db
     .from('purchase_orders')
@@ -408,9 +407,9 @@ export async function updatePurchaseOrder(
   orderId: string,
   input: ResubmitPurchaseOrderInput
 ): Promise<ActionResult> {
-  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: '找不到您的員工資料' };
-  const db = createSupabaseServiceRoleClient();
+  const db = createAppDb();
 
   const { data: order } = await db
     .from('purchase_orders')
@@ -499,9 +498,9 @@ export async function updatePurchaseOrder(
 }
 
 export async function withdrawPurchaseOrder(orderId: string): Promise<ActionResult> {
-  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: '找不到您的員工資料' };
-  const db = createSupabaseServiceRoleClient();
+  const db = createAppDb();
 
   const { data: order } = await db
     .from('purchase_orders')
@@ -534,10 +533,10 @@ export async function withdrawPurchaseOrder(orderId: string): Promise<ActionResu
 }
 
 export async function returnPurchaseOrderStep(orderId: string, reason: string): Promise<ActionResult> {
-  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: '找不到您的員工資料' };
   if (reason.trim() === '') return { ok: false, error: '請填寫退回原因' };
-  const db = createSupabaseServiceRoleClient();
+  const db = createAppDb();
 
   const loaded = await loadCurrentStep(db, orderId, employee.id);
   if ('error' in loaded) return { ok: false, error: loaded.error };

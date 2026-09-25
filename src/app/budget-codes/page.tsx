@@ -1,13 +1,11 @@
 import { redirect } from 'next/navigation';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getBudgetCodeList } from '@/lib/budget-codes/queries';
 import { getProjectList } from '@/lib/projects/queries';
 import { BudgetCodesManager } from './budget-codes-manager';
 
 export default async function BudgetCodesPage() {
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+    const employee = await getCurrentEmployee();
   if (!employee) redirect('/login');
   if (employee.role !== 'finance' && employee.role !== 'admin') redirect('/dashboard');
 

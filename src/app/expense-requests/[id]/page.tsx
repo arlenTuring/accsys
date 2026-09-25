@@ -1,6 +1,5 @@
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getExpenseRequestDetail } from '@/lib/expense-requests/queries';
 import { withdrawExpenseRequest } from '@/lib/expense-requests/actions';
@@ -36,8 +35,7 @@ export default async function ExpenseRequestDetailPage({
   const detail = await getExpenseRequestDetail(id);
   if (!detail) notFound();
 
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+    const employee = await getCurrentEmployee();
   const attachments = await getAttachments('expense_request', id);
 
   const currentStep =

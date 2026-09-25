@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { createServerClient, type CookieOptions } from '@supabase/ssr';
-import { getRequiredEnv } from '@/lib/env';
+import { getIronSession } from 'iron-session';
+import { getSessionOptions, type SessionData } from '@/lib/auth/session';
 import { isPublicPath } from '@/lib/auth/public-paths';
 
 export async function middleware(request: NextRequest) {
@@ -8,32 +8,10 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  let response = NextResponse.next({ request });
+  const response = NextResponse.next({ request });
+  const session = await getIronSession<SessionData>(request, response, getSessionOptions());
 
-  const supabase = createServerClient(
-    getRequiredEnv('NEXT_PUBLIC_SUPABASE_URL'),
-    getRequiredEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY'),
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet: { name: string; value: string; options: CookieOptions }[]) {
-          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
-          response = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options)
-          );
-        },
-      },
-    }
-  );
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
+  if (!session.isLoggedIn || !session.email) {
     return NextResponse.redirect(new URL('/login', request.url));
   }
 

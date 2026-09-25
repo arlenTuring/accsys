@@ -1,13 +1,13 @@
 import { redirect, notFound } from 'next/navigation';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getExpenseRequestDetail, getExpenseRequestSourceItems } from '@/lib/expense-requests/queries';
 import { ExpenseRequestForm } from '../../new/expense-request-form';
 
 export default async function EditExpenseRequestPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+  const supabase = createAppDb();
+  const employee = await getCurrentEmployee();
   if (!employee) redirect('/login');
 
   const detail = await getExpenseRequestDetail(id);

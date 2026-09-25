@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { AppDb } from '@/lib/db/app-client';
 import { sendEmail } from '@/lib/email/send';
 
 export type NotifyInput = {
@@ -18,7 +18,7 @@ const EMAIL_SUBJECT_PREFIX: Record<NotifyInput['type'], string> = {
   request_approved: '【已核准】',
 };
 
-export async function notifyAndEmail(db: SupabaseClient, input: NotifyInput): Promise<NotifyResult> {
+export async function notifyAndEmail(db: AppDb, input: NotifyInput): Promise<NotifyResult> {
   const { error } = await db.from('notifications').insert({
     recipient_employee_id: input.recipientEmployeeId,
     type: input.type,

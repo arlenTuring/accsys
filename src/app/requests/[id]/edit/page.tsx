@@ -1,13 +1,13 @@
 import { redirect, notFound } from 'next/navigation';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getPurchaseRequestDetail } from '@/lib/purchase-requests/queries';
 import { PurchaseRequestForm, type BudgetCodeOption } from '../../new/purchase-request-form';
 
 export default async function EditRequestPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+  const supabase = createAppDb();
+  const employee = await getCurrentEmployee();
   if (!employee) redirect('/login');
 
   const detail = await getPurchaseRequestDetail(id);

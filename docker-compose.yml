@@ -1,0 +1,24 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: accsys-db
+    restart: unless-stopped
+    ports:
+      # Host 15432 to avoid colliding with other local Postgres on 5432
+      - "15432:5432"
+    environment:
+      POSTGRES_USER: accsys
+      POSTGRES_PASSWORD: accsys
+      POSTGRES_DB: accsys
+    volumes:
+      - accsys_pgdata:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./db/seed-local-dev.sql:/docker-entrypoint-initdb.d/02_seed_local_dev.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U accsys -d accsys"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  accsys_pgdata:

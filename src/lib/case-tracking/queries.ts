@@ -1,4 +1,4 @@
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 import { FORM_TYPES, FORM_TABLE, type FormType } from '@/lib/procurement/form-registry';
 import { determineCaseBucket, type CaseBucket, type CaseFormState } from './determine-bucket';
 
@@ -34,7 +34,7 @@ function isValidDate(value: string | undefined): value is string {
 export async function getFinanceCaseTracking(
   filters: CaseTrackingFilters
 ): Promise<CaseTrackingRow[]> {
-  const supabase = await createSupabaseServerClient();
+  const supabase = createAppDb();
 
   const validFrom = isValidDate(filters.dateFrom) ? filters.dateFrom : undefined;
   const validTo = isValidDate(filters.dateTo) ? filters.dateTo : undefined;
@@ -109,8 +109,8 @@ export async function getFinanceCaseTracking(
 }
 
 export async function getDepartmentFilterOptions(): Promise<DepartmentOption[]> {
-  const supabase = await createSupabaseServerClient();
+  const supabase = createAppDb();
   const { data, error } = await supabase.from('departments').select('code, name').order('code');
   if (error) throw error;
-  return data ?? [];
+  return (data ?? []) as DepartmentOption[];
 }

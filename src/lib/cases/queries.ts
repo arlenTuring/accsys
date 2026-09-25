@@ -1,4 +1,4 @@
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 import { FORM_TYPES, FORM_TABLE, FORM_LABELS, type FormType } from '@/lib/procurement/form-registry';
 
 export type CaseFormStatus = {
@@ -24,7 +24,7 @@ const FORM_ITEM_CODES: Record<FormType, string> = {
 };
 
 export async function getCaseOverview(caseNumber: string): Promise<CaseOverview | null> {
-  const supabase = await createSupabaseServerClient();
+  const supabase = createAppDb();
   const { data: pcase } = await supabase
     .from('procurement_cases')
     .select('id, case_number')

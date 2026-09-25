@@ -1,4 +1,4 @@
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 
 export type NotificationRow = {
@@ -13,8 +13,8 @@ export type NotificationRow = {
 };
 
 export async function getMyNotifications(): Promise<NotificationRow[]> {
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+  const supabase = createAppDb();
+  const employee = await getCurrentEmployee();
   if (!employee) return [];
   const { data } = await supabase
     .from('notifications')
@@ -34,8 +34,8 @@ export async function getMyNotifications(): Promise<NotificationRow[]> {
 }
 
 export async function getUnreadNotificationCount(): Promise<number> {
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+  const supabase = createAppDb();
+  const employee = await getCurrentEmployee();
   if (!employee) return 0;
   const { count } = await supabase
     .from('notifications')

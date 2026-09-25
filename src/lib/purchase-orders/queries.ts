@@ -1,4 +1,4 @@
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 
 export type OrderSummary = {
@@ -70,8 +70,8 @@ export type OrderQueueItem = {
 };
 
 export async function getMyPurchaseOrders(): Promise<OrderSummary[]> {
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+  const supabase = createAppDb();
+  const employee = await getCurrentEmployee();
   if (!employee) return [];
   const { data } = await supabase
     .from('purchase_orders')
@@ -87,7 +87,7 @@ export async function getMyPurchaseOrders(): Promise<OrderSummary[]> {
 }
 
 export async function getPurchaseOrderDetail(orderId: string): Promise<OrderDetail | null> {
-  const supabase = await createSupabaseServerClient();
+  const supabase = createAppDb();
   const { data: order } = await supabase
     .from('purchase_orders')
     .select(
@@ -151,8 +151,8 @@ export async function getPurchaseOrderDetail(orderId: string): Promise<OrderDeta
 }
 
 export async function getEligiblePurchaseRequestsForOrder(): Promise<EligiblePurchaseRequest[]> {
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+  const supabase = createAppDb();
+  const employee = await getCurrentEmployee();
   if (!employee) return [];
 
   const { data: requests } = await supabase
@@ -194,8 +194,8 @@ export async function getEligiblePurchaseRequestsForOrder(): Promise<EligiblePur
 }
 
 export async function getMyPurchaseOrderApprovalQueue(): Promise<OrderQueueItem[]> {
-  const supabase = await createSupabaseServerClient();
-  const employee = await getCurrentEmployee(supabase);
+  const supabase = createAppDb();
+  const employee = await getCurrentEmployee();
   if (!employee) return [];
   const { data: steps } = await supabase
     .from('approval_steps')

@@ -1,8 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { createSupabaseServiceRoleClient } from '@/lib/supabase/service-role';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { validateAttachmentFile } from '@/lib/attachments/validate';
 import { createSignedAttachmentUrl, uploadAttachmentFile } from '@/lib/attachments/storage';
@@ -11,7 +10,7 @@ import { FORM_ROUTE_PREFIX, FORM_TABLE, type FormType } from '@/lib/procurement/
 export type UploadResult = { ok: true; attachmentId: string } | { ok: false; error: string };
 
 async function isFormParticipant(
-  db: ReturnType<typeof createSupabaseServiceRoleClient>,
+  db: ReturnType<typeof createAppDb>,
   formType: string,
   formId: string,
   employee: { id: string; role: string }
@@ -41,10 +40,10 @@ export async function uploadAttachment(
   formId: string,
   formData: FormData
 ): Promise<UploadResult> {
-  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: '找不到您的員工資料' };
 
-  const db = createSupabaseServiceRoleClient();
+  const db = createAppDb();
   if (!(await isFormParticipant(db, formType, formId, employee))) {
     return { ok: false, error: '您沒有權限為此表單上傳附件' };
   }
@@ -86,10 +85,10 @@ export async function uploadAttachment(
 }
 
 export async function getAttachmentDownloadUrl(attachmentId: string): Promise<string | null> {
-  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  const employee = await getCurrentEmployee();
   if (!employee) return null;
 
-  const db = createSupabaseServiceRoleClient();
+  const db = createAppDb();
   const { data: attachment } = await db
     .from('attachments')
     .select('storage_path, form_type, form_id')

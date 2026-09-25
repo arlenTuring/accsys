@@ -1,3 +1,98 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    --td-blue: #1b6fd1;
+    --td-blue-dark: #0f2d5c;
+    --td-apex: #e8a838;
+    --td-surface: #f8fafc;
+  }
+
+  body {
+    @apply bg-td-surface text-td-blue-dark antialiased;
+  }
+
+  a {
+    @apply transition-colors duration-150;
+  }
+}
+
+@layer components {
+  .page-shell {
+    @apply mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8;
+  }
+
+  .card {
+    @apply rounded-card border border-td-border bg-white p-5 shadow-card;
+  }
+
+  .card-muted {
+    @apply rounded-card border border-td-border bg-white/80 p-5;
+  }
+
+  .section-title {
+    @apply text-xs font-semibold uppercase tracking-[0.14em] text-td-muted;
+  }
+
+  .page-title {
+    @apply text-2xl font-bold tracking-tight text-td-blue-dark sm:text-3xl;
+  }
+
+  .page-subtitle {
+    @apply mt-1 text-sm text-td-muted;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors duration-150;
+  }
+
+  .btn-primary {
+    @apply btn bg-td-apex text-td-blue-dark hover:bg-td-apex-dark hover:text-white;
+  }
+
+  .btn-secondary {
+    @apply btn border border-td-blue bg-white text-td-blue hover:bg-td-blue-light;
+  }
+
+  .btn-ghost {
+    @apply btn text-td-muted hover:bg-td-blue-light hover:text-td-blue-dark;
+  }
+
+  .nav-link {
+    @apply rounded-md px-3 py-2 text-sm font-medium text-white/80 hover:bg-white/10 hover:text-white;
+  }
+
+  .nav-link-active {
+    @apply bg-white/15 text-white;
+  }
+
+  .badge {
+    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold;
+  }
+
+  .badge-pending {
+    @apply badge bg-td-blue-light text-td-blue;
+  }
+
+  .badge-approved {
+    @apply badge bg-emerald-50 text-status-approved;
+  }
+
+  .badge-returned {
+    @apply badge bg-amber-50 text-status-returned;
+  }
+
+  .badge-withdrawn {
+    @apply badge bg-slate-100 text-status-withdrawn;
+  }
+
+  .link-card {
+    @apply card flex items-center justify-between gap-4 transition hover:border-td-blue/30 hover:shadow-md;
+  }
+
+  .mono-case {
+    @apply font-mono text-sm tracking-tight text-td-blue;
+  }
+}

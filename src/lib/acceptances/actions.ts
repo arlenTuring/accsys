@@ -1,8 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { createSupabaseServiceRoleClient } from '@/lib/supabase/service-role';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { buildApprovalChainForForm } from '@/lib/approval/build-chain';
 import { notifyAndEmail } from '@/lib/notifications/notify';
@@ -25,10 +24,10 @@ export type CreateResult =
   | { ok: false; error: string };
 
 export async function createAcceptance(input: NewAcceptance): Promise<CreateResult> {
-  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: '找不到您的員工資料，請聯絡系統管理員' };
 
-  const db = createSupabaseServiceRoleClient();
+  const db = createAppDb();
 
   const { data: po } = await db
     .from('purchase_orders')
@@ -182,7 +181,7 @@ type LoadStepResult =
     };
 
 async function loadCurrentStep(
-  db: ReturnType<typeof createSupabaseServiceRoleClient>,
+  db: ReturnType<typeof createAppDb>,
   acceptanceId: string,
   callerId: string
 ): Promise<LoadStepResult> {
@@ -204,13 +203,13 @@ async function loadCurrentStep(
   if (!step || step.approver_employee_id !== callerId) {
     return { error: '您不是這張驗收單目前的簽核人' };
   }
-  return { acceptance, step };
+  return { acceptance, step } as never;
 }
 
 export async function approveAcceptanceStep(acceptanceId: string): Promise<ActionResult> {
-  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: '找不到您的員工資料' };
-  const db = createSupabaseServiceRoleClient();
+  const db = createAppDb();
 
   const loaded = await loadCurrentStep(db, acceptanceId, employee.id);
   if ('error' in loaded) return { ok: false, error: loaded.error };
@@ -287,10 +286,10 @@ export async function returnAcceptanceStep(
   acceptanceId: string,
   reason: string
 ): Promise<ActionResult> {
-  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: '找不到您的員工資料' };
   if (reason.trim() === '') return { ok: false, error: '請填寫退回原因' };
-  const db = createSupabaseServiceRoleClient();
+  const db = createAppDb();
 
   const loaded = await loadCurrentStep(db, acceptanceId, employee.id);
   if ('error' in loaded) return { ok: false, error: loaded.error };
@@ -344,12 +343,12 @@ export async function updateAcceptanceItemPropertyTag(
   itemId: string,
   propertyTag: string
 ): Promise<ActionResult> {
-  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: '找不到您的員工資料' };
   if (employee.role !== 'finance' && employee.role !== 'admin') {
     return { ok: false, error: '只有財會人員可以填寫財產編號' };
   }
-  const db = createSupabaseServiceRoleClient();
+  const db = createAppDb();
 
   const { data: item } = await db
     .from('acceptance_items')
@@ -382,9 +381,9 @@ export async function resubmitAcceptance(
   acceptanceId: string,
   input: ResubmitAcceptanceInput
 ): Promise<ActionResult> {
-  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: '找不到您的員工資料' };
-  const db = createSupabaseServiceRoleClient();
+  const db = createAppDb();
 
   const { data: acceptance } = await db
     .from('acceptances')
@@ -480,9 +479,9 @@ export async function updateAcceptance(
   acceptanceId: string,
   input: ResubmitAcceptanceInput
 ): Promise<ActionResult> {
-  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: '找不到您的員工資料' };
-  const db = createSupabaseServiceRoleClient();
+  const db = createAppDb();
 
   const { data: acceptance } = await db
     .from('acceptances')
@@ -561,9 +560,9 @@ export async function updateAcceptance(
 }
 
 export async function withdrawAcceptance(acceptanceId: string): Promise<ActionResult> {
-  const employee = await getCurrentEmployee(await createSupabaseServerClient());
+  const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: '找不到您的員工資料' };
-  const db = createSupabaseServiceRoleClient();
+  const db = createAppDb();
 
   const { data: acceptance } = await db
     .from('acceptances')
