@@ -9,6 +9,11 @@ export type RenderedPdfPage = {
 
 let workerReady = false;
 
+// Everything runs in the user's browser; these bounds keep a hostile or huge
+// PDF from exhausting the tab.
+export const MAX_PDF_BYTES = 30 * 1024 * 1024;
+export const MAX_PDF_PAGES = 100;
+
 export async function loadAndRenderPdf(file: File): Promise<{
   bytes: ArrayBuffer;
   pages: RenderedPdfPage[];
@@ -20,14 +25,22 @@ export async function loadAndRenderPdf(file: File): Promise<{
     workerReady = true;
   }
 
+  if (file.size > MAX_PDF_BYTES) throw new Error('PDF 檔案不可超過 30 MB');
   const bytes = await file.arrayBuffer();
   const data = new Uint8Array(bytes.slice(0));
 
   const loadingTask = pdfjs.getDocument({
     data,
     useSystemFonts: true,
+    // No eval-based font compilation; no fetching of external resources.
+    isEvalSupported: false,
+    disableAutoFetch: true,
   });
   const doc = await loadingTask.promise;
+  if (doc.numPages > MAX_PDF_PAGES) {
+    await doc.destroy();
+    throw new Error(`PDF 頁數不可超過 ${MAX_PDF_PAGES} 頁`);
+  }
 
   const pages: RenderedPdfPage[] = [];
   const scale = 1.35;

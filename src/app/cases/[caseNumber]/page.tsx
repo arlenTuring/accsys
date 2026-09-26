@@ -31,7 +31,9 @@ export default async function CaseOverviewPage({
             <span>
               {f.itemCode}｜{f.label}
             </span>
-            {f.exists ? (
+            {f.restricted ? (
+              <span className="text-gray-400">已建立（無檢視權限）</span>
+            ) : f.exists ? (
               <span className="flex items-center gap-2">
                 <Link href={`${FORM_ROUTE_PREFIX[f.formType]}/${f.id}`} className="text-blue-600 underline">
                   {STATUS_LABELS[f.status ?? ''] ?? f.status}

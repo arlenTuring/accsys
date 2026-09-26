@@ -45,7 +45,7 @@ const LEGACY_TABLES: Record<string, { key: string; newColumns?: string[] }> = {
   expense_request_items: { key: 'id' },
   approval_steps: { key: 'id' },
   notifications: { key: 'id' },
-  attachments: { key: 'id' },
+  attachments: { key: 'id', newColumns: ['scan_status', 'scanned_at', 'sha256'] },
 };
 
 const admin = resolveAdminDatabaseUrl(process.env);
@@ -223,6 +223,9 @@ describe('adopting a database created by the legacy schema script', () => {
     expect(disabled).toBe(0);
     const [{ identities }] = await db`select count(*)::int as identities from employee_identities`;
     expect(identities).toBe(0);
+    // Files uploaded before scanning existed are never treated as scanned.
+    const scan = await db`select distinct scan_status from attachments`;
+    expect(scan.map((r) => r.scan_status)).toEqual(['unscanned']);
 
     // The migrated legacy database is structurally identical to a fresh one.
     const fresh = await createDatabase();

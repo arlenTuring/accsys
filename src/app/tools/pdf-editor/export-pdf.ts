@@ -119,6 +119,8 @@ async function embedDataUrlImage(
   pdfDoc: import('pdf-lib').PDFDocument,
   src: string
 ) {
+  // Stamps are generated in the page as data URLs; never fetch anything remote.
+  if (!src.startsWith('data:image/')) throw new Error('僅支援內嵌圖片');
   const bytes = await fetch(src).then((r) => r.arrayBuffer());
   if (src.startsWith('data:image/png') || src.includes('image/png')) {
     return pdfDoc.embedPng(bytes);

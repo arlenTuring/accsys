@@ -1,4 +1,8 @@
-import { createAppDb } from '@/lib/db/app-client';
+import { desc, and, eq } from 'drizzle-orm';
+import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { canReadForm } from '@/lib/authz/forms';
+import { getDb } from '@/lib/db';
+import { attachments, employees } from '@/lib/db/schema';
 
 export type AttachmentRow = {
   id: string;
@@ -7,24 +11,24 @@ export type AttachmentRow = {
   fileSizeBytes: number;
   uploadedByName: string;
   createdAt: string;
+  scanStatus: string;
 };
 
 export async function getAttachments(formType: string, formId: string): Promise<AttachmentRow[]> {
-  const supabase = createAppDb();
-  const { data } = await supabase
-    .from('attachments')
-    .select(
-      'id, file_name, mime_type, file_size_bytes, created_at, uploader:employees!uploaded_by_employee_id(name)'
-    )
-    .eq('form_type', formType)
-    .eq('form_id', formId)
-    .order('created_at', { ascending: false });
-  return (data ?? []).map((a) => ({
-    id: a.id,
-    fileName: a.file_name,
-    mimeType: a.mime_type,
-    fileSizeBytes: a.file_size_bytes,
-    uploadedByName: (a.uploader as unknown as { name: string }).name,
-    createdAt: a.created_at,
-  }));
+  if (!(await canReadForm(await getCurrentEmployee(), formType, formId))) return [];
+  const rows = await getDb()
+    .select({
+      id: attachments.id,
+      fileName: attachments.fileName,
+      mimeType: attachments.mimeType,
+      fileSizeBytes: attachments.fileSizeBytes,
+      uploadedByName: employees.name,
+      createdAt: attachments.createdAt,
+      scanStatus: attachments.scanStatus,
+    })
+    .from(attachments)
+    .innerJoin(employees, eq(employees.id, attachments.uploadedByEmployeeId))
+    .where(and(eq(attachments.formType, formType), eq(attachments.formId, formId)))
+    .orderBy(desc(attachments.createdAt));
+  return rows.map((r) => ({ ...r, createdAt: new Date(r.createdAt).toISOString() }));
 }

@@ -31,10 +31,11 @@ export async function createAcceptance(input: NewAcceptance): Promise<CreateResu
 
   const { data: po } = await db
     .from('purchase_orders')
-    .select('id, procurement_case_id, department_id, budget_owner_employee_id, status, total_amount')
+    .select('id, procurement_case_id, department_id, budget_owner_employee_id, status, total_amount, applicant_employee_id')
     .eq('id', input.purchaseOrderId)
     .maybeSingle();
-  if (!po) return { ok: false, error: '找不到來源採購單' };
+  // Only the applicant of the source order continues the case (same rule as the eligible list).
+  if (!po || po.applicant_employee_id !== employee.id) return { ok: false, error: '找不到來源採購單' };
   if (po.status !== 'approved') {
     return { ok: false, error: '來源採購單尚未核准，無法建立驗收單' };
   }

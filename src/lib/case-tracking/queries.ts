@@ -1,4 +1,6 @@
 import { createAppDb } from '@/lib/db/app-client';
+import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { isFinanceOrAdmin } from '@/lib/authz/forms';
 import { FORM_TYPES, FORM_TABLE, type FormType } from '@/lib/procurement/form-registry';
 import { determineCaseBucket, type CaseBucket, type CaseFormState } from './determine-bucket';
 
@@ -34,6 +36,8 @@ function isValidDate(value: string | undefined): value is string {
 export async function getFinanceCaseTracking(
   filters: CaseTrackingFilters
 ): Promise<CaseTrackingRow[]> {
+  // Company-wide view: finance and admin only, enforced here as well as on the page.
+  if (!isFinanceOrAdmin(await getCurrentEmployee())) return [];
   const supabase = createAppDb();
 
   const validFrom = isValidDate(filters.dateFrom) ? filters.dateFrom : undefined;

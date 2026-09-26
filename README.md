@@ -33,6 +33,32 @@
 
 員工角色分為 `staff`（一般員工）、`finance`（財會）、`admin`（系統管理員），由 `employees.role` 決定；另有 `is_general_manager`／`is_chairman` 標記用於簽核鏈判斷。`admin` 除了專屬的 `/admin/master-data`，也可存取 `finance` 專屬頁面（`/budget-codes`、`/case-tracking`），方便系統管理員做整體驗證，不需另外切換帳號角色。
 
+授權在伺服器端集中檢查（`src/lib/authz/forms.ts`），每個 query、action、API 都會檢查，不依賴頁面或按鈕隱藏：
+
+| 操作 | 允許 |
+|---|---|
+| 讀取表單、附件（含直接網址） | 申請人、該單任一關簽核人、finance、admin；其他人一律視為「找不到」 |
+| 核准／退回 | 只有目前關卡指定的簽核人（admin、finance 不會自動繞過） |
+| 修改／撤回／重送 | 申請人，且符合既有狀態規則 |
+| 由已核准單據建立後續採購／驗收／費用單 | 來源單據的申請人 |
+| 案件總覽 `/cases/…` | 至少能讀其中一張單的人；讀不到的單顯示「無檢視權限」，不給 ID 與狀態 |
+| 預算編號、專案維護；財會追蹤 | finance、admin（預算金額只給 finance／admin 看） |
+| 帳號綁定、停權、角色 | admin |
+
+費用申請單的完整銀行帳號只給申請人與 finance／admin；簽核人只看到末 4 碼。
+
+### 附件
+
+- 以附件 ID 下載（`/api/attachments/<id>`），每次重新檢查授權；一律以下載方式回應（`Content-Disposition: attachment`、`nosniff`、`CSP sandbox`）。
+- 只接受 PDF／PNG／JPEG，**以檔案內容判斷**（副檔名與瀏覽器 MIME 不採信）；單檔 10 MB、每張表單 20 個。
+- 儲存路徑由伺服器產生（UUID），原檔名只作顯示；讀檔限制在儲存根目錄內且不跟隨 symlink，寫檔不覆蓋既有檔案。
+- 掃描：`ATTACHMENT_SCAN=clamav` 時每個上傳檔先放隔離區，由本機 clamd 掃描（檔案不送外部），通過才搬到正式位置。掃描失敗或逾時不會標為安全，保留在隔離區，由 `npm run attachments:rescan` 重試；中毒檔直接刪除。正式環境沒有掃描器會拒絕上傳；開發環境可 `ATTACHMENT_SCAN=disabled`（標記為「未掃描」，正式環境不提供下載）。
+- 儲存目錄不在 `public/`，也不應由 reverse proxy 直接對外提供。
+
+### 瀏覽器安全標頭
+
+每個回應都有 CSP（script 使用每次請求的 nonce，不用 `unsafe-inline`／`unsafe-eval`；style 允許 inline）、`frame-ancestors 'none'`、`X-Frame-Options: DENY`、`nosniff`、`Referrer-Policy`、`Permissions-Policy`。HSTS 需在 HTTPS 與正式網域確認後以 `ENABLE_HSTS=true` 開啟。PDF 工具完全在瀏覽器執行，限制 30 MB、100 頁，停用 eval，不抓取外部資源。預算 Excel 匯入限制 5 MB、5000 列，並先檢查壓縮檔宣告的解壓大小（防 zip bomb）。
+
 ## 專案結構
 
 ```

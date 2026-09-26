@@ -464,11 +464,23 @@ export const attachments = pgTable(
     mimeType: text('mime_type').notNull(),
     fileSizeBytes: bigint('file_size_bytes', { mode: 'number' }).notNull(),
     createdAt: createdAt(),
+    /**
+     * pending: stored in quarantine, not yet scanned; clean: may be downloaded;
+     * infected / scan_failed: never served; unscanned: scanning disabled
+     * (development only, or files from before scanning existed).
+     */
+    scanStatus: text('scan_status').notNull().default('pending'),
+    scannedAt: timestamp('scanned_at', { withTimezone: true }),
+    sha256: text('sha256'),
   },
   (t): PgTableExtraConfigValue[] => [
     fk('attachments_uploaded_by_employee_id_fkey', t.uploadedByEmployeeId, employees.id),
     check('attachments_form_type_check', FORM_TYPES),
     check('attachments_file_size_bytes_check', sql`file_size_bytes > 0`),
+    check(
+      'attachments_scan_status_check',
+      sql`scan_status in ('pending', 'clean', 'infected', 'scan_failed', 'unscanned')`
+    ),
     index('attachments_form_type_form_id_idx').on(t.formType, t.formId),
   ]
 );

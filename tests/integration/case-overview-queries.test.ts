@@ -3,12 +3,9 @@ import {
   createServiceRoleTestClient,
 } from './supabase-test-client';
 
-vi.mock('@/lib/supabase/server', () => ({
-  createSupabaseServerClient: async () => {
-    const { createServiceRoleTestClient } = await import('./supabase-test-client');
-    return createServiceRoleTestClient();
-  },
-}));
+// The overview is only shown to participants; act as the applicant created below.
+const actor = vi.hoisted(() => ({ value: null as null | { id: string; role: string } }));
+vi.mock('@/lib/auth/current-employee', () => ({ getCurrentEmployee: async () => actor.value }));
 
 describe('getCaseOverview', () => {
   let admin: ReturnType<typeof createServiceRoleTestClient>;
@@ -27,6 +24,7 @@ describe('getCaseOverview', () => {
       .single();
     employeeId = emp!.id;
     departmentId = emp!.department_id;
+    actor.value = { id: employeeId, role: 'staff' };
     const { data: cn } = await admin.rpc('next_case_number');
     caseNumber = cn!;
     const { data: pcase } = await admin
@@ -64,10 +62,10 @@ describe('getCaseOverview', () => {
     const overview = await getCaseOverview(caseNumber);
     expect(overview).not.toBeNull();
     expect(overview!.forms).toEqual([
-      { formType: 'purchase_request', label: '請購單', itemCode: 'A1', exists: true, id: requestId, status: 'approved', hasAttachments: false },
-      { formType: 'purchase_order', label: '採購單', itemCode: 'B1', exists: false, id: null, status: null, hasAttachments: false },
-      { formType: 'acceptance', label: '驗收單', itemCode: 'C1', exists: false, id: null, status: null, hasAttachments: false },
-      { formType: 'expense_request', label: '費用申請單', itemCode: 'D1', exists: false, id: null, status: null, hasAttachments: false },
+      { formType: 'purchase_request', label: '請購單', itemCode: 'A1', exists: true, restricted: false, id: requestId, status: 'approved', hasAttachments: false },
+      { formType: 'purchase_order', label: '採購單', itemCode: 'B1', exists: false, restricted: false, id: null, status: null, hasAttachments: false },
+      { formType: 'acceptance', label: '驗收單', itemCode: 'C1', exists: false, restricted: false, id: null, status: null, hasAttachments: false },
+      { formType: 'expense_request', label: '費用申請單', itemCode: 'D1', exists: false, restricted: false, id: null, status: null, hasAttachments: false },
     ]);
   });
 

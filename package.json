@@ -30,6 +30,7 @@
     "db:baseline": "tsx scripts/db-baseline.ts",
     "db:generate": "drizzle-kit generate",
     "auth:bootstrap": "tsx scripts/auth-bootstrap.ts",
+    "attachments:rescan": "tsx scripts/attachments-rescan.ts",
     "dev:all": "bash scripts/start-dev.sh",
     "dev:all:seed": "bash scripts/start-dev.sh --seed"
   },

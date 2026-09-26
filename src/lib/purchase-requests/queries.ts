@@ -1,4 +1,5 @@
 import { createAppDb } from '@/lib/db/app-client';
+import { canReadForm } from '@/lib/authz/forms';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 
 export type RequestSummary = {
@@ -68,6 +69,7 @@ export async function getMyRequests(): Promise<RequestSummary[]> {
 }
 
 export async function getPurchaseRequestDetail(requestId: string): Promise<RequestDetail | null> {
+  if (!(await canReadForm(await getCurrentEmployee(), 'purchase_request', requestId))) return null;
   const supabase = createAppDb();
   const { data: pr } = await supabase
     .from('purchase_requests')

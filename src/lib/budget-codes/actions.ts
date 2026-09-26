@@ -3,7 +3,11 @@
 import { revalidatePath } from 'next/cache';
 import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
-import { parseBudgetWorkbook, type ParsedBudgetRow } from '@/lib/budget-codes/parse-budget-workbook';
+import {
+  MAX_BUDGET_FILE_BYTES,
+  parseBudgetWorkbook,
+  type ParsedBudgetRow,
+} from '@/lib/budget-codes/parse-budget-workbook';
 
 export type BudgetCodeInput = {
   code: string;
@@ -138,6 +142,7 @@ export async function importBudgetCodesFromExcel(formData: FormData): Promise<Im
 
   const file = formData.get('file');
   if (!(file instanceof File)) return { ok: false, error: '請選擇檔案' };
+  if (file.size > MAX_BUDGET_FILE_BYTES) return { ok: false, error: 'Excel 檔案不可超過 5 MB' };
 
   let rows: ParsedBudgetRow[];
   try {

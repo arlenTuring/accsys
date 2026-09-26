@@ -91,7 +91,7 @@ describe('attachments actions', () => {
     const formData = new FormData();
     formData.set(
       'file',
-      new File([new Uint8Array([1, 2, 3])], 'quote.pdf', { type: 'application/pdf' })
+      new File([new TextEncoder().encode('%PDF-1.4\n%%EOF\n')], 'quote.pdf', { type: 'application/pdf' })
     );
     const result = await uploadAttachment('purchase_order', orderId, formData);
     expect(result).toEqual({ ok: false, error: '您沒有權限為此表單上傳附件' });
@@ -106,10 +106,10 @@ describe('attachments actions', () => {
       new File([new Uint8Array([1])], 'malware.exe', { type: 'application/x-msdownload' })
     );
     const result = await uploadAttachment('purchase_order', orderId, formData);
-    expect(result).toEqual({ ok: false, error: '僅接受 PDF、PNG、JPEG 檔案' });
+    expect(result).toEqual({ ok: false, error: '僅接受 PDF、PNG、JPEG 檔案（以檔案內容判斷）' });
   });
 
-  it('uploads a file, records it, and returns a signed URL to a participant', async () => {
+  it('uploads a file, records it, and returns a download URL to a participant', async () => {
     currentEmployee.value = { id: applicantId, role: 'staff' };
     const { uploadAttachment, getAttachmentDownloadUrl } = await import(
       '@/lib/attachments/actions'
@@ -117,7 +117,7 @@ describe('attachments actions', () => {
     const formData = new FormData();
     formData.set(
       'file',
-      new File([new Uint8Array([1, 2, 3])], 'quote.pdf', { type: 'application/pdf' })
+      new File([new TextEncoder().encode('%PDF-1.4\n%%EOF\n')], 'quote.pdf', { type: 'application/pdf' })
     );
     const result = await uploadAttachment('purchase_order', orderId, formData);
     expect(result.ok).toBe(true);
@@ -130,15 +130,17 @@ describe('attachments actions', () => {
       .single();
     createdStoragePaths.push(row!.storage_path);
 
+    // Authorized by attachment id (no storage path in the URL); the route re-checks access.
     const url = await getAttachmentDownloadUrl(result.attachmentId);
-    expect(url).toMatch(/^https?:\/\//);
+    expect(url).toBe(`/api/attachments/${result.attachmentId}`);
   });
 
   it('rejects a download for a non-participant employee', async () => {
     currentEmployee.value = { id: applicantId, role: 'staff' };
     const { uploadAttachment } = await import('@/lib/attachments/actions');
     const formData = new FormData();
-    formData.set('file', new File([new Uint8Array([1])], 'x.png', { type: 'image/png' }));
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0]);
+    formData.set('file', new File([png], 'x.png', { type: 'image/png' }));
     const uploadResult = await uploadAttachment('purchase_order', orderId, formData);
     if (!uploadResult.ok) throw new Error('setup failed');
     const { data: row } = await admin

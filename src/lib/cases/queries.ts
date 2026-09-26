@@ -1,4 +1,6 @@
 import { createAppDb } from '@/lib/db/app-client';
+import { canReadForm } from '@/lib/authz/forms';
+import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { FORM_TYPES, FORM_TABLE, FORM_LABELS, type FormType } from '@/lib/procurement/form-registry';
 
 export type CaseFormStatus = {
@@ -6,6 +8,8 @@ export type CaseFormStatus = {
   label: string;
   itemCode: string;
   exists: boolean;
+  /** The form exists but the caller may not open it (id/status withheld). */
+  restricted: boolean;
   id: string | null;
   status: string | null;
   hasAttachments: boolean;
@@ -23,7 +27,14 @@ const FORM_ITEM_CODES: Record<FormType, string> = {
   expense_request: 'D1',
 };
 
+/**
+ * Only participants see a case: at least one of its forms must be readable by
+ * the caller. Forms they cannot open are shown as restricted, without id or
+ * status.
+ */
 export async function getCaseOverview(caseNumber: string): Promise<CaseOverview | null> {
+  const actor = await getCurrentEmployee();
+  if (!actor) return null;
   const supabase = createAppDb();
   const { data: pcase } = await supabase
     .from('procurement_cases')
@@ -39,8 +50,9 @@ export async function getCaseOverview(caseNumber: string): Promise<CaseOverview 
       .select('id, status')
       .eq('procurement_case_id', pcase.id)
       .maybeSingle();
+    const readable = data ? await canReadForm(actor, formType, data.id) : false;
     let hasAttachments = false;
-    if (data) {
+    if (data && readable) {
       const { count } = await supabase
         .from('attachments')
         .select('id', { count: 'exact', head: true })
@@ -53,10 +65,12 @@ export async function getCaseOverview(caseNumber: string): Promise<CaseOverview 
       label: FORM_LABELS[formType],
       itemCode: FORM_ITEM_CODES[formType],
       exists: !!data,
-      id: data?.id ?? null,
-      status: data?.status ?? null,
+      restricted: !!data && !readable,
+      id: readable ? data!.id : null,
+      status: readable ? data!.status : null,
       hasAttachments,
     });
   }
+  if (!forms.some((f) => f.exists && !f.restricted)) return null;
   return { caseNumber: pcase.case_number, forms };
 }

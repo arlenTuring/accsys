@@ -1,4 +1,5 @@
 import { createAppDb } from '@/lib/db/app-client';
+import { canReadForm, isFinanceOrAdmin, maskAccount } from '@/lib/authz/forms';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { checkPaymentTermsConsistency } from '@/lib/procurement/payment-terms';
 
@@ -86,6 +87,8 @@ export async function getMyExpenseRequests(): Promise<ExpenseRequestSummary[]> {
 export async function getExpenseRequestDetail(
   expenseRequestId: string
 ): Promise<ExpenseRequestDetail | null> {
+  const actor = await getCurrentEmployee();
+  if (!(await canReadForm(actor, 'expense_request', expenseRequestId))) return null;
   const supabase = createAppDb();
   const { data: expenseRequest } = await supabase
     .from('expense_requests')
@@ -137,7 +140,11 @@ export async function getExpenseRequestDetail(
     payeeSupplierId: expenseRequest.payee_supplier_id,
     paymentMethod: expenseRequest.payment_method,
     bankName: expenseRequest.bank_name,
-    bankAccount: expenseRequest.bank_account,
+    // Approvers see only the last 4 digits; the applicant and finance/admin need the full number.
+    bankAccount:
+      actor!.id === expenseRequest.applicant_employee_id || isFinanceOrAdmin(actor)
+        ? expenseRequest.bank_account
+        : maskAccount(expenseRequest.bank_account),
     accountName: expenseRequest.account_name,
     invoiceMonth: expenseRequest.invoice_month,
     expectedPaymentDate: expenseRequest.expected_payment_date,
@@ -283,6 +290,7 @@ export type ExpenseRequestSourceItem = {
 export async function getExpenseRequestSourceItems(
   expenseRequestId: string
 ): Promise<ExpenseRequestSourceItem[]> {
+  if (!(await canReadForm(await getCurrentEmployee(), 'expense_request', expenseRequestId))) return [];
   const supabase = createAppDb();
   const { data: expenseRequest } = await supabase
     .from('expense_requests')

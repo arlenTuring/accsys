@@ -36,6 +36,13 @@
       "when": 1790313651213,
       "tag": "0004_login_states_link_requests_rate_limits",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790386769586,
+      "tag": "0005_attachment_scan_status",
+      "breakpoints": true
     }
   ]
 }

@@ -35,10 +35,11 @@ export async function createPurchaseOrder(input: NewPurchaseOrder): Promise<Crea
 
   const { data: pr } = await db
     .from('purchase_requests')
-    .select('id, procurement_case_id, department_id, budget_owner_employee_id, status')
+    .select('id, procurement_case_id, department_id, budget_owner_employee_id, status, applicant_employee_id')
     .eq('id', input.purchaseRequestId)
     .maybeSingle();
-  if (!pr) return { ok: false, error: '找不到來源請購單' };
+  // Only the applicant of the source request continues the case (same rule as the eligible list).
+  if (!pr || pr.applicant_employee_id !== employee.id) return { ok: false, error: '找不到來源請購單' };
   if (pr.status !== 'approved') {
     return { ok: false, error: '來源請購單尚未核准，無法建立採購單' };
   }

@@ -1,4 +1,6 @@
 import { createAppDb } from '@/lib/db/app-client';
+import { isFinanceOrAdmin } from '@/lib/authz/forms';
+import { getCurrentEmployee } from '@/lib/auth/current-employee';
 
 export type BudgetCodeListItem = {
   id: string;
@@ -14,7 +16,11 @@ export type BudgetCodeListItem = {
   ownerName: string | null;
 };
 
+/** Everyone may pick budget codes on forms; only finance/admin see the budget amounts. */
 export async function getBudgetCodeList(): Promise<BudgetCodeListItem[]> {
+  const actor = await getCurrentEmployee();
+  if (!actor) return [];
+  const showAmounts = isFinanceOrAdmin(actor);
   const supabase = createAppDb();
   const { data } = await supabase
     .from('budget_codes')
@@ -32,7 +38,7 @@ export async function getBudgetCodeList(): Promise<BudgetCodeListItem[]> {
     projectName: (row.project as unknown as { code: string; name: string } | null)?.name ?? null,
     category: row.category,
     fiscalYear: row.fiscal_year,
-    annualBudgetAmount: row.annual_budget_amount,
+    annualBudgetAmount: showAmounts ? row.annual_budget_amount : null,
     ownerEmployeeCode:
       (row.owner as unknown as { employee_code: string } | null)?.employee_code ?? null,
     ownerName: (row.owner as unknown as { name: string } | null)?.name ?? null,

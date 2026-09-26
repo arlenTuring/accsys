@@ -3,11 +3,9 @@ import {
   createServiceRoleTestClient,
 } from './supabase-test-client';
 
-vi.mock('@/lib/supabase/server', () => ({
-  createSupabaseServerClient: async () => {
-    const { createServiceRoleTestClient } = await import('./supabase-test-client');
-    return createServiceRoleTestClient();
-  },
+// Company-wide views are finance/admin only; run these queries as the fixture finance employee.
+vi.mock('@/lib/auth/current-employee', () => ({
+  getCurrentEmployee: async () => ({ id: '20000000-0000-0000-0000-000000000003', role: 'finance' }),
 }));
 
 describe('getFinanceCaseTracking', () => {
