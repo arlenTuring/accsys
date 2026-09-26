@@ -15,6 +15,7 @@ export function PurchaseOrderForm({
   mode = 'create',
   orderId,
   initialValues,
+  expectedVersion,
 }: {
   purchaseRequestId: string;
   items: { id: string; description: string; quantity: number; budgetCode: string }[];
@@ -30,8 +31,12 @@ export function PurchaseOrderForm({
     quoteCount: string;
     quoteCountReason: string;
   };
+  /** Version the edit started from; the server refuses stale edits. */
+  expectedVersion?: number;
 }) {
   const router = useRouter();
+  // One key per form instance: a double submit or retry cannot create a second order.
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [prices, setPrices] = useState<Record<string, string>>(initialValues?.prices ?? {});
   const [supplierId, setSupplierId] = useState(initialValues?.supplierId ?? suppliers[0]?.id ?? '');
   const [paymentMethod, setPaymentMethod] = useState(initialValues?.paymentMethod ?? '匯款');
@@ -51,7 +56,8 @@ export function PurchaseOrderForm({
     const itemsPayload = items.map((i) => ({
       purchaseOrderItemId: i.id,
       purchaseRequestItemId: i.id,
-      unitPrice: Number(prices[i.id] ?? 0),
+      // Decimal string as typed; the server converts it to exact cents.
+      unitPrice: (prices[i.id] ?? '').trim(),
     }));
     const result =
       mode === 'edit' && orderId
@@ -63,6 +69,7 @@ export function PurchaseOrderForm({
             quoteCount: Number(quoteCount),
             quoteCountReason: quoteCountReason.trim() === '' ? null : quoteCountReason,
             items: itemsPayload.map((i) => ({ purchaseOrderItemId: i.purchaseOrderItemId, unitPrice: i.unitPrice })),
+            expectedVersion: expectedVersion ?? 0,
           })
         : await createPurchaseOrder({
             purchaseRequestId,
@@ -73,6 +80,7 @@ export function PurchaseOrderForm({
             quoteCount: Number(quoteCount),
             quoteCountReason: quoteCountReason.trim() === '' ? null : quoteCountReason,
             items: itemsPayload.map((i) => ({ purchaseRequestItemId: i.purchaseRequestItemId, unitPrice: i.unitPrice })),
+            idempotencyKey,
           });
     setSubmitting(false);
     if (result.ok) {

@@ -31,6 +31,7 @@ export default async function EditPurchaseOrderPage({ params }: { params: Promis
         suppliers={(suppliers ?? []).map((s) => ({ id: s.id, name: s.name }))}
         mode="edit"
         orderId={id}
+        expectedVersion={detail.version}
         initialValues={{
           prices: Object.fromEntries(detail.items.map((i) => [i.itemId, String(i.unitPrice)])),
           supplierId: detail.supplierId,

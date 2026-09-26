@@ -74,7 +74,7 @@ describe('purchase order queries', () => {
 
     currentEmployee.value = { id: applicantId };
     const actions = await import('@/lib/purchase-orders/actions');
-    const created = await actions.createPurchaseOrder({
+    const created = await actions.createPurchaseOrder({ idempotencyKey: crypto.randomUUID(),
       purchaseRequestId: requestId,
       supplierId,
       paymentMethod: '匯款',

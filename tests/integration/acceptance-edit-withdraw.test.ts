@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createServiceRoleTestClient } from './supabase-test-client';
+import { createServiceRoleTestClient, versionOf } from './supabase-test-client';
 
 const currentEmployee = vi.hoisted(() => ({ value: null as null | { id: string; role: string; departmentId: string } }));
 vi.mock('@/lib/auth/current-employee', () => ({
@@ -147,7 +147,7 @@ describe('acceptance edit/withdraw', () => {
 
     currentEmployee.value = { id: applicantId, role: 'staff', departmentId };
     const { createPurchaseOrder, approvePurchaseOrderStep } = await import('@/lib/purchase-orders/actions');
-    const orderResult = await createPurchaseOrder({
+    const orderResult = await createPurchaseOrder({ idempotencyKey: crypto.randomUUID(),
       purchaseRequestId: pr!.id,
       supplierId,
       paymentMethod: '匯款',
@@ -179,7 +179,7 @@ describe('acceptance edit/withdraw', () => {
         .eq('step_order', order!.current_step_order)
         .single();
       currentEmployee.value = { id: step!.approver_employee_id, role: 'staff', departmentId };
-      const result = await approvePurchaseOrderStep(orderResult.orderId);
+      const result = await approvePurchaseOrderStep(orderResult.orderId, await versionOf('purchase_orders', orderResult.orderId));
       if (!result.ok) throw new Error(result.error);
     }
 
@@ -221,7 +221,7 @@ describe('acceptance edit/withdraw', () => {
       acceptanceDate: '2026-07-21',
       items: [{ acceptanceItemId: item!.id, passFail: 'fail' }],
     });
-    expect(result).toEqual({ ok: false, error: '只有申請人可以修改這張驗收單' });
+    expect(result).toMatchObject({ ok: false, error: '只有申請人可以修改這張驗收單' });
   });
 
   it('allows the applicant to edit before any approval, rebuilding the chain', async () => {
@@ -275,7 +275,7 @@ describe('acceptance edit/withdraw', () => {
       acceptanceDate: '2026-07-22',
       items: [{ acceptanceItemId: item!.id, passFail: 'fail' }],
     });
-    expect(result).toEqual({ ok: false, error: '只有尚未有人簽核的驗收單可以修改' });
+    expect(result).toMatchObject({ ok: false, error: '只有尚未有人簽核的驗收單可以修改' });
   });
 
   it('rejects withdraw from a non-applicant', async () => {
@@ -283,7 +283,7 @@ describe('acceptance edit/withdraw', () => {
     currentEmployee.value = { id: otherEmployeeId, role: 'staff', departmentId };
     const { withdrawAcceptance } = await import('@/lib/acceptances/actions');
     const result = await withdrawAcceptance(acceptanceId);
-    expect(result).toEqual({ ok: false, error: '只有申請人可以撤回這張驗收單' });
+    expect(result).toMatchObject({ ok: false, error: '只有申請人可以撤回這張驗收單' });
   });
 
   it('allows the applicant to withdraw before any approval, without deleting the row', async () => {

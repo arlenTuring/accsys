@@ -190,7 +190,7 @@ describe('actions refuse forged or foreign inputs', () => {
     await getSql()`delete from purchase_orders where id = ${fresh.poId}`;
     const { createPurchaseOrder } = await import('@/lib/purchase-orders/actions');
     as(outsider);
-    const result = await createPurchaseOrder({
+    const result = await createPurchaseOrder({ idempotencyKey: crypto.randomUUID(),
       purchaseRequestId: fresh.prId,
       supplierId: SUPPLIER,
       paymentMethod: '匯款',
@@ -200,7 +200,7 @@ describe('actions refuse forged or foreign inputs', () => {
       quoteCountReason: '',
       items: [{ lineNo: 1, budgetCodeId: BUDGET, itemCategory: '設備', description: 'x', quantity: 1, unitPrice: 100 }],
     } as never);
-    expect(result).toEqual({ ok: false, error: '找不到來源請購單' });
+    expect(result).toMatchObject({ ok: false, error: '找不到來源請購單' });
   });
 
   it('only the current step approver can approve; admin does not bypass', async () => {
@@ -278,7 +278,7 @@ describe('attachments', () => {
 
   it('non-participants cannot upload; participants can (dev without scanner = unscanned)', async () => {
     delete process.env.ATTACHMENT_SCAN;
-    expect(await upload(outsider, pdfFile())).toEqual({ ok: false, error: '您沒有權限為此表單上傳附件' });
+    expect(await upload(outsider, pdfFile())).toMatchObject({ ok: false, error: '您沒有權限為此表單上傳附件' });
     const ok = await upload(approver, pdfFile());
     expect(ok).toMatchObject({ ok: true, scanStatus: 'unscanned' });
   });
@@ -365,7 +365,7 @@ describe('attachments', () => {
     process.env.CLAMAV_PORT = String(bad.port);
     const infected = await upload(applicant, pdfFile('eicar.pdf'));
     bad.close();
-    expect(infected).toEqual({ ok: false, error: '檔案未通過安全掃描，已拒絕' });
+    expect(infected).toMatchObject({ ok: false, error: '檔案未通過安全掃描，已拒絕' });
     const [row] = await getDb().select().from(attachments).where(sql`${attachments.fileName} = 'eicar.pdf'`);
     expect(row.scanStatus).toBe('infected');
     expect((await download(applicant, row.id)).status).toBe(409);

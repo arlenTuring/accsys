@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { approvePurchaseOrderStep, returnPurchaseOrderStep } from '@/lib/purchase-orders/actions';
 
-export function ApprovalActions({ orderId }: { orderId: string }) {
+export function ApprovalActions({ orderId, version }: { orderId: string; version: number }) {
   const router = useRouter();
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -13,7 +13,7 @@ export function ApprovalActions({ orderId }: { orderId: string }) {
   const onApprove = async () => {
     setBusy(true);
     setError(null);
-    const result = await approvePurchaseOrderStep(orderId);
+    const result = await approvePurchaseOrderStep(orderId, version);
     setBusy(false);
     if (result.ok) router.refresh();
     else setError(result.error);
@@ -26,7 +26,7 @@ export function ApprovalActions({ orderId }: { orderId: string }) {
     }
     setBusy(true);
     setError(null);
-    const result = await returnPurchaseOrderStep(orderId, reason);
+    const result = await returnPurchaseOrderStep(orderId, reason, version);
     setBusy(false);
     if (result.ok) router.refresh();
     else setError(result.error);

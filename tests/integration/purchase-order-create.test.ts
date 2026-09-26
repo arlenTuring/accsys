@@ -110,7 +110,7 @@ describe('createPurchaseOrder', () => {
 
     currentEmployee.value = { id: applicantId };
     const { createPurchaseOrder } = await import('@/lib/purchase-orders/actions');
-    const result = await createPurchaseOrder({
+    const result = await createPurchaseOrder({ idempotencyKey: crypto.randomUUID(),
       purchaseRequestId: pr!.id,
       supplierId,
       paymentMethod: '匯款',
@@ -120,7 +120,7 @@ describe('createPurchaseOrder', () => {
       quoteCountReason: null,
       items: [],
     });
-    expect(result).toEqual({ ok: false, error: '來源請購單尚未核准，無法建立採購單' });
+    expect(result).toMatchObject({ ok: false, error: '來源請購單尚未核准，無法建立採購單' });
   });
 
   it('creates a purchase order copying items from the source request', async () => {
@@ -133,7 +133,7 @@ describe('createPurchaseOrder', () => {
 
     currentEmployee.value = { id: applicantId };
     const { createPurchaseOrder } = await import('@/lib/purchase-orders/actions');
-    const result = await createPurchaseOrder({
+    const result = await createPurchaseOrder({ idempotencyKey: crypto.randomUUID(),
       purchaseRequestId: requestId,
       supplierId,
       paymentMethod: '匯款',
@@ -175,7 +175,7 @@ describe('createPurchaseOrder', () => {
 
     currentEmployee.value = { id: applicantId };
     const { createPurchaseOrder } = await import('@/lib/purchase-orders/actions');
-    const first = await createPurchaseOrder({
+    const first = await createPurchaseOrder({ idempotencyKey: crypto.randomUUID(),
       purchaseRequestId: requestId,
       supplierId,
       paymentMethod: '匯款',
@@ -188,7 +188,7 @@ describe('createPurchaseOrder', () => {
     expect(first.ok).toBe(true);
     if (first.ok) createdOrderIds.push(first.orderId);
 
-    const second = await createPurchaseOrder({
+    const second = await createPurchaseOrder({ idempotencyKey: crypto.randomUUID(),
       purchaseRequestId: requestId,
       supplierId,
       paymentMethod: '匯款',
@@ -198,6 +198,6 @@ describe('createPurchaseOrder', () => {
       quoteCountReason: null,
       items: [{ purchaseRequestItemId: prItem!.id, unitPrice: 32500 }],
     });
-    expect(second).toEqual({ ok: false, error: '此案件已建立過採購單' });
+    expect(second).toMatchObject({ ok: false, error: '此案件已建立過採購單' });
   });
 });

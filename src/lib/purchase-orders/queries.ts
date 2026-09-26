@@ -45,6 +45,8 @@ export type OrderDetail = {
   applicantName: string;
   departmentName: string;
   currentStepOrder: number | null;
+  /** Edits and decisions must send this back (stale-edit protection). */
+  version: number;
   purchaseRequestId: string;
   items: OrderDetailItem[];
   steps: OrderDetailStep[];
@@ -93,7 +95,7 @@ export async function getPurchaseOrderDetail(orderId: string): Promise<OrderDeta
   const { data: order } = await supabase
     .from('purchase_orders')
     .select(
-      'id, purchase_request_id, applicant_employee_id, supplier_id, total_amount, status, payment_method, payment_terms, expected_delivery_days, quote_count, quote_count_reason, current_step_order, procurement_cases(case_number), applicant:employees!applicant_employee_id(name), departments(name), suppliers(name)'
+      'id, purchase_request_id, applicant_employee_id, supplier_id, total_amount, status, payment_method, payment_terms, expected_delivery_days, quote_count, quote_count_reason, current_step_order, version, procurement_cases(case_number), applicant:employees!applicant_employee_id(name), departments(name), suppliers(name)'
     )
     .eq('id', orderId)
     .maybeSingle();
@@ -130,6 +132,7 @@ export async function getPurchaseOrderDetail(orderId: string): Promise<OrderDeta
     applicantName: (order.applicant as unknown as { name: string }).name,
     departmentName: (order.departments as unknown as { name: string }).name,
     currentStepOrder: order.current_step_order,
+    version: Number(order.version),
     purchaseRequestId: order.purchase_request_id,
     items: (items ?? []).map((i) => ({
       lineNo: i.line_no,

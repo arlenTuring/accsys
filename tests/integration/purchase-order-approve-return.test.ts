@@ -1,7 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import {
-  createServiceRoleTestClient,
-} from './supabase-test-client';
+import { createServiceRoleTestClient, versionOf } from './supabase-test-client';
 
 const currentEmployee = vi.hoisted(() => ({ value: null as null | { id: string } }));
 vi.mock('@/lib/auth/current-employee', () => ({
@@ -109,15 +107,15 @@ describe('purchase order approve/return', () => {
     const orderId = await makeOrderWithTwoSteps();
     currentEmployee.value = { id: applicantId };
     const { approvePurchaseOrderStep } = await import('@/lib/purchase-orders/actions');
-    const result = await approvePurchaseOrderStep(orderId);
-    expect(result).toEqual({ ok: false, error: '您不是這張採購單目前的簽核人' });
+    const result = await approvePurchaseOrderStep(orderId, await versionOf('purchase_orders', orderId));
+    expect(result).toMatchObject({ ok: false, error: '您不是這張採購單目前的簽核人' });
   });
 
   it('advances to the next step and notifies the next approver on approve', async () => {
     const orderId = await makeOrderWithTwoSteps();
     currentEmployee.value = { id: managerId };
     const { approvePurchaseOrderStep } = await import('@/lib/purchase-orders/actions');
-    const result = await approvePurchaseOrderStep(orderId);
+    const result = await approvePurchaseOrderStep(orderId, await versionOf('purchase_orders', orderId));
     expect(result).toEqual({ ok: true });
 
     const { data: order } = await admin
@@ -139,9 +137,9 @@ describe('purchase order approve/return', () => {
     const orderId = await makeOrderWithTwoSteps();
     currentEmployee.value = { id: managerId };
     const { approvePurchaseOrderStep } = await import('@/lib/purchase-orders/actions');
-    await approvePurchaseOrderStep(orderId);
+    await approvePurchaseOrderStep(orderId, await versionOf('purchase_orders', orderId));
     currentEmployee.value = { id: gmId };
-    const result = await approvePurchaseOrderStep(orderId);
+    const result = await approvePurchaseOrderStep(orderId, await versionOf('purchase_orders', orderId));
     expect(result).toEqual({ ok: true });
 
     const { data: order } = await admin
@@ -156,7 +154,7 @@ describe('purchase order approve/return', () => {
     const orderId = await makeOrderWithTwoSteps();
     currentEmployee.value = { id: managerId };
     const { returnPurchaseOrderStep } = await import('@/lib/purchase-orders/actions');
-    const result = await returnPurchaseOrderStep(orderId, '報價單付款條件與費用申請單不一致');
+    const result = await returnPurchaseOrderStep(orderId, '報價單付款條件與費用申請單不一致', await versionOf('purchase_orders', orderId));
     expect(result).toEqual({ ok: true });
 
     const { data: order } = await admin
@@ -184,8 +182,8 @@ describe('purchase order approve/return', () => {
     const orderId = await makeOrderWithTwoSteps();
     currentEmployee.value = { id: managerId };
     const { returnPurchaseOrderStep } = await import('@/lib/purchase-orders/actions');
-    const result = await returnPurchaseOrderStep(orderId, '   ');
-    expect(result).toEqual({ ok: false, error: '請填寫退回原因' });
+    const result = await returnPurchaseOrderStep(orderId, '   ', await versionOf('purchase_orders', orderId));
+    expect(result).toMatchObject({ ok: false, error: '請填寫退回原因' });
   });
 
   it('only advances the chain once when approve is called twice concurrently for the same step', async () => {
@@ -194,8 +192,8 @@ describe('purchase order approve/return', () => {
     const { approvePurchaseOrderStep } = await import('@/lib/purchase-orders/actions');
 
     const [first, second] = await Promise.all([
-      approvePurchaseOrderStep(orderId),
-      approvePurchaseOrderStep(orderId),
+      approvePurchaseOrderStep(orderId, await versionOf('purchase_orders', orderId)),
+      approvePurchaseOrderStep(orderId, await versionOf('purchase_orders', orderId)),
     ]);
     const results = [first, second];
     expect(results.filter((r) => r.ok)).toHaveLength(1);

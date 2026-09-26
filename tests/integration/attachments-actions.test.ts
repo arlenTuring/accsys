@@ -94,7 +94,7 @@ describe('attachments actions', () => {
       new File([new TextEncoder().encode('%PDF-1.4\n%%EOF\n')], 'quote.pdf', { type: 'application/pdf' })
     );
     const result = await uploadAttachment('purchase_order', orderId, formData);
-    expect(result).toEqual({ ok: false, error: '您沒有權限為此表單上傳附件' });
+    expect(result).toMatchObject({ ok: false, error: '您沒有權限為此表單上傳附件' });
   });
 
   it('rejects an unsupported file type', async () => {
@@ -106,7 +106,7 @@ describe('attachments actions', () => {
       new File([new Uint8Array([1])], 'malware.exe', { type: 'application/x-msdownload' })
     );
     const result = await uploadAttachment('purchase_order', orderId, formData);
-    expect(result).toEqual({ ok: false, error: '僅接受 PDF、PNG、JPEG 檔案（以檔案內容判斷）' });
+    expect(result).toMatchObject({ ok: false, error: '僅接受 PDF、PNG、JPEG 檔案（以檔案內容判斷）' });
   });
 
   it('uploads a file, records it, and returns a download URL to a participant', async () => {

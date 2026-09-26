@@ -155,7 +155,7 @@ export default async function PurchaseOrderDetailPage({
         </section>
       )}
 
-      {isCurrentApprover && <ApprovalActions orderId={detail.id} />}
+      {isCurrentApprover && <ApprovalActions orderId={detail.id} version={detail.version} />}
     </main>
   );
 }

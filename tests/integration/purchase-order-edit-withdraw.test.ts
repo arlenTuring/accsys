@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createServiceRoleTestClient } from './supabase-test-client';
+import { createServiceRoleTestClient, versionOf } from './supabase-test-client';
 
 const currentEmployee = vi.hoisted(() => ({ value: null as null | { id: string; role: string; departmentId: string } }));
 vi.mock('@/lib/auth/current-employee', () => ({
@@ -135,7 +135,7 @@ describe('purchase order edit/withdraw', () => {
 
     currentEmployee.value = { id: applicantId, role: 'staff', departmentId };
     const { createPurchaseOrder } = await import('@/lib/purchase-orders/actions');
-    const result = await createPurchaseOrder({
+    const result = await createPurchaseOrder({ idempotencyKey: crypto.randomUUID(),
       purchaseRequestId: pr!.id,
       supplierId,
       paymentMethod: '匯款',
@@ -159,7 +159,7 @@ describe('purchase order edit/withdraw', () => {
       .single();
     currentEmployee.value = { id: otherEmployeeId, role: 'staff', departmentId };
     const { updatePurchaseOrder } = await import('@/lib/purchase-orders/actions');
-    const result = await updatePurchaseOrder(orderId, {
+    const result = await updatePurchaseOrder(orderId, { expectedVersion: await versionOf('purchase_orders', orderId),
       supplierId,
       paymentMethod: '匯款',
       paymentTerms: '貨到付款',
@@ -168,7 +168,7 @@ describe('purchase order edit/withdraw', () => {
       quoteCountReason: '僅一家廠商',
       items: [{ purchaseOrderItemId: item!.id, unitPrice: 6000 }],
     });
-    expect(result).toEqual({ ok: false, error: '只有申請人可以修改這張採購單' });
+    expect(result).toMatchObject({ ok: false, error: '只有申請人可以修改這張採購單' });
   });
 
   it('allows the applicant to edit before any approval, rebuilding the chain', async () => {
@@ -180,7 +180,7 @@ describe('purchase order edit/withdraw', () => {
       .single();
     currentEmployee.value = { id: applicantId, role: 'staff', departmentId };
     const { updatePurchaseOrder } = await import('@/lib/purchase-orders/actions');
-    const result = await updatePurchaseOrder(orderId, {
+    const result = await updatePurchaseOrder(orderId, { expectedVersion: await versionOf('purchase_orders', orderId),
       supplierId,
       paymentMethod: '匯款',
       paymentTerms: '月結30天',
@@ -206,7 +206,7 @@ describe('purchase order edit/withdraw', () => {
     const orderId = await createTestOrder();
     currentEmployee.value = { id: managerId, role: 'staff', departmentId };
     const { approvePurchaseOrderStep } = await import('@/lib/purchase-orders/actions');
-    await approvePurchaseOrderStep(orderId);
+    await approvePurchaseOrderStep(orderId, await versionOf('purchase_orders', orderId));
 
     const { data: item } = await admin
       .from('purchase_order_items')
@@ -215,7 +215,7 @@ describe('purchase order edit/withdraw', () => {
       .single();
     currentEmployee.value = { id: applicantId, role: 'staff', departmentId };
     const { updatePurchaseOrder } = await import('@/lib/purchase-orders/actions');
-    const result = await updatePurchaseOrder(orderId, {
+    const result = await updatePurchaseOrder(orderId, { expectedVersion: await versionOf('purchase_orders', orderId),
       supplierId,
       paymentMethod: '匯款',
       paymentTerms: '貨到付款',
@@ -224,7 +224,7 @@ describe('purchase order edit/withdraw', () => {
       quoteCountReason: '僅一家廠商',
       items: [{ purchaseOrderItemId: item!.id, unitPrice: 9000 }],
     });
-    expect(result).toEqual({ ok: false, error: '只有尚未有人簽核的採購單可以修改' });
+    expect(result).toMatchObject({ ok: false, error: '只有尚未有人簽核的採購單可以修改' });
   });
 
   it('rejects withdraw from a non-applicant', async () => {
@@ -232,7 +232,7 @@ describe('purchase order edit/withdraw', () => {
     currentEmployee.value = { id: otherEmployeeId, role: 'staff', departmentId };
     const { withdrawPurchaseOrder } = await import('@/lib/purchase-orders/actions');
     const result = await withdrawPurchaseOrder(orderId);
-    expect(result).toEqual({ ok: false, error: '只有申請人可以撤回這張採購單' });
+    expect(result).toMatchObject({ ok: false, error: '只有申請人可以撤回這張採購單' });
   });
 
   it('allows the applicant to withdraw before any approval, without deleting the row', async () => {

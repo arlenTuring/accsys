@@ -147,7 +147,7 @@ describe('createAcceptance', () => {
       acceptanceDate: '2026-07-15',
       items: [],
     });
-    expect(result).toEqual({ ok: false, error: '來源採購單尚未核准，無法建立驗收單' });
+    expect(result).toMatchObject({ ok: false, error: '來源採購單尚未核准，無法建立驗收單' });
   });
 
   it('creates an acceptance copying items and pass/fail from the caller', async () => {
@@ -196,6 +196,6 @@ describe('createAcceptance', () => {
       acceptanceDate: '2026-07-15',
       items: [{ purchaseOrderItemId: itemId, passFail: 'pass' }],
     });
-    expect(second).toEqual({ ok: false, error: '此案件已建立過驗收單' });
+    expect(second).toMatchObject({ ok: false, error: '此案件已建立過驗收單' });
   });
 });

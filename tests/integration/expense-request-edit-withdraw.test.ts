@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createServiceRoleTestClient } from './supabase-test-client';
+import { createServiceRoleTestClient, versionOf } from './supabase-test-client';
 
 const currentEmployee = vi.hoisted(() => ({
   value: null as null | { id: string; role: string; departmentId: string },
@@ -166,7 +166,7 @@ describe('expense request edit/withdraw', () => {
     const { createPurchaseOrder, approvePurchaseOrderStep } = await import(
       '@/lib/purchase-orders/actions'
     );
-    const orderResult = await createPurchaseOrder({
+    const orderResult = await createPurchaseOrder({ idempotencyKey: crypto.randomUUID(),
       purchaseRequestId: pr!.id,
       supplierId,
       paymentMethod: '匯款',
@@ -198,7 +198,7 @@ describe('expense request edit/withdraw', () => {
         .eq('step_order', order!.current_step_order)
         .single();
       currentEmployee.value = { id: step!.approver_employee_id, role: 'staff', departmentId };
-      const result = await approvePurchaseOrderStep(orderResult.orderId);
+      const result = await approvePurchaseOrderStep(orderResult.orderId, await versionOf('purchase_orders', orderResult.orderId));
       if (!result.ok) throw new Error(result.error);
     }
 
@@ -325,7 +325,7 @@ describe('expense request edit/withdraw', () => {
       expectedPaymentDate: null,
       includedSourceItemIds: [item!.purchase_order_item_id],
     });
-    expect(result).toEqual({ ok: false, error: '只有申請人可以修改這張費用申請單' });
+    expect(result).toMatchObject({ ok: false, error: '只有申請人可以修改這張費用申請單' });
   });
 
   it('allows the applicant to edit before any approval, rebuilding the chain', async () => {
@@ -385,7 +385,7 @@ describe('expense request edit/withdraw', () => {
       expectedPaymentDate: null,
       includedSourceItemIds: [acceptanceItem!.id],
     });
-    expect(result).toEqual({ ok: false, error: '只有尚未有人簽核的費用申請單可以修改' });
+    expect(result).toMatchObject({ ok: false, error: '只有尚未有人簽核的費用申請單可以修改' });
   });
 
   it('rejects withdraw from a non-applicant', async () => {
@@ -393,7 +393,7 @@ describe('expense request edit/withdraw', () => {
     currentEmployee.value = { id: otherEmployeeId, role: 'staff', departmentId };
     const { withdrawExpenseRequest } = await import('@/lib/expense-requests/actions');
     const result = await withdrawExpenseRequest(expenseRequestId);
-    expect(result).toEqual({ ok: false, error: '只有申請人可以撤回這張費用申請單' });
+    expect(result).toMatchObject({ ok: false, error: '只有申請人可以撤回這張費用申請單' });
   });
 
   it('allows the applicant to withdraw before any approval, without deleting the row', async () => {

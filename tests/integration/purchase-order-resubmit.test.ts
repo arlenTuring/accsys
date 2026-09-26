@@ -1,7 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import {
-  createServiceRoleTestClient,
-} from './supabase-test-client';
+import { createServiceRoleTestClient, versionOf } from './supabase-test-client';
 
 const currentEmployee = vi.hoisted(() => ({ value: null as null | { id: string } }));
 vi.mock('@/lib/auth/current-employee', () => ({
@@ -108,6 +106,7 @@ describe('resubmitPurchaseOrder', () => {
     currentEmployee.value = { id: applicantId };
     const { resubmitPurchaseOrder } = await import('@/lib/purchase-orders/actions');
     const result = await resubmitPurchaseOrder(order!.id, {
+      expectedVersion: await versionOf('purchase_orders', order!.id),
       supplierId,
       paymentMethod: '匯款',
       paymentTerms: '月結30天',
@@ -176,6 +175,7 @@ describe('resubmitPurchaseOrder', () => {
     currentEmployee.value = { id: managerId };
     const { resubmitPurchaseOrder } = await import('@/lib/purchase-orders/actions');
     const result = await resubmitPurchaseOrder(order!.id, {
+      expectedVersion: await versionOf('purchase_orders', order!.id),
       supplierId,
       paymentMethod: '匯款',
       paymentTerms: '貨到付款',
@@ -184,6 +184,6 @@ describe('resubmitPurchaseOrder', () => {
       quoteCountReason: '僅一家廠商',
       items: [],
     });
-    expect(result).toEqual({ ok: false, error: '只有申請人可以重新送出這張採購單' });
+    expect(result).toMatchObject({ ok: false, error: '只有申請人可以重新送出這張採購單' });
   });
 });

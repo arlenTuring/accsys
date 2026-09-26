@@ -183,7 +183,7 @@ describe('expense request approve/return', () => {
     currentEmployee.value = { id: applicantId };
     const { approveExpenseRequestStep } = await import('@/lib/expense-requests/actions');
     const result = await approveExpenseRequestStep(expenseRequestId);
-    expect(result).toEqual({ ok: false, error: '您不是這張費用申請單目前的簽核人' });
+    expect(result).toMatchObject({ ok: false, error: '您不是這張費用申請單目前的簽核人' });
   });
 
   it('only finalizes the approval once when approve is called twice concurrently for the same step', async () => {

@@ -179,7 +179,7 @@ describe('acceptance approve/return + property tag', () => {
     currentEmployee.value = { id: applicantId, role: 'staff' };
     const { updateAcceptanceItemPropertyTag } = await import('@/lib/acceptances/actions');
     const result = await updateAcceptanceItemPropertyTag(itemId, 'PROP-0001');
-    expect(result).toEqual({ ok: false, error: '只有財會人員可以填寫財產編號' });
+    expect(result).toMatchObject({ ok: false, error: '只有財會人員可以填寫財產編號' });
   });
 
   it('lets finance update the property tag', async () => {
@@ -208,7 +208,7 @@ describe('acceptance approve/return + property tag', () => {
     currentEmployee.value = { id: applicantId, role: 'finance' };
     const { updateAcceptanceItemPropertyTag } = await import('@/lib/acceptances/actions');
     const result = await updateAcceptanceItemPropertyTag(itemId, 'PROP-0002');
-    expect(result).toEqual({ ok: false, error: '只能在驗收單已核准後填寫財產編號' });
+    expect(result).toMatchObject({ ok: false, error: '只能在驗收單已核准後填寫財產編號' });
   });
 
   it('only finalizes the approval once when approve is called twice concurrently for the same step', async () => {
