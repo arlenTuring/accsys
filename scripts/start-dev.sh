@@ -63,6 +63,16 @@ if [[ ! -f .env.local ]]; then
   echo "   已寫入本機開發預設（DEV 登入已開啟）"
 fi
 
+# P2 login settings added after older .env.local files were created (non-secret defaults).
+if ! grep -q '^APP_ORIGIN=' .env.local; then
+  printf '\n# added by start-dev.sh (P2 login)\nAPP_ORIGIN=http://localhost:%s\n' "$PORT" >> .env.local
+  echo "   已在 .env.local 補上 APP_ORIGIN=http://localhost:${PORT}"
+fi
+if ! grep -q '^AUTH_MODE=' .env.local; then
+  printf 'AUTH_MODE=manual\n' >> .env.local
+  echo "   已在 .env.local 補上 AUTH_MODE=manual"
+fi
+
 if [[ ! -d node_modules ]]; then
   echo "📦 安裝 npm 依賴…"
   npm install

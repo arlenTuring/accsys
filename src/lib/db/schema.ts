@@ -12,6 +12,7 @@ import {
   numeric,
   pgTable,
   type PgTableExtraConfigValue,
+  primaryKey,
   text,
   timestamp,
   unique,
@@ -559,5 +560,75 @@ export const auditEvents = pgTable(
     ),
     index('audit_events_entity_idx').on(t.entityType, t.entityId, t.occurredAt),
     index('audit_events_actor_idx').on(t.actorEmployeeId, t.occurredAt),
+  ]
+);
+
+/**
+ * One row per OIDC login attempt, keyed by the SHA-256 of `state`. The
+ * callback consumes it atomically, so each authorization response is accepted
+ * at most once and only within its lifetime.
+ */
+export const oidcLoginStates = pgTable(
+  'oidc_login_states',
+  {
+    stateHash: text('state_hash').primaryKey(),
+    createdAt: createdAt(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    check('oidc_login_states_state_hash_check', sql`state_hash ~ '^[0-9a-f]{64}$'`),
+    index('oidc_login_states_expires_at_idx').on(t.expiresAt),
+  ]
+);
+
+/**
+ * A verified Google account that is not bound to any employee yet. Created on
+ * login; an admin approves it for a specific employee (or rejects it). Email is
+ * shown to help the admin decide but is never used to bind automatically.
+ */
+export const identityLinkRequests = pgTable(
+  'identity_link_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    provider: text('provider').notNull(),
+    issuer: text('issuer').notNull(),
+    subject: text('subject').notNull(),
+    email: text('email').notNull(),
+    displayName: text('display_name'),
+    status: text('status').notNull().default('pending'),
+    conflictReason: text('conflict_reason'),
+    attemptCount: integer('attempt_count').notNull().default(1),
+    requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+    lastAttemptAt: timestamp('last_attempt_at', { withTimezone: true }).notNull().defaultNow(),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    decidedByEmployeeId: uuid('decided_by_employee_id'),
+    approvedEmployeeId: uuid('approved_employee_id'),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    fk('identity_link_requests_decided_by_employee_id_fkey', t.decidedByEmployeeId, employees.id),
+    fk('identity_link_requests_approved_employee_id_fkey', t.approvedEmployeeId, employees.id),
+    check('identity_link_requests_provider_check', sql`provider in ('google')`),
+    check('identity_link_requests_status_check', sql`status in ('pending', 'approved', 'rejected')`),
+    check(
+      'identity_link_requests_decision_check',
+      sql`(status = 'pending') = (decided_at is null) and (status = 'approved') = (approved_employee_id is not null)`
+    ),
+    unique('identity_link_requests_provider_issuer_subject_key').on(t.provider, t.issuer, t.subject),
+    index('identity_link_requests_status_idx').on(t.status, t.lastAttemptAt),
+  ]
+);
+
+/** Fixed-window counters for login and admin rate limits (shared across processes). */
+export const rateLimitBuckets = pgTable(
+  'rate_limit_buckets',
+  {
+    bucketKey: text('bucket_key').notNull(),
+    windowStart: timestamp('window_start', { withTimezone: true }).notNull(),
+    hits: integer('hits').notNull().default(0),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    primaryKey({ name: 'rate_limit_buckets_pkey', columns: [t.bucketKey, t.windowStart] }),
+    index('rate_limit_buckets_window_start_idx').on(t.windowStart),
   ]
 );

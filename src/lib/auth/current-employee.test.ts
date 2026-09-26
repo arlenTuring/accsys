@@ -1,82 +1,22 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { getCurrentEmployee } from './current-employee';
-import { getSession } from '@/lib/auth/session';
-import { getDb } from '@/lib/db';
+import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/lib/auth/session', () => ({
-  getSession: vi.fn(),
-}));
+vi.mock('next/headers', () => ({ cookies: vi.fn() }));
+vi.mock('@/lib/db', () => ({ getDb: vi.fn() }));
 
-vi.mock('@/lib/db', () => ({
-  getDb: vi.fn(),
-}));
+import { hasRecentAuthentication, type CurrentEmployee } from './current-employee';
 
-function mockSession(email?: string) {
-  vi.mocked(getSession).mockResolvedValue({ email, isLoggedIn: !!email } as never);
-}
+// Session lookup itself (revocation, expiry, disabled employees, role changes)
+// is covered against a real database in tests/integration/auth-*.test.ts.
 
-function mockEmployeeRow(row: Record<string, unknown> | null) {
-  vi.mocked(getDb).mockReturnValue({
-    select: () => ({
-      from: () => ({
-        innerJoin: () => ({
-          where: () => ({
-            limit: async () => (row ? [row] : []),
-          }),
-        }),
-      }),
-    }),
-  } as never);
-}
+describe('hasRecentAuthentication', () => {
+  const at = (iso: string) => ({ authenticatedAt: new Date(iso) }) as CurrentEmployee;
+  const now = Date.parse('2026-09-25T10:00:00Z');
 
-describe('getCurrentEmployee', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+  it('accepts a login within the window', () => {
+    expect(hasRecentAuthentication(at('2026-09-25T09:50:00Z'), 15 * 60_000, now)).toBe(true);
   });
 
-  it('returns null when there is no logged-in user', async () => {
-    mockSession(undefined);
-    const result = await getCurrentEmployee();
-    expect(result).toBeNull();
-  });
-
-  it('returns null when the email has no matching employee row', async () => {
-    mockSession('nobody@turingdrive.ai');
-    mockEmployeeRow(null);
-    const result = await getCurrentEmployee();
-    expect(result).toBeNull();
-  });
-
-  it('maps the employee row to a CurrentEmployee', async () => {
-    mockSession('user@turingdrive.ai');
-    mockEmployeeRow({
-      id: 'emp-1',
-      employeeCode: '0091',
-      name: '李盈萱',
-      email: 'user@turingdrive.ai',
-      title: '工程師',
-      departmentId: 'dept-1',
-      departmentCode: 'RD',
-      departmentName: '研發部',
-      role: 'admin',
-      isGeneralManager: false,
-      isChairman: false,
-    });
-
-    const result = await getCurrentEmployee();
-
-    expect(result).toEqual({
-      id: 'emp-1',
-      employeeCode: '0091',
-      name: '李盈萱',
-      email: 'user@turingdrive.ai',
-      title: '工程師',
-      departmentId: 'dept-1',
-      departmentCode: 'RD',
-      departmentName: '研發部',
-      role: 'admin',
-      isGeneralManager: false,
-      isChairman: false,
-    });
+  it('rejects an older login', () => {
+    expect(hasRecentAuthentication(at('2026-09-25T09:40:00Z'), 15 * 60_000, now)).toBe(false);
   });
 });

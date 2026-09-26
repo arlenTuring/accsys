@@ -17,7 +17,10 @@ services:
       # Required; compose refuses to start without them. Put them in a
       # git-ignored `.env` next to this file or export them in the shell.
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET (32+ random chars)}
-      ALLOWED_GOOGLE_DOMAIN: ${ALLOWED_GOOGLE_DOMAIN:?set ALLOWED_GOOGLE_DOMAIN}
+      APP_ORIGIN: ${APP_ORIGIN:?set APP_ORIGIN (the public https origin)}
+      AUTH_MODE: ${AUTH_MODE:-manual}
+      ALLOWED_GOOGLE_DOMAINS: ${ALLOWED_GOOGLE_DOMAINS:?set ALLOWED_GOOGLE_DOMAINS}
+      TRUSTED_CLIENT_IP_HEADER: ${TRUSTED_CLIENT_IP_HEADER:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       STORAGE_LOCAL_PATH: /data/attachments

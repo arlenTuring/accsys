@@ -29,6 +29,13 @@
       "when": 1790311711259,
       "tag": "0003_audit_append_only",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790313651213,
+      "tag": "0004_login_states_link_requests_rate_limits",
+      "breakpoints": true
     }
   ]
 }

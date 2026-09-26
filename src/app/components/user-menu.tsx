@@ -142,12 +142,14 @@ export function UserMenu({ employee }: UserMenuProps) {
                 切換示範角色
               </Link>
             )}
-            <a
-              href="/auth/logout"
-              className="block rounded-md px-3 py-2 text-sm text-td-muted hover:bg-slate-50 hover:text-td-blue-dark"
-            >
-              登出
-            </a>
+            <form action="/auth/logout" method="post">
+              <button
+                type="submit"
+                className="block w-full rounded-md px-3 py-2 text-left text-sm text-td-muted hover:bg-slate-50 hover:text-td-blue-dark"
+              >
+                登出
+              </button>
+            </form>
           </div>
         </div>
       )}

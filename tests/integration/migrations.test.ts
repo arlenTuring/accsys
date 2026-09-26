@@ -4,7 +4,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import postgres, { type Sql } from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { schemaFingerprint } from '../../scripts/lib/migrations';
+import { BASELINE_TAGS, loadMigrations, schemaFingerprint } from '../../scripts/lib/migrations';
 import { resolveAdminDatabaseUrl } from './test-database-url';
 
 /**
@@ -15,6 +15,9 @@ import { resolveAdminDatabaseUrl } from './test-database-url';
  */
 
 const run = promisify(execFile);
+const JOURNAL = loadMigrations();
+const TOTAL = JOURNAL.length;
+const AFTER_BASELINE = JOURNAL.filter((m) => !BASELINE_TAGS.includes(m.tag)).map((m) => m.tag);
 const ROOT = path.resolve(__dirname, '../..');
 const TSX = path.join(ROOT, 'node_modules/.bin/tsx');
 const PASSWORDS = {
@@ -149,15 +152,15 @@ describe('migrations on an empty database', () => {
 
     const first = await runScript('db-migrate', name);
     expect(first.code, first.out).toBe(0);
-    expect(await appliedCount(db)).toBe(4);
+    expect(await appliedCount(db)).toBe(TOTAL);
     const before = await schemaFingerprint(db);
     expect(before).toContain('extension pgcrypto');
     expect(before.some((l) => l.startsWith('column audit_events.details'))).toBe(true);
 
     const second = await runScript('db-migrate', name);
     expect(second.code, second.out).toBe(0);
-    expect(second.out).toContain('Up to date (4 migrations applied)');
-    expect(await appliedCount(db)).toBe(4);
+    expect(second.out).toContain(`Up to date (${TOTAL} migrations applied)`);
+    expect(await appliedCount(db)).toBe(TOTAL);
     expect(await schemaFingerprint(db)).toEqual(before);
   });
 
@@ -167,7 +170,7 @@ describe('migrations on an empty database', () => {
     for (const r of results) expect(r.code, r.out).toBe(0);
     const db = connect(name);
     const rows = await db`select hash, count(*)::int as n from drizzle.__drizzle_migrations group by hash`;
-    expect(rows).toHaveLength(4);
+    expect(rows).toHaveLength(TOTAL);
     expect(rows.every((r) => r.n === 1)).toBe(true);
   });
 
@@ -197,15 +200,15 @@ describe('adopting a database created by the legacy schema script', () => {
 
     const adopted = await runScript('db-baseline', name);
     expect(adopted.code, adopted.out).toBe(0);
-    expect(await appliedCount(db)).toBe(2);
+    expect(await appliedCount(db)).toBe(BASELINE_TAGS.length);
     const again = await runScript('db-baseline', name);
     expect(again.code, again.out).toBe(0);
     expect(again.out).toContain('Nothing to do');
 
     const upgraded = await runScript('db-migrate', name);
     expect(upgraded.code, upgraded.out).toBe(0);
-    expect(upgraded.out).toContain('0002_identity_sessions_audit, 0003_audit_append_only');
-    expect(await appliedCount(db)).toBe(4);
+    expect(upgraded.out).toContain(AFTER_BASELINE.join(', '));
+    expect(await appliedCount(db)).toBe(TOTAL);
 
     expect(await dataSnapshot(db)).toEqual(before);
     const [{ invalid }] = await db`

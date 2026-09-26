@@ -21,4 +21,11 @@ describe('isPublicPath', () => {
   it('treats admin pages as protected', () => {
     expect(isPublicPath('/admin/master-data')).toBe(false);
   });
+
+  it('does not treat look-alike prefixes as public', () => {
+    expect(isPublicPath('/authx')).toBe(false);
+    expect(isPublicPath('/auth')).toBe(false);
+    expect(isPublicPath('/login-admin')).toBe(false);
+    expect(isPublicPath('/loginx/secret')).toBe(false);
+  });
 });

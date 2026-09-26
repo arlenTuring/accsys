@@ -58,6 +58,7 @@ export function TopNav({ employee, pendingApprovalCount = 0 }: TopNavProps) {
           {showFinance && <NavItem href="/case-tracking" label="簽核追蹤" />}
           {showFinance && <NavItem href="/budget-codes" label="預算管理" />}
           {employee.role === 'admin' && <NavItem href="/admin/master-data" label="主檔" />}
+          {employee.role === 'admin' && <NavItem href="/admin/accounts" label="帳號" />}
           <NavItem href="/tools" label="工具區" />
         </nav>
 

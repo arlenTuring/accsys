@@ -41,6 +41,9 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const errorMessage = getLoginErrorMessage(searchParams.get('error'));
   const showDevLogin = isDevLoginEnabled();
+  // The server re-validates returnTo; this only carries it through.
+  const returnTo = searchParams.get('returnTo');
+  const googleHref = returnTo ? `/auth/google?returnTo=${encodeURIComponent(returnTo)}` : '/auth/google';
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-td-surface px-4 py-10 sm:px-6 lg:px-8">
@@ -70,7 +73,7 @@ function LoginForm() {
           </div>
         ) : (
           <div className="card mx-auto max-w-md">
-            <a href="/auth/google" className="btn-primary w-full">
+            <a href={googleHref} className="btn-primary w-full">
               使用 Google 帳號登入
             </a>
           </div>
@@ -81,7 +84,7 @@ function LoginForm() {
             本機示範模式 · 各角色對應不同假資料與導覽項目
             <br />
             正式環境請使用{' '}
-            <a href="/auth/google" className="text-td-blue underline">
+            <a href={googleHref} className="text-td-blue underline">
               Google 公司帳號
             </a>
           </p>

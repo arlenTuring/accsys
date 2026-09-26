@@ -1,25 +1,35 @@
-import { NextResponse } from 'next/server';
-import { createPkce, getGoogleAuthUrl } from '@/lib/auth/google';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse, type NextRequest } from 'next/server';
+import { AuthConfigError, getAuthConfig } from '@/lib/auth/config';
+import { clientIp, loginErrorRedirect, noStore, setLoginCookie } from '@/lib/auth/http';
+import { startLogin } from '@/lib/auth/login-state';
+import { buildAuthorizationUrl, GoogleNotConfigured } from '@/lib/auth/oidc';
+import { safeReturnTo } from '@/lib/auth/redirect';
+import { hitRateLimit, RATE_LIMITS } from '@/lib/rate-limit';
 
-export async function GET(request: Request) {
-  const { origin } = new URL(request.url);
-  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
-  if (!clientId) {
-    return NextResponse.redirect(`${origin}/login?error=google_not_configured`);
+export const dynamic = 'force-dynamic';
+
+export async function GET(request: NextRequest) {
+  let cfg;
+  try {
+    cfg = getAuthConfig();
+  } catch (err) {
+    console.error('[auth] login unavailable:', err instanceof AuthConfigError ? err.message : err);
+    return NextResponse.redirect(new URL('/login?error=auth_unavailable', request.nextUrl.origin), 303);
   }
 
-  const { verifier, challenge } = createPkce();
-  const session = await getSession();
-  session.email = undefined;
-  session.isLoggedIn = false;
-  session.oauthVerifier = verifier;
-  await session.save();
+  const limit = await hitRateLimit(`login-start:${clientIp(request, cfg)}`, RATE_LIMITS.loginStartPerIp);
+  if (!limit.allowed) return noStore(loginErrorRedirect(cfg, 'rate_limited'));
 
-  const url = getGoogleAuthUrl({
-    redirectUri: `${origin}/auth/callback`,
-    state: 'google',
-    codeChallenge: challenge,
-  });
-  return NextResponse.redirect(url);
+  try {
+    const returnTo = safeReturnTo(request.nextUrl.searchParams.get('returnTo'), cfg.appOrigin);
+    const { checks, cookieValue } = await startLogin(cfg, returnTo);
+    const url = await buildAuthorizationUrl(cfg, checks);
+    const res = NextResponse.redirect(url, 303);
+    setLoginCookie(res, cfg, cookieValue);
+    return noStore(res);
+  } catch (err) {
+    if (err instanceof GoogleNotConfigured) return noStore(loginErrorRedirect(cfg, 'google_not_configured'));
+    console.error('[auth] could not start login:', err instanceof Error ? err.message : err);
+    return noStore(loginErrorRedirect(cfg, 'auth_unavailable'));
+  }
 }

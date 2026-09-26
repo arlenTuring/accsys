@@ -1,59 +1,29 @@
-import { eq } from 'drizzle-orm';
-import { getSession } from '@/lib/auth/session';
-import { getDb } from '@/lib/db';
-import { departments, employees } from '@/lib/db/schema';
+import { cookies } from 'next/headers';
+import { cache } from 'react';
+import { sessionCookieNames } from '@/lib/auth/config';
+import { resolveSession, type SessionEmployee } from '@/lib/auth/sessions';
 
-export type CurrentEmployee = {
-  id: string;
-  employeeCode: string;
-  name: string;
-  email: string;
-  title: string | null;
-  departmentId: string;
-  departmentCode: string;
-  departmentName: string;
-  role: 'staff' | 'finance' | 'admin';
-  isGeneralManager: boolean;
-  isChairman: boolean;
-};
+export type CurrentEmployee = SessionEmployee;
 
-export async function getCurrentEmployee(): Promise<CurrentEmployee | null> {
-  const session = await getSession();
-  if (!session.email) return null;
+export async function readSessionToken(): Promise<string | undefined> {
+  const jar = await cookies();
+  for (const name of sessionCookieNames()) {
+    const value = jar.get(name)?.value;
+    if (value) return value;
+  }
+  return undefined;
+}
 
-  const rows = await getDb()
-    .select({
-      id: employees.id,
-      employeeCode: employees.employeeCode,
-      name: employees.name,
-      email: employees.googleEmail,
-      title: employees.title,
-      departmentId: employees.departmentId,
-      departmentCode: departments.code,
-      departmentName: departments.name,
-      role: employees.role,
-      isGeneralManager: employees.isGeneralManager,
-      isChairman: employees.isChairman,
-    })
-    .from(employees)
-    .innerJoin(departments, eq(employees.departmentId, departments.id))
-    .where(eq(employees.googleEmail, session.email))
-    .limit(1);
+/**
+ * The employee behind the current request's session, or null. Checked against
+ * the database on every request (revocation, access and role changes apply
+ * immediately); memoized only within a single request.
+ */
+export const getCurrentEmployee = cache(async (): Promise<CurrentEmployee | null> => {
+  return resolveSession(await readSessionToken());
+});
 
-  const data = rows[0];
-  if (!data || !data.email) return null;
-
-  return {
-    id: data.id,
-    employeeCode: data.employeeCode,
-    name: data.name,
-    email: data.email,
-    title: data.title,
-    departmentId: data.departmentId,
-    departmentCode: data.departmentCode,
-    departmentName: data.departmentName,
-    role: data.role as CurrentEmployee['role'],
-    isGeneralManager: data.isGeneralManager,
-    isChairman: data.isChairman,
-  };
+/** For sensitive admin actions: the login behind this session must be recent. */
+export function hasRecentAuthentication(employee: CurrentEmployee, maxAgeMs: number, now = Date.now()): boolean {
+  return now - employee.authenticatedAt.getTime() <= maxAgeMs;
 }

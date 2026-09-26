@@ -6,10 +6,10 @@
 
 - **框架**：Next.js 15（App Router + Server Actions）、React 19、TypeScript 5（strict）
 - **樣式**：Tailwind CSS 3
-- **後端 / 資料庫**：PostgreSQL（本機 Docker；正式環境 Cloud SQL）+ Drizzle
+- **後端 / 資料庫**：PostgreSQL 16 + Drizzle（本機 Docker；正式環境為公司地端主機）
 - **測試**：Vitest
-- **登入**：Google OAuth（限公司網域；本機可選開發登入）
-- **附件**：本機檔案目錄（正式環境改 Cloud Storage）
+- **登入**：Google Workspace OIDC（Authorization Code + PKCE，openid-client）＋ PostgreSQL 可撤銷 session；本機可選開發登入
+- **附件**：主機持久目錄
 - **Email 通知**：Nodemailer（SMTP，目前程式已就緒但尚未啟用寄送）
 
 ## 功能總覽
@@ -25,6 +25,7 @@
 | 待簽核清單 `/approvals` | 目前登入者所有待簽核項目彙總 |
 | 通知中心 `/notifications` | 簽核／退回等系統通知 |
 | 主檔資料總覽 `/admin/master-data`（限 `admin`） | 部門、員工、預算編號、供應商唯讀總覽 |
+| 帳號與登入綁定 `/admin/accounts`（限 `admin`） | 核准／拒絕 Google 帳號綁定、撤銷綁定、停用／啟用員工、調整角色（需 15 分鐘內登入，全部寫入稽核） |
 | 預算編號管理 `/budget-codes`（限 `finance`／`admin`） | 部門／專案預算編號的手動新增/編輯/刪除、Excel 批次匯入、專案主檔管理 |
 | 財會簽核追蹤頁 `/case-tracking`（限 `finance`／`admin`） | 全公司案件依「簽核中／已完成／已撤回」分類，可依部門/日期/關鍵字篩選 |
 
@@ -65,10 +66,16 @@ docs/superpowers/         各階段開發計畫（specs／plans）與交接文�
 
 ### 環境變數（`.env.local`）
 
+完整範本與說明見 `.env.local.example`。主要項目：
+
 ```bash
-DATABASE_URL=postgres://accsys:accsys@localhost:15432/accsys
+DATABASE_URL=postgres://accsys_app:...@127.0.0.1:15432/accsys   # 最小權限帳號
+MIGRATION_DATABASE_URL=postgres://accsys_migrator:...@...        # 只給 db:migrate
 SESSION_SECRET=                      # 至少 32 字元
-ALLOWED_GOOGLE_DOMAIN=turing-drive.com
+APP_ORIGIN=http://localhost:3001     # 固定網址；正式環境必須 https
+AUTH_MODE=manual
+ALLOWED_GOOGLE_DOMAINS=turing-drive.com
+SESSION_TTL_HOURS=8
 STORAGE_LOCAL_PATH=./data/attachments
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
@@ -142,6 +149,37 @@ npm run test:db:down   # 刪除容器與資料
 
 替代測試完成後（P5）才刪除舊檔。
 
+## 登入與帳號
+
+- **協定**：Google OIDC Authorization Code + PKCE（S256）。每次登入產生獨立 state／nonce／verifier，10 分鐘內有效、只能用一次（伺服器端記錄 state 雜湊）；callback 無論成功或失敗都清除登入交易 cookie。
+- **驗證**：ID token 簽章（JWKS）、issuer、audience、exp、nonce；`email_verified` 必須為 `true`；`hd` 與 email 網域都必須在 `ALLOWED_GOOGLE_DOMAINS`。授權網址裡的 `hd` 只是提示。
+- **身分**：以 issuer + `sub` 對應員工（`employee_identities`），email 只是屬性。同一個 Google 帳號改 email 仍是同一位員工；不同 Google 帳號使用相同 email 會被拒絕並標記衝突。
+- **綁定**：未綁定的帳號登入時只會建立申請（`identity_link_requests`），由管理員在 `/admin/accounts` 核准到指定員工；**不會**依 email 自動綁定，公司網域登入也不會自動取得權限。
+- **Session**：cookie 只放隨機 token（`__Host-accsys_sid`，HttpOnly、Secure、SameSite=Lax），資料庫只存 SHA-256。絕對壽命預設 8 小時、不自動續期。每個請求都重新檢查 session、員工停用狀態、綁定狀態與目前角色；登出（POST）、停用、撤銷綁定立即失效。舊版只有 email 的 `accsys_session` cookie 一律丟棄。
+- **CSRF／轉址**：Server Actions 使用 Next 內建來源檢查；登出等 route handler 要求 `Origin` 等於 `APP_ORIGIN`。所有轉址都用 `APP_ORIGIN`，不信任 Host／X-Forwarded-Host；`returnTo` 只接受站內路徑。
+- **限速**：登入開始與 callback 依 `TRUSTED_CLIENT_IP_HEADER` 每 10 分鐘 30 次；管理操作每人每 10 分鐘 60 次（PostgreSQL 共用計數，固定視窗到期自動解除，不會永久鎖帳號）。
+- **模式**：目前只支援 `AUTH_MODE=manual`；`directory`（Workspace 目錄同步、停權 freshness）屬 P6，設定成 directory 會拒絕啟動登入，不會降級放行。
+
+### 第一位管理員（一次性 bootstrap）
+
+1. 確認該員工在 `employees` 的角色為 `admin`。
+2. 本人用 Google 登入，畫面顯示「等待管理員核准」。
+3. 在伺服器 shell（不是網頁）執行：
+   ```bash
+   DATABASE_URL=postgres://accsys_app:***@HOST/accsys npm run auth:bootstrap -- --list
+   DATABASE_URL=postgres://accsys_app:***@HOST/accsys npm run auth:bootstrap -- --request <申請 id> --employee <員工代碼>
+   ```
+4. 只要已有任何啟用中的 admin 綁定，這個命令就會拒絕；之後一律在 `/admin/accounts` 核准。
+
+### 真實 Google 登入驗收（需公司授權，尚未執行）
+
+自動化測試使用本機假 OIDC provider；以下需公司 Google Workspace 管理者配合：
+
+1. 公司 Google API 專案建立 OAuth Client（Web application），已授權重新導向 URI 完全等於 `https://<正式 FQDN>/auth/callback`（測試環境另一組 client）。只需 `openid email profile`。
+2. 用測試帳號確認：正常登入、非公司網域帳號被拒、未綁定帳號進入待核准、核准後可登入、停用後立即登出、登出後返回上一頁不能再操作。
+3. 確認 Google 回傳 ID token 的 `iss` 為 `https://accounts.google.com`（程式嚴格比對 discovery 的 issuer）。
+4. 確認主機可 outbound HTTPS 到 `accounts.google.com`、`oauth2.googleapis.com`、`www.googleapis.com`（JWKS），DNS 與時間同步正常。
+
 ## 資料庫
 
 完整說明見 **[db/README.md](db/README.md)**。
@@ -178,4 +216,4 @@ npm run test:db:down   # 刪除容器與資料
 - 專案型預算編號若未指定負責人，需在資料庫手動指定 `owner_employee_id`，否則無法用於建立請購單。
 - 編輯「預算編號」欄位本身（不是編輯其他欄位）會因為 upsert-on-code 的設計而變成新增一筆，而不是改名——之後可考慮把編輯模式下的預算編號欄位改成唯讀。
 - 刪除預算編號沒有確認對話框（點了就刪，雖然被引用中的編號會被程式邏輯與資料庫外鍵雙重擋下）。
-- 正式環境將部署於 GCP：Cloud Run + Cloud SQL + Cloud Storage（尚未接上專案）。
+- 正式環境部署於公司地端主機（Docker Compose）；reverse proxy、HTTPS、備份屬 P7。
