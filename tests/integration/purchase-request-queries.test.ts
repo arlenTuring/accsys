@@ -42,7 +42,7 @@ describe('purchase request queries', () => {
     budgetCodeId = bc!.id;
     currentEmployee.value = { id: applicantId, departmentId: applicantDept };
     const actions = await import('@/lib/purchase-requests/actions');
-    const created = await actions.createPurchaseRequest({
+    const created = await actions.createPurchaseRequest({ idempotencyKey: crypto.randomUUID(),
       neededWithinDays: 30,
       items: [{ budgetCodeId, description: '查詢測試', quantity: 1, estimatedAmount: 5000 }],
     });

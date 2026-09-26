@@ -7,7 +7,7 @@ import {
   returnPurchaseRequestStep,
 } from '@/lib/purchase-requests/actions';
 
-export function ApprovalActions({ requestId }: { requestId: string }) {
+export function ApprovalActions({ requestId, version }: { requestId: string; version: number }) {
   const router = useRouter();
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -16,7 +16,7 @@ export function ApprovalActions({ requestId }: { requestId: string }) {
   const onApprove = async () => {
     setBusy(true);
     setError(null);
-    const result = await approvePurchaseRequestStep(requestId);
+    const result = await approvePurchaseRequestStep(requestId, version);
     setBusy(false);
     if (result.ok) router.refresh();
     else setError(result.error);
@@ -29,7 +29,7 @@ export function ApprovalActions({ requestId }: { requestId: string }) {
     }
     setBusy(true);
     setError(null);
-    const result = await returnPurchaseRequestStep(requestId, reason);
+    const result = await returnPurchaseRequestStep(requestId, reason, version);
     setBusy(false);
     if (result.ok) router.refresh();
     else setError(result.error);

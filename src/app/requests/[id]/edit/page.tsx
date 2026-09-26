@@ -36,6 +36,7 @@ export default async function EditRequestPage({ params }: { params: Promise<{ id
         mode="edit"
         requestId={id}
         initialNeededWithinDays={detail.neededWithinDays}
+        expectedVersion={detail.version}
         initialRows={detail.items.map((i) => ({
           budgetCodeId: budgetCodes.find((b) => b.code === i.budgetCode)?.id ?? '',
           itemCategory: i.itemCategory,

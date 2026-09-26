@@ -1,7 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import {
-  createServiceRoleTestClient,
-} from './supabase-test-client';
+import { createServiceRoleTestClient, versionOf } from './supabase-test-client';
 import { getSql } from '@/lib/db';
 
 const currentEmployee = vi.hoisted(
@@ -66,7 +64,7 @@ describe('approve/return purchase request', () => {
   async function seedRequest(): Promise<{ requestId: string; firstApproverId: string }> {
     currentEmployee.value = { id: applicantId, departmentId: applicantDept };
     const { createPurchaseRequest } = await import('@/lib/purchase-requests/actions');
-    const result = await createPurchaseRequest({
+    const result = await createPurchaseRequest({ idempotencyKey: crypto.randomUUID(),
       neededWithinDays: 30,
       items: [{ budgetCodeId, description: '簽核測試', quantity: 1, estimatedAmount: 5000 }],
     });
@@ -114,8 +112,8 @@ describe('approve/return purchase request', () => {
     const { requestId } = await seedRequest();
     currentEmployee.value = { id: '00000000-0000-0000-0000-000000000000' };
     const { approvePurchaseRequestStep } = await import('@/lib/purchase-requests/actions');
-    const result = await approvePurchaseRequestStep(requestId);
-    expect(result).toEqual({ ok: false, error: '您不是這張請購單目前的簽核人' });
+    const result = await approvePurchaseRequestStep(requestId, await versionOf('purchase_requests', requestId));
+    expect(result).toMatchObject({ ok: false, error: '您不是這張請購單目前的簽核人' });
   });
 
   it('advances the chain and finally approves the request', async () => {
@@ -138,7 +136,7 @@ describe('approve/return purchase request', () => {
         .single();
       const approverId = step!.approver_employee_id;
       currentEmployee.value = { id: approverId };
-      const result = await approvePurchaseRequestStep(requestId);
+      const result = await approvePurchaseRequestStep(requestId, await versionOf('purchase_requests', requestId));
       expect(result.ok).toBe(true);
       const { data: ownNotif } = await admin
         .from('notifications')
@@ -178,7 +176,7 @@ describe('approve/return purchase request', () => {
       .single();
     currentEmployee.value = { id: step!.approver_employee_id };
     const { returnPurchaseRequestStep } = await import('@/lib/purchase-requests/actions');
-    const result = await returnPurchaseRequestStep(requestId, '預算不足，請修改');
+    const result = await returnPurchaseRequestStep(requestId, '預算不足，請修改', await versionOf('purchase_requests', requestId));
     expect(result.ok).toBe(true);
     const { data: pr } = await admin
       .from('purchase_requests')
@@ -218,8 +216,8 @@ describe('approve/return purchase request', () => {
     const { approvePurchaseRequestStep } = await import('@/lib/purchase-requests/actions');
 
     const [first, second] = await Promise.all([
-      approvePurchaseRequestStep(requestId),
-      approvePurchaseRequestStep(requestId),
+      approvePurchaseRequestStep(requestId, await versionOf('purchase_requests', requestId)),
+      approvePurchaseRequestStep(requestId, await versionOf('purchase_requests', requestId)),
     ]);
     const results = [first, second];
     expect(results.filter((r) => r.ok)).toHaveLength(1);

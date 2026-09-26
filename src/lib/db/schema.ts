@@ -173,8 +173,11 @@ export const purchaseRequests = pgTable(
     currentStepOrder: integer('current_step_order'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
+    /** Incremented by every state change; edits must name the version they started from. */
+    version: integer('version').notNull().default(1),
   },
   (t): PgTableExtraConfigValue[] => [
+    check('purchase_requests_version_check', sql`version > 0`),
     fk('purchase_requests_procurement_case_id_fkey', t.procurementCaseId, procurementCases.id),
     fk('purchase_requests_applicant_employee_id_fkey', t.applicantEmployeeId, employees.id),
     fk('purchase_requests_department_id_fkey', t.departmentId, departments.id),
@@ -229,8 +232,11 @@ export const purchaseOrders = pgTable(
     currentStepOrder: integer('current_step_order'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
+    /** Incremented by every state change; edits must name the version they started from. */
+    version: integer('version').notNull().default(1),
   },
   (t): PgTableExtraConfigValue[] => [
+    check('purchase_orders_version_check', sql`version > 0`),
     fk('purchase_orders_procurement_case_id_fkey', t.procurementCaseId, procurementCases.id),
     fk('purchase_orders_purchase_request_id_fkey', t.purchaseRequestId, purchaseRequests.id),
     fk('purchase_orders_applicant_employee_id_fkey', t.applicantEmployeeId, employees.id),
@@ -289,8 +295,11 @@ export const acceptances = pgTable(
     currentStepOrder: integer('current_step_order'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
+    /** Incremented by every state change; edits must name the version they started from. */
+    version: integer('version').notNull().default(1),
   },
   (t): PgTableExtraConfigValue[] => [
+    check('acceptances_version_check', sql`version > 0`),
     fk('acceptances_procurement_case_id_fkey', t.procurementCaseId, procurementCases.id),
     fk('acceptances_purchase_order_id_fkey', t.purchaseOrderId, purchaseOrders.id),
     fk('acceptances_applicant_employee_id_fkey', t.applicantEmployeeId, employees.id),
@@ -353,8 +362,11 @@ export const expenseRequests = pgTable(
     currentStepOrder: integer('current_step_order'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
+    /** Incremented by every state change; edits must name the version they started from. */
+    version: integer('version').notNull().default(1),
   },
   (t): PgTableExtraConfigValue[] => [
+    check('expense_requests_version_check', sql`version > 0`),
     fk('expense_requests_procurement_case_id_fkey', t.procurementCaseId, procurementCases.id),
     fk('expense_requests_purchase_order_id_fkey', t.purchaseOrderId, purchaseOrders.id),
     fk('expense_requests_budget_code_id_fkey', t.budgetCodeId, budgetCodes.id),
@@ -441,8 +453,11 @@ export const notifications = pgTable(
     message: text('message').notNull(),
     isRead: boolean('is_read').notNull().default(false),
     createdAt: createdAt(),
+    /** Stable key of the event that produced this notification; retries do not duplicate it. */
+    eventKey: text('event_key'),
   },
   (t): PgTableExtraConfigValue[] => [
+    uniqueIndex('notifications_event_key_idx').on(t.eventKey).where(sql`event_key is not null`),
     fk('notifications_recipient_employee_id_fkey', t.recipientEmployeeId, employees.id),
     check(
       'notifications_type_check',
@@ -642,5 +657,27 @@ export const rateLimitBuckets = pgTable(
   (t): PgTableExtraConfigValue[] => [
     primaryKey({ name: 'rate_limit_buckets_pkey', columns: [t.bucketKey, t.windowStart] }),
     index('rate_limit_buckets_window_start_idx').on(t.windowStart),
+  ]
+);
+
+/**
+ * Idempotent creation: the same (employee, operation, key) with the same
+ * request returns the original result; a different request is refused.
+ */
+export const idempotencyKeys = pgTable(
+  'idempotency_keys',
+  {
+    actorEmployeeId: uuid('actor_employee_id').notNull(),
+    operation: text('operation').notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    requestHash: text('request_hash').notNull(),
+    result: jsonb('result'),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    primaryKey({ name: 'idempotency_keys_pkey', columns: [t.actorEmployeeId, t.operation, t.idempotencyKey] }),
+    fk('idempotency_keys_actor_employee_id_fkey', t.actorEmployeeId, employees.id),
+    check('idempotency_keys_key_check', sql`length(idempotency_key) between 8 and 100`),
+    index('idempotency_keys_created_at_idx').on(t.createdAt),
   ]
 );

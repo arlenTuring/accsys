@@ -35,14 +35,19 @@ export function PurchaseRequestForm({
   requestId,
   initialNeededWithinDays,
   initialRows,
+  expectedVersion,
 }: {
   budgetCodes: BudgetCodeOption[];
   mode?: 'create' | 'edit';
   requestId?: string;
   initialNeededWithinDays?: number | null;
   initialRows?: Row[];
+  /** Version the edit started from; the server refuses stale edits. */
+  expectedVersion?: number;
 }) {
   const router = useRouter();
+  // One key per form instance: a double submit or retry cannot create a second request.
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [rows, setRows] = useState<Row[]>(initialRows ?? [{ ...emptyRow }]);
   const [neededWithinDays, setNeededWithinDays] = useState(
     initialNeededWithinDays != null ? String(initialNeededWithinDays) : '30'
@@ -70,13 +75,14 @@ export function PurchaseRequestForm({
         budgetCodeId: r.budgetCodeId,
         description: r.description,
         quantity: Number(r.quantity),
-        estimatedAmount: Number(r.estimatedAmount),
+        // Sent as the typed decimal string; the server converts it to exact cents.
+        estimatedAmount: r.estimatedAmount.trim(),
       })),
     };
     const result =
       mode === 'edit' && requestId
-        ? await updatePurchaseRequest(requestId, payload)
-        : await createPurchaseRequest(payload);
+        ? await updatePurchaseRequest(requestId, { ...payload, expectedVersion: expectedVersion ?? 0 })
+        : await createPurchaseRequest({ ...payload, idempotencyKey });
     setSubmitting(false);
     if (result.ok) {
       router.push(

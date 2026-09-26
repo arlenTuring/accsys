@@ -129,7 +129,7 @@ export default async function RequestDetailPage({
         </section>
       )}
 
-      {isCurrentApprover && <ApprovalActions requestId={detail.id} />}
+      {isCurrentApprover && <ApprovalActions requestId={detail.id} version={detail.version} />}
     </main>
   );
 }

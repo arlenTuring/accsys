@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createServiceRoleTestClient } from './supabase-test-client';
+import { createServiceRoleTestClient, versionOf } from './supabase-test-client';
 
 const currentEmployee = vi.hoisted(() => ({ value: null as null | { id: string; role: string; departmentId: string } }));
 vi.mock('@/lib/auth/current-employee', () => ({
@@ -88,7 +88,7 @@ describe('purchase request edit/withdraw', () => {
   async function createTestRequest() {
     currentEmployee.value = { id: applicantId, role: 'staff', departmentId };
     const { createPurchaseRequest } = await import('@/lib/purchase-requests/actions');
-    const result = await createPurchaseRequest({
+    const result = await createPurchaseRequest({ idempotencyKey: crypto.randomUUID(),
       neededWithinDays: 30,
       items: [{ budgetCodeId, description: '測試項目', quantity: 1, estimatedAmount: 5000 }],
     });
@@ -106,18 +106,18 @@ describe('purchase request edit/withdraw', () => {
     const requestId = await createTestRequest();
     currentEmployee.value = { id: otherEmployeeId, role: 'staff', departmentId };
     const { updatePurchaseRequest } = await import('@/lib/purchase-requests/actions');
-    const result = await updatePurchaseRequest(requestId, {
+    const result = await updatePurchaseRequest(requestId, { expectedVersion: await versionOf('purchase_requests', requestId),
       neededWithinDays: 30,
       items: [{ budgetCodeId, description: '改過的項目', quantity: 1, estimatedAmount: 6000 }],
     });
-    expect(result).toEqual({ ok: false, error: '只有申請人可以修改這張請購單' });
+    expect(result).toMatchObject({ ok: false, error: '只有申請人可以修改這張請購單' });
   });
 
   it('allows the applicant to edit before any approval, rebuilding the chain', async () => {
     const requestId = await createTestRequest();
     currentEmployee.value = { id: applicantId, role: 'staff', departmentId };
     const { updatePurchaseRequest } = await import('@/lib/purchase-requests/actions');
-    const result = await updatePurchaseRequest(requestId, {
+    const result = await updatePurchaseRequest(requestId, { expectedVersion: await versionOf('purchase_requests', requestId),
       neededWithinDays: 45,
       items: [{ budgetCodeId, description: '改過的項目', quantity: 2, estimatedAmount: 200000 }],
     });
@@ -138,15 +138,15 @@ describe('purchase request edit/withdraw', () => {
     const requestId = await createTestRequest();
     currentEmployee.value = { id: managerId, role: 'staff', departmentId };
     const { approvePurchaseRequestStep } = await import('@/lib/purchase-requests/actions');
-    await approvePurchaseRequestStep(requestId);
+    await approvePurchaseRequestStep(requestId, await versionOf('purchase_requests', requestId));
 
     currentEmployee.value = { id: applicantId, role: 'staff', departmentId };
     const { updatePurchaseRequest } = await import('@/lib/purchase-requests/actions');
-    const result = await updatePurchaseRequest(requestId, {
+    const result = await updatePurchaseRequest(requestId, { expectedVersion: await versionOf('purchase_requests', requestId),
       neededWithinDays: 30,
       items: [{ budgetCodeId, description: '不該被接受', quantity: 1, estimatedAmount: 1000 }],
     });
-    expect(result).toEqual({ ok: false, error: '只有尚未有人簽核的請購單可以修改' });
+    expect(result).toMatchObject({ ok: false, error: '只有尚未有人簽核的請購單可以修改' });
   });
 
   it('rejects withdraw from a non-applicant', async () => {
@@ -154,7 +154,7 @@ describe('purchase request edit/withdraw', () => {
     currentEmployee.value = { id: otherEmployeeId, role: 'staff', departmentId };
     const { withdrawPurchaseRequest } = await import('@/lib/purchase-requests/actions');
     const result = await withdrawPurchaseRequest(requestId);
-    expect(result).toEqual({ ok: false, error: '只有申請人可以撤回這張請購單' });
+    expect(result).toMatchObject({ ok: false, error: '只有申請人可以撤回這張請購單' });
   });
 
   it('allows the applicant to withdraw before any approval, without deleting the row', async () => {

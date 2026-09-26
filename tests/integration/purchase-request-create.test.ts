@@ -58,14 +58,14 @@ describe('createPurchaseRequest', () => {
   it('rejects an empty item list', async () => {
     currentEmployee.value = { id: applicantId, departmentId: applicantDept };
     const { createPurchaseRequest } = await import('@/lib/purchase-requests/actions');
-    const result = await createPurchaseRequest({ neededWithinDays: 30, items: [] });
-    expect(result).toEqual({ ok: false, error: '請購單至少需要一個明細項次' });
+    const result = await createPurchaseRequest({ idempotencyKey: crypto.randomUUID(), neededWithinDays: 30, items: [] });
+    expect(result).toMatchObject({ ok: false, error: '請購單至少需要一個明細項次' });
   });
 
   it('creates a case, request, items, and an approval chain', async () => {
     currentEmployee.value = { id: applicantId, departmentId: applicantDept };
     const { createPurchaseRequest } = await import('@/lib/purchase-requests/actions');
-    const result = await createPurchaseRequest({
+    const result = await createPurchaseRequest({ idempotencyKey: crypto.randomUUID(),
       neededWithinDays: 30,
       items: [
         { budgetCodeId, description: '材料A', quantity: 1, estimatedAmount: 65000 },

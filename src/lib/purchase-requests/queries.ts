@@ -38,6 +38,8 @@ export type RequestDetail = {
   applicantName: string;
   departmentName: string;
   currentStepOrder: number | null;
+  /** Edits must send this back (stale-edit protection). */
+  version: number;
   items: DetailItem[];
   steps: DetailStep[];
 };
@@ -74,7 +76,7 @@ export async function getPurchaseRequestDetail(requestId: string): Promise<Reque
   const { data: pr } = await supabase
     .from('purchase_requests')
     .select(
-      'id, total_amount, status, needed_within_days, current_step_order, applicant_employee_id, procurement_cases(case_number), applicant:employees!applicant_employee_id(name), departments(name)'
+      'id, total_amount, status, needed_within_days, current_step_order, version, applicant_employee_id, procurement_cases(case_number), applicant:employees!applicant_employee_id(name), departments(name)'
     )
     .eq('id', requestId)
     .maybeSingle();
@@ -105,6 +107,7 @@ export async function getPurchaseRequestDetail(requestId: string): Promise<Reque
     applicantName: (pr.applicant as unknown as { name: string }).name,
     departmentName: (pr.departments as unknown as { name: string }).name,
     currentStepOrder: pr.current_step_order,
+    version: Number(pr.version),
     items: (items ?? []).map((i) => ({
       lineNo: i.line_no,
       budgetCode: (i.budget_codes as unknown as { code: string }).code,

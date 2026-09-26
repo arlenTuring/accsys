@@ -1,7 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import {
-  createServiceRoleTestClient,
-} from './supabase-test-client';
+import { createServiceRoleTestClient, versionOf } from './supabase-test-client';
 import { getSql } from '@/lib/db';
 
 const currentEmployee = vi.hoisted(
@@ -52,7 +50,7 @@ describe('resubmitPurchaseRequest', () => {
   it('re-validates, resets the chain, and returns the request to pending', async () => {
     currentEmployee.value = { id: applicantId, departmentId: applicantDept };
     const actions = await import('@/lib/purchase-requests/actions');
-    const created = await actions.createPurchaseRequest({
+    const created = await actions.createPurchaseRequest({ idempotencyKey: crypto.randomUUID(),
       neededWithinDays: 30,
       items: [{ budgetCodeId, description: '原始', quantity: 1, estimatedAmount: 5000 }],
     });
@@ -83,11 +81,12 @@ describe('resubmitPurchaseRequest', () => {
       .eq('step_order', 1)
       .single();
     currentEmployee.value = { id: step!.approver_employee_id };
-    await actions.returnPurchaseRequestStep(created.requestId, '請修改');
+    await actions.returnPurchaseRequestStep(created.requestId, '請修改', await versionOf('purchase_requests', created.requestId));
 
     // Applicant resubmits with a changed amount.
     currentEmployee.value = { id: applicantId, departmentId: applicantDept };
     const result = await actions.resubmitPurchaseRequest(created.requestId, {
+      expectedVersion: await versionOf('purchase_requests', created.requestId),
       neededWithinDays: 15,
       items: [{ budgetCodeId, description: '修改後', quantity: 2, estimatedAmount: 9000 }],
     });
@@ -135,7 +134,7 @@ describe('resubmitPurchaseRequest', () => {
   it('rejects resubmit by a non-applicant', async () => {
     currentEmployee.value = { id: applicantId, departmentId: applicantDept };
     const actions = await import('@/lib/purchase-requests/actions');
-    const created = await actions.createPurchaseRequest({
+    const created = await actions.createPurchaseRequest({ idempotencyKey: crypto.randomUUID(),
       neededWithinDays: 30,
       items: [{ budgetCodeId, description: '原始', quantity: 1, estimatedAmount: 5000 }],
     });
@@ -148,13 +147,14 @@ describe('resubmitPurchaseRequest', () => {
       .eq('step_order', 1)
       .single();
     currentEmployee.value = { id: step!.approver_employee_id };
-    await actions.returnPurchaseRequestStep(created.requestId, '請修改');
+    await actions.returnPurchaseRequestStep(created.requestId, '請修改', await versionOf('purchase_requests', created.requestId));
 
     currentEmployee.value = { id: '00000000-0000-0000-0000-000000000000' };
     const result = await actions.resubmitPurchaseRequest(created.requestId, {
+      expectedVersion: await versionOf('purchase_requests', created.requestId),
       neededWithinDays: 15,
       items: [{ budgetCodeId, description: 'x', quantity: 1, estimatedAmount: 100 }],
     });
-    expect(result).toEqual({ ok: false, error: '只有申請人可以重新送出這張請購單' });
+    expect(result).toMatchObject({ ok: false, error: '只有申請人可以重新送出這張請購單' });
   });
 });
