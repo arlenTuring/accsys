@@ -40,6 +40,8 @@ export type AcceptanceDetail = {
   applicantName: string;
   departmentName: string;
   currentStepOrder: number | null;
+  /** Edits and decisions must send this back (stale-edit protection). */
+  version: number;
   items: AcceptanceDetailItem[];
   steps: AcceptanceDetailStep[];
 };
@@ -82,7 +84,7 @@ export async function getAcceptanceDetail(acceptanceId: string): Promise<Accepta
   const { data: acceptance } = await supabase
     .from('acceptances')
     .select(
-      'id, total_amount, status, acceptance_date, current_step_order, applicant_employee_id, contractor_supplier_id, procurement_cases(case_number), applicant:employees!applicant_employee_id(name), departments(name), suppliers:suppliers!contractor_supplier_id(name)'
+      'id, total_amount, status, acceptance_date, current_step_order, version, applicant_employee_id, contractor_supplier_id, procurement_cases(case_number), applicant:employees!applicant_employee_id(name), departments(name), suppliers:suppliers!contractor_supplier_id(name)'
     )
     .eq('id', acceptanceId)
     .maybeSingle();
@@ -115,6 +117,7 @@ export async function getAcceptanceDetail(acceptanceId: string): Promise<Accepta
     applicantName: (acceptance.applicant as unknown as { name: string }).name,
     departmentName: (acceptance.departments as unknown as { name: string }).name,
     currentStepOrder: acceptance.current_step_order,
+    version: Number(acceptance.version),
     items: (items ?? []).map((i) => ({
       lineNo: i.line_no,
       itemId: i.id,

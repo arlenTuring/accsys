@@ -1,7 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import {
-  createServiceRoleTestClient,
-} from './supabase-test-client';
+import { createServiceRoleTestClient, versionOf } from './supabase-test-client';
 
 const currentEmployee = vi.hoisted(() => ({ value: null as null | { id: string } }));
 vi.mock('@/lib/auth/current-employee', () => ({
@@ -141,6 +139,7 @@ describe('resubmitAcceptance', () => {
     currentEmployee.value = { id: applicantId };
     const { resubmitAcceptance } = await import('@/lib/acceptances/actions');
     const result = await resubmitAcceptance(acceptance!.id, {
+      expectedVersion: await versionOf('acceptances', acceptance!.id),
       contractorSupplierId: secondSupplierId,
       acceptanceDate: '2026-07-20',
       items: [{ acceptanceItemId: item!.id, passFail: 'pass' }],

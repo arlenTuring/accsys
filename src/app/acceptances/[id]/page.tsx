@@ -141,7 +141,7 @@ export default async function AcceptanceDetailPage({
         </section>
       )}
 
-      {isCurrentApprover && <ApprovalActions acceptanceId={detail.id} />}
+      {isCurrentApprover && <ApprovalActions acceptanceId={detail.id} version={detail.version} />}
     </main>
   );
 }

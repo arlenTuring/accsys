@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { approveAcceptanceStep, returnAcceptanceStep } from '@/lib/acceptances/actions';
 
-export function ApprovalActions({ acceptanceId }: { acceptanceId: string }) {
+export function ApprovalActions({ acceptanceId, version }: { acceptanceId: string; version: number }) {
   const router = useRouter();
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -13,7 +13,7 @@ export function ApprovalActions({ acceptanceId }: { acceptanceId: string }) {
   const onApprove = async () => {
     setBusy(true);
     setError(null);
-    const result = await approveAcceptanceStep(acceptanceId);
+    const result = await approveAcceptanceStep(acceptanceId, version);
     setBusy(false);
     if (result.ok) router.refresh();
     else setError(result.error);
@@ -26,7 +26,7 @@ export function ApprovalActions({ acceptanceId }: { acceptanceId: string }) {
     }
     setBusy(true);
     setError(null);
-    const result = await returnAcceptanceStep(acceptanceId, reason);
+    const result = await returnAcceptanceStep(acceptanceId, reason, version);
     setBusy(false);
     if (result.ok) router.refresh();
     else setError(result.error);

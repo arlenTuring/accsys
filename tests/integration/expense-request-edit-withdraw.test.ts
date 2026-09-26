@@ -215,7 +215,7 @@ describe('expense request edit/withdraw', () => {
 
     currentEmployee.value = { id: applicantId, role: 'staff', departmentId };
     const { createAcceptance, approveAcceptanceStep } = await import('@/lib/acceptances/actions');
-    const result = await createAcceptance({
+    const result = await createAcceptance({ idempotencyKey: crypto.randomUUID(),
       purchaseOrderId: orderId,
       contractorSupplierId: supplierId,
       acceptanceDate: '2026-07-20',
@@ -241,7 +241,7 @@ describe('expense request edit/withdraw', () => {
         .eq('step_order', acceptance!.current_step_order)
         .single();
       currentEmployee.value = { id: step!.approver_employee_id, role: 'staff', departmentId };
-      const stepResult = await approveAcceptanceStep(result.acceptanceId);
+      const stepResult = await approveAcceptanceStep(result.acceptanceId, await versionOf('acceptances', result.acceptanceId));
       if (!stepResult.ok) throw new Error(stepResult.error);
     }
 

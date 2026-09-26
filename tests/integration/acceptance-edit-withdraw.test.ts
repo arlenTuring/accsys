@@ -196,7 +196,7 @@ describe('acceptance edit/withdraw', () => {
 
     currentEmployee.value = { id: applicantId, role: 'staff', departmentId };
     const { createAcceptance } = await import('@/lib/acceptances/actions');
-    const result = await createAcceptance({
+    const result = await createAcceptance({ idempotencyKey: crypto.randomUUID(),
       purchaseOrderId: orderId,
       contractorSupplierId: supplierId,
       acceptanceDate: '2026-07-20',
@@ -216,7 +216,7 @@ describe('acceptance edit/withdraw', () => {
       .single();
     currentEmployee.value = { id: otherEmployeeId, role: 'staff', departmentId };
     const { updateAcceptance } = await import('@/lib/acceptances/actions');
-    const result = await updateAcceptance(acceptanceId, {
+    const result = await updateAcceptance(acceptanceId, { expectedVersion: await versionOf('acceptances', acceptanceId),
       contractorSupplierId: supplierId,
       acceptanceDate: '2026-07-21',
       items: [{ acceptanceItemId: item!.id, passFail: 'fail' }],
@@ -233,7 +233,7 @@ describe('acceptance edit/withdraw', () => {
       .single();
     currentEmployee.value = { id: applicantId, role: 'staff', departmentId };
     const { updateAcceptance } = await import('@/lib/acceptances/actions');
-    const result = await updateAcceptance(acceptanceId, {
+    const result = await updateAcceptance(acceptanceId, { expectedVersion: await versionOf('acceptances', acceptanceId),
       contractorSupplierId: supplierId,
       acceptanceDate: '2026-07-21',
       items: [{ acceptanceItemId: item!.id, passFail: 'fail' }],
@@ -261,7 +261,7 @@ describe('acceptance edit/withdraw', () => {
     const acceptanceId = await createTestAcceptance();
     currentEmployee.value = { id: managerId, role: 'staff', departmentId };
     const { approveAcceptanceStep } = await import('@/lib/acceptances/actions');
-    await approveAcceptanceStep(acceptanceId);
+    await approveAcceptanceStep(acceptanceId, await versionOf('acceptances', acceptanceId));
 
     const { data: item } = await admin
       .from('acceptance_items')
@@ -270,7 +270,7 @@ describe('acceptance edit/withdraw', () => {
       .single();
     currentEmployee.value = { id: applicantId, role: 'staff', departmentId };
     const { updateAcceptance } = await import('@/lib/acceptances/actions');
-    const result = await updateAcceptance(acceptanceId, {
+    const result = await updateAcceptance(acceptanceId, { expectedVersion: await versionOf('acceptances', acceptanceId),
       contractorSupplierId: supplierId,
       acceptanceDate: '2026-07-22',
       items: [{ acceptanceItemId: item!.id, passFail: 'fail' }],

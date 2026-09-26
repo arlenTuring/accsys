@@ -91,7 +91,7 @@ describe('acceptance queries', () => {
 
     currentEmployee.value = { id: applicantId };
     const actions = await import('@/lib/acceptances/actions');
-    const created = await actions.createAcceptance({
+    const created = await actions.createAcceptance({ idempotencyKey: crypto.randomUUID(),
       purchaseOrderId: orderId,
       contractorSupplierId: supplierId,
       acceptanceDate: '2026-07-20',

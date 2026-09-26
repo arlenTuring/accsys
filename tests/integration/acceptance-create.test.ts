@@ -141,7 +141,7 @@ describe('createAcceptance', () => {
 
     currentEmployee.value = { id: applicantId };
     const { createAcceptance } = await import('@/lib/acceptances/actions');
-    const result = await createAcceptance({
+    const result = await createAcceptance({ idempotencyKey: crypto.randomUUID(),
       purchaseOrderId: po!.id,
       contractorSupplierId: supplierId,
       acceptanceDate: '2026-07-15',
@@ -154,7 +154,7 @@ describe('createAcceptance', () => {
     const { orderId, itemId } = await makeApprovedOrder();
     currentEmployee.value = { id: applicantId };
     const { createAcceptance } = await import('@/lib/acceptances/actions');
-    const result = await createAcceptance({
+    const result = await createAcceptance({ idempotencyKey: crypto.randomUUID(),
       purchaseOrderId: orderId,
       contractorSupplierId: supplierId,
       acceptanceDate: '2026-07-15',
@@ -182,7 +182,7 @@ describe('createAcceptance', () => {
     const { orderId, itemId } = await makeApprovedOrder();
     currentEmployee.value = { id: applicantId };
     const { createAcceptance } = await import('@/lib/acceptances/actions');
-    const first = await createAcceptance({
+    const first = await createAcceptance({ idempotencyKey: crypto.randomUUID(),
       purchaseOrderId: orderId,
       contractorSupplierId: supplierId,
       acceptanceDate: '2026-07-15',
@@ -190,7 +190,7 @@ describe('createAcceptance', () => {
     });
     if (first.ok) createdAcceptanceIds.push(first.acceptanceId);
 
-    const second = await createAcceptance({
+    const second = await createAcceptance({ idempotencyKey: crypto.randomUUID(),
       purchaseOrderId: orderId,
       contractorSupplierId: supplierId,
       acceptanceDate: '2026-07-15',

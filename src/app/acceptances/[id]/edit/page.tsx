@@ -30,6 +30,7 @@ export default async function EditAcceptancePage({ params }: { params: Promise<{
         suppliers={(suppliers ?? []).map((s) => ({ id: s.id, name: s.name }))}
         mode="edit"
         acceptanceId={id}
+        expectedVersion={detail.version}
         initialValues={{
           contractorSupplierId: detail.contractorSupplierId,
           acceptanceDate: detail.acceptanceDate,

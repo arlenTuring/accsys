@@ -1,7 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import {
-  createServiceRoleTestClient,
-} from './supabase-test-client';
+import { createServiceRoleTestClient, versionOf } from './supabase-test-client';
 
 const currentEmployee = vi.hoisted(() => ({ value: null as null | { id: string; role: string } }));
 vi.mock('@/lib/auth/current-employee', () => ({
@@ -148,7 +146,7 @@ describe('acceptance approve/return + property tag', () => {
     const { acceptanceId } = await makeAcceptanceWithOneStep();
     currentEmployee.value = { id: managerId, role: 'staff' };
     const { approveAcceptanceStep } = await import('@/lib/acceptances/actions');
-    const result = await approveAcceptanceStep(acceptanceId);
+    const result = await approveAcceptanceStep(acceptanceId, await versionOf('acceptances', acceptanceId));
     expect(result).toEqual({ ok: true });
 
     const { data: acceptance } = await admin
@@ -163,7 +161,7 @@ describe('acceptance approve/return + property tag', () => {
     const { acceptanceId } = await makeAcceptanceWithOneStep();
     currentEmployee.value = { id: managerId, role: 'staff' };
     const { returnAcceptanceStep } = await import('@/lib/acceptances/actions');
-    const result = await returnAcceptanceStep(acceptanceId, '財產編號待補');
+    const result = await returnAcceptanceStep(acceptanceId, '財產編號待補', await versionOf('acceptances', acceptanceId));
     expect(result).toEqual({ ok: true });
 
     const { data: acceptance } = await admin
@@ -188,7 +186,7 @@ describe('acceptance approve/return + property tag', () => {
     const { approveAcceptanceStep, updateAcceptanceItemPropertyTag } = await import(
       '@/lib/acceptances/actions'
     );
-    const approveResult = await approveAcceptanceStep(acceptanceId);
+    const approveResult = await approveAcceptanceStep(acceptanceId, await versionOf('acceptances', acceptanceId));
     expect(approveResult).toEqual({ ok: true });
 
     currentEmployee.value = { id: applicantId, role: 'finance' };
@@ -217,8 +215,8 @@ describe('acceptance approve/return + property tag', () => {
     const { approveAcceptanceStep } = await import('@/lib/acceptances/actions');
 
     const [first, second] = await Promise.all([
-      approveAcceptanceStep(acceptanceId),
-      approveAcceptanceStep(acceptanceId),
+      approveAcceptanceStep(acceptanceId, await versionOf('acceptances', acceptanceId)),
+      approveAcceptanceStep(acceptanceId, await versionOf('acceptances', acceptanceId)),
     ]);
     const results = [first, second];
     expect(results.filter((r) => r.ok)).toHaveLength(1);

@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createAcceptance, updateAcceptance } from '@/lib/acceptances/actions';
+import { taipeiToday } from '@/lib/taipei-date';
 
 export function AcceptanceForm({
   purchaseOrderId,
@@ -11,6 +12,7 @@ export function AcceptanceForm({
   mode = 'create',
   acceptanceId,
   initialValues,
+  expectedVersion,
 }: {
   purchaseOrderId: string;
   items: { id: string; description: string; quantity: number }[];
@@ -22,13 +24,17 @@ export function AcceptanceForm({
     acceptanceDate: string;
     passFail: Record<string, 'pass' | 'fail'>;
   };
+  /** Version the edit started from; the server refuses stale edits. */
+  expectedVersion?: number;
 }) {
   const router = useRouter();
+  // One key per form instance: a double submit or retry cannot create a second acceptance.
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [contractorSupplierId, setContractorSupplierId] = useState(
     initialValues?.contractorSupplierId ?? suppliers[0]?.id ?? ''
   );
   const [acceptanceDate, setAcceptanceDate] = useState(
-    initialValues?.acceptanceDate ?? new Date().toISOString().slice(0, 10)
+    initialValues?.acceptanceDate ?? taipeiToday()
   );
   const [passFail, setPassFail] = useState<Record<string, 'pass' | 'fail'>>(
     initialValues?.passFail ?? Object.fromEntries(items.map((i) => [i.id, 'pass' as const]))
@@ -45,12 +51,14 @@ export function AcceptanceForm({
             contractorSupplierId,
             acceptanceDate,
             items: items.map((i) => ({ acceptanceItemId: i.id, passFail: passFail[i.id] ?? 'pass' })),
+            expectedVersion: expectedVersion ?? 0,
           })
         : await createAcceptance({
             purchaseOrderId,
             contractorSupplierId,
             acceptanceDate,
             items: items.map((i) => ({ purchaseOrderItemId: i.id, passFail: passFail[i.id] ?? 'pass' })),
+            idempotencyKey,
           });
     setSubmitting(false);
     if (result.ok) {
