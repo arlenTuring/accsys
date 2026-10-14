@@ -22,6 +22,7 @@ import {
 import { dangerBtn, smallBtn, smallInput } from '../../org/org-ui';
 import { Field } from '../builder-ui';
 import { AssetRegisterEditor } from './asset-register-editor';
+import { PaymentEditor } from './payment-editor';
 import { earlierCondFields } from './designer-model';
 import { FieldProps } from './field-props';
 
@@ -332,6 +333,7 @@ export function FieldsEditor({
               </label>
             </div>
             <AssetRegisterEditor schema={schema} setSchema={setSchema} />
+            <PaymentEditor schema={schema} setSchema={setSchema} />
           </div>
         )}
       </aside>

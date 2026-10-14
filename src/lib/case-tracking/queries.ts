@@ -1,6 +1,7 @@
 import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { isFinanceOrAdmin } from '@/lib/authz/forms';
+import { designerProcurementForms } from '@/lib/procurement/designer-forms';
 import { FORM_TABLE, PROCUREMENT_FORM_TYPES, type ProcurementFormType } from '@/lib/procurement/form-registry';
 import { determineCaseBucket, type CaseBucket, type CaseFormState } from './determine-bucket';
 
@@ -83,6 +84,17 @@ export async function getFinanceCaseTracking(
       existing[formType] = row;
       formsByCaseId.set(row.procurement_case_id, existing);
     }
+  }
+  for (const f of await designerProcurementForms(caseIds)) {
+    const existing = formsByCaseId.get(f.caseId) ?? {};
+    existing[f.slot] ??= {
+      id: f.id,
+      procurement_case_id: f.caseId,
+      status: f.status,
+      departments: f.department,
+      applicant: f.applicantName === null ? null : { name: f.applicantName },
+    };
+    formsByCaseId.set(f.caseId, existing);
   }
 
   const rows: CaseTrackingRow[] = cases.map((c) => {

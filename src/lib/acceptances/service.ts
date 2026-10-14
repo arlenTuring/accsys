@@ -2,6 +2,7 @@ import { and, asc, eq } from 'drizzle-orm';
 import { validateAcceptanceInput } from '@/lib/acceptances/validate';
 import { recordAudit } from '@/lib/audit/record';
 import { isFinanceOrAdmin, isUuid } from '@/lib/authz/forms';
+import { assertLegacyOpen } from '@/lib/custom-forms/legacy';
 import { acceptanceItems, acceptances, purchaseOrderItems, purchaseOrders, suppliers } from '@/lib/db/schema';
 import { centsToDecimal, toCents } from '@/lib/money';
 import { isIsoDate } from '@/lib/travel-expenses/validate';
@@ -78,6 +79,7 @@ export function createAcceptance(actor: Actor, input: CreateAcceptanceInput, hoo
         request,
       });
       if ('replay' in claim) return claim.replay;
+      await assertLegacyOpen(tx, 'acceptance', '驗收單');
 
       if (!isUuid(input.purchaseOrderId)) abort('not_found', '找不到來源採購單');
       const source = await lockForm(tx, 'purchase_order', input.purchaseOrderId);

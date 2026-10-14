@@ -4,6 +4,8 @@ import {
   BUDGET_SCOPE_LABELS,
   BUDGET_SCOPES,
   SCHEMA_LIMITS,
+  TEXT_FORMAT_LABELS,
+  TEXT_FORMATS,
   type ColumnRule,
   type ColumnType,
   type FieldDef,
@@ -287,6 +289,7 @@ function ColumnsEditor({
                   unique: UNIQUE_TYPES.includes(type) ? c.unique : undefined,
                   pickFrom: type === 'select' ? c.pickFrom : undefined,
                   sameOwner: type === 'budget_code' ? c.sameOwner : undefined,
+                  financeFill: type === 'text' ? c.financeFill : undefined,
                   rules: undefined,
                 });
               }}
@@ -297,8 +300,15 @@ function ColumnsEditor({
                 </option>
               ))}
             </select>
-            {!c.formula && <Check label="必填" checked={c.required} onChange={(v) => setCol(i, { required: v })} />}
-            {UNIQUE_TYPES.includes(c.type) && (
+            {!c.formula && !c.financeFill && <Check label="必填" checked={c.required} onChange={(v) => setCol(i, { required: v })} />}
+            {c.type === 'text' && (
+              <Check
+                label="核准後由財會填寫"
+                checked={c.financeFill === true}
+                onChange={(v) => setCol(i, v ? { financeFill: true, required: false, unique: undefined } : { financeFill: undefined })}
+              />
+            )}
+            {UNIQUE_TYPES.includes(c.type) && !c.financeFill && (
               <Check label="不可重複" checked={c.unique === true} onChange={(v) => setCol(i, { unique: v || undefined })} />
             )}
             {c.type === 'budget_code' && (
@@ -479,7 +489,11 @@ function ColumnsEditor({
         </Field>
       </div>
       <Field label="合計欄">
-        <select className={smallInput} value={field.totalColumn ?? ''} onChange={(e) => onChange({ ...field, totalColumn: e.target.value || null })}>
+        <select
+          className={smallInput}
+          value={field.totalColumn ?? ''}
+          onChange={(e) => onChange({ ...field, totalColumn: e.target.value || null, ...(e.target.value ? {} : { maxTotal: undefined }) })}
+        >
           <option value="">不顯示合計</option>
           {numeric.map((c) => (
             <option key={c.id} value={c.id}>
@@ -488,6 +502,34 @@ function ColumnsEditor({
           ))}
         </select>
       </Field>
+      {field.totalColumn && (
+        <div className="grid grid-cols-2 gap-2">
+          <Field label="合計上限（含）">
+            <input
+              className={smallInput}
+              type="number"
+              min={0}
+              value={field.maxTotal?.value ?? ''}
+              onChange={(e) =>
+                onChange({
+                  ...field,
+                  maxTotal: e.target.value === '' ? undefined : { value: Number(e.target.value), message: field.maxTotal?.message || '合計超過上限' },
+                })
+              }
+            />
+          </Field>
+          {field.maxTotal && (
+            <Field label="超過上限時的提示">
+              <input
+                className={smallInput}
+                maxLength={SCHEMA_LIMITS.ruleMessage}
+                value={field.maxTotal.message}
+                onChange={(e) => onChange({ ...field, maxTotal: { ...field.maxTotal!, message: e.target.value } })}
+              />
+            </Field>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -720,10 +762,11 @@ export function FieldProps({
         <div className="grid grid-cols-2 gap-2">
           <Field label="格式">
             <select className={smallInput} value={field.format} onChange={(e) => set({ format: e.target.value })}>
-              <option value="plain">一般文字</option>
-              <option value="email">Email</option>
-              <option value="phone">電話</option>
-              <option value="tax_id">統一編號</option>
+              {TEXT_FORMATS.map((f) => (
+                <option key={f} value={f}>
+                  {TEXT_FORMAT_LABELS[f]}
+                </option>
+              ))}
             </select>
           </Field>
           <Field label="字數上限">

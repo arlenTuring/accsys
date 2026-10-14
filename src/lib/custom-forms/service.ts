@@ -20,6 +20,7 @@ import {
   suppliers,
 } from '@/lib/db/schema';
 import { taipeiToday } from '@/lib/taipei-date';
+import { applyPaymentSchedule } from './payment';
 import {
   abort,
   assertVersion,
@@ -46,7 +47,9 @@ import { parseDefinition } from './definition';
 import { withApplicantConfirmation } from './on-behalf';
 import { allFields, BUDGET_SCOPE_LABELS, sourceFieldOf, type FormSchema } from './schema';
 import { carryRows, loadSource } from './source';
-import { summarizeErrors, validateSubmission, type NormalizedSubmission } from './validate';
+import { summarizeErrors, validateSubmission, type NormalizedSubmission, type TableValue } from './validate';
+
+const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 import { canFile, parseVisibility, type Visibility } from './visibility';
 
 // Workflow of designer forms (form_type 'custom'). The department is always
@@ -72,6 +75,7 @@ type Version = {
   schema: FormSchema;
   flow: FlowDef;
   visibility: Visibility;
+  legacyFormType?: string | null;
 };
 
 /** Stored versions were validated on publish; parsing again guards against hand-edited rows. */
@@ -105,6 +109,7 @@ async function publishedVersion(tx: Tx, key: unknown, applicant: { departmentId:
       key: formDefinitions.key,
       name: formDefinitions.name,
       numberPrefix: formDefinitions.numberPrefix,
+      legacyFormType: formDefinitions.legacyFormType,
       visibility: formDefinitions.visibility,
       versionId: formDefinitionVersions.id,
       schema: formDefinitionVersions.schema,
@@ -140,10 +145,18 @@ async function versionOfSubmission(tx: Tx, submissionId: string): Promise<Versio
 }
 
 function normalize(schema: FormSchema, data: unknown): NormalizedSubmission {
-  const result = validateSubmission(schema, data, taipeiToday());
+  const today = taipeiToday();
+  const result = validateSubmission(schema, data, today);
   if (!result.ok) abort('validation', summarizeErrors(result.errors));
-  return (result as Extract<typeof result, { ok: true }>).value;
+  const value = (result as Extract<typeof result, { ok: true }>).value;
+  return schema.payment ? { ...value, data: applyPaymentSchedule(schema.payment, value.data, today) } : value;
 }
+
+/** Cases opened by forms that replace the procurement chain stay visible to finance tracking. */
+const CASE_TYPE_OF_LEGACY: Record<string, 'standard' | 'standalone_expense'> = {
+  purchase_request: 'standard',
+  standalone_expense_request: 'standalone_expense',
+};
 
 /** Referenced employees, departments, budget codes, projects, suppliers and assets must exist (and be active); scoped budget codes must match. */
 async function assertRefs(tx: Tx, refs: NormalizedSubmission['refs']) {
@@ -321,7 +334,7 @@ export function createSubmission(actor: Actor, key: string, input: CreateInput, 
         [{ caseNumber }] = await tx.execute<{ caseNumber: string }>(sql`select next_case_number() as "caseNumber"`);
         [{ id: caseId }] = await tx
           .insert(procurementCases)
-          .values({ caseNumber, createdByEmployeeId: actor.id, caseType: 'custom' })
+          .values({ caseNumber, createdByEmployeeId: actor.id, caseType: CASE_TYPE_OF_LEGACY[def.legacyFormType ?? ''] ?? 'custom' })
           .returning({ id: procurementCases.id });
       }
       const formNumber = await nextFormNumber(tx, def.definitionId, def.numberPrefix);
@@ -477,6 +490,47 @@ export function reviseSubmission(actor: Actor, id: string, mode: 'update' | 'res
     },
     hooks
   );
+}
+
+export type FinanceCellInput = { table: string; row: number; column: string; value: string };
+
+/** 核准後由財會填寫: finance / admin set one cell of an approved submission (audited with the old value). */
+export function setFinanceCell(actor: Actor, id: string, input: FinanceCellInput): Promise<ActionResult> {
+  if (!actor) return Promise.resolve(fail('unauthenticated', '找不到您的員工資料'));
+  return runInTransaction(`${FORM}.finance_fill`, async (tx) => {
+    const [me] = await tx.select({ role: employees.role, accessEnabled: employees.accessEnabled }).from(employees).where(eq(employees.id, actor.id));
+    if (!me?.accessEnabled || (me.role !== 'finance' && me.role !== 'admin')) abort('forbidden', '只有財會或系統管理員可以填寫');
+    const form = await lockOrFail(tx, id);
+    if (form.status !== 'approved') abort('conflict', '申請單核准後才能填寫');
+    const def = await versionOfSubmission(tx, id);
+    const field = allFields(def.schema).find((f) => f.id === input?.table);
+    const col = field?.type === 'table' ? field.columns.find((c) => c.id === input.column && c.financeFill) : undefined;
+    if (!field || !col) abort('validation', '這個欄位不能由財會填寫');
+    const [{ data }] = await tx.select({ data: formSubmissions.data }).from(formSubmissions).where(eq(formSubmissions.id, id));
+    const stored = (data ?? {}) as Record<string, unknown>;
+    const tableValue = stored[field!.id] as TableValue | undefined;
+    const rows = Array.isArray(tableValue?.rows) ? tableValue!.rows : [];
+    if (!Number.isInteger(input.row) || input.row < 0 || input.row >= rows.length) abort('validation', '找不到這一列');
+    const value = typeof input.value === 'string' ? input.value.trim() : '';
+    const max = col!.maxLength ?? 500;
+    if (value.length > max) abort('validation', `「${col!.label}」最多 ${max} 字`);
+    if (CONTROL_CHARS.test(value)) abort('validation', `「${col!.label}」含有不允許的字元`);
+    const before = rows[input.row][col!.id] ?? null;
+    const after = value === '' ? null : value;
+    const nextRows = rows.map((r, i) => (i === input.row ? { ...r, [col!.id]: after } : r));
+    await tx
+      .update(formSubmissions)
+      .set({ data: { ...stored, [field!.id]: { ...tableValue!, rows: nextRows } } })
+      .where(eq(formSubmissions.id, id));
+    await recordAudit(tx, {
+      actorEmployeeId: actor.id,
+      action: `${FORM}.finance_filled`,
+      entityType: FORM,
+      entityId: id,
+      details: { table: field!.id, row: input.row, column: col!.id, before, after },
+    });
+    return { ok: true as const };
+  });
 }
 
 export function withdrawSubmission(actor: Actor, id: string): Promise<ActionResult> {

@@ -55,6 +55,8 @@ export type ChangeSummary = {
   onBehalfChanged: boolean;
   /** 財產清冊串接 was added, removed or re-mapped. */
   assetRegisterChanged: boolean;
+  /** 付款排程 was added, removed or re-mapped. */
+  paymentChanged: boolean;
   flowChanged: boolean;
 };
 
@@ -71,6 +73,7 @@ export function changeSummary(prev: { schema: FormSchema; flow: FlowDef } | null
       sectionsChanged: true,
       onBehalfChanged: false,
       assetRegisterChanged: false,
+      paymentChanged: false,
       flowChanged: true,
     };
   }
@@ -92,12 +95,18 @@ export function changeSummary(prev: { schema: FormSchema; flow: FlowDef } | null
     sectionsChanged: json(layout(prev.schema)) !== json(layout(next.schema)),
     onBehalfChanged: (prev.schema.onBehalf === true) !== (next.schema.onBehalf === true),
     assetRegisterChanged: json(prev.schema.assetRegister ?? null) !== json(next.schema.assetRegister ?? null),
+    paymentChanged: json(prev.schema.payment ?? null) !== json(next.schema.payment ?? null),
     flowChanged: json(prev.flow) !== json(next.flow),
   };
 }
 
 export function hasChanges(c: ChangeSummary): boolean {
   return (
-    c.added.length + c.removed.length + c.modified.length > 0 || c.sectionsChanged || c.onBehalfChanged || c.assetRegisterChanged || c.flowChanged
+    c.added.length + c.removed.length + c.modified.length > 0 ||
+    c.sectionsChanged ||
+    c.onBehalfChanged ||
+    c.assetRegisterChanged ||
+    c.paymentChanged ||
+    c.flowChanged
   );
 }

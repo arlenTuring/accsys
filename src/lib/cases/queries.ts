@@ -1,10 +1,13 @@
 import { createAppDb } from '@/lib/db/app-client';
 import { canReadForm } from '@/lib/authz/forms';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { designerProcurementForms } from '@/lib/procurement/designer-forms';
 import {
   FORM_LABELS,
+  FORM_ROUTE_PREFIX,
   FORM_TABLE,
   PROCUREMENT_FORM_TYPES,
+  type FormType,
   type ProcurementFormType,
 } from '@/lib/procurement/form-registry';
 
@@ -16,6 +19,8 @@ export type CaseFormStatus = {
   /** The form exists but the caller may not open it (id/status withheld). */
   restricted: boolean;
   id: string | null;
+  /** Detail page (designer forms that replaced the step live under /f). */
+  href: string | null;
   status: string | null;
   hasAttachments: boolean;
 };
@@ -48,20 +53,24 @@ export async function getCaseOverview(caseNumber: string): Promise<CaseOverview 
     .maybeSingle();
   if (!pcase) return null;
 
+  const designer = await designerProcurementForms([pcase.id]);
   const forms: CaseFormStatus[] = [];
   for (const formType of PROCUREMENT_FORM_TYPES) {
-    const { data } = await supabase
+    const { data: legacy } = await supabase
       .from(FORM_TABLE[formType])
       .select('id, status')
       .eq('procurement_case_id', pcase.id)
       .maybeSingle();
-    const readable = data ? await canReadForm(actor, formType, data.id) : false;
+    const replacement = legacy ? undefined : designer.find((f) => f.slot === formType);
+    const data = legacy ?? (replacement ? { id: replacement.id, status: replacement.status } : null);
+    const storedAs: FormType = replacement ? 'custom' : formType;
+    const readable = data ? await canReadForm(actor, storedAs, data.id) : false;
     let hasAttachments = false;
     if (data && readable) {
       const { count } = await supabase
         .from('attachments')
         .select('id', { count: 'exact', head: true })
-        .eq('form_type', formType)
+        .eq('form_type', storedAs)
         .eq('form_id', data.id);
       hasAttachments = (count ?? 0) > 0;
     }
@@ -72,6 +81,7 @@ export async function getCaseOverview(caseNumber: string): Promise<CaseOverview 
       exists: !!data,
       restricted: !!data && !readable,
       id: readable ? data!.id : null,
+      href: readable ? `${FORM_ROUTE_PREFIX[storedAs]}/${data!.id}` : null,
       status: readable ? data!.status : null,
       hasAttachments,
     });

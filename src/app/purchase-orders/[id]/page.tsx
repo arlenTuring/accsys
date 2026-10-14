@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { replacementFor } from '@/lib/custom-forms/legacy';
 import { getPurchaseOrderDetail } from '@/lib/purchase-orders/queries';
 import { getAttachments } from '@/lib/attachments/queries';
 import { ApprovalTimeline } from '@/app/components/approval-timeline';
@@ -25,8 +26,12 @@ export default async function PurchaseOrderDetailPage({
   const detail = await getPurchaseOrderDetail(id);
   if (!detail) notFound();
 
-    const employee = await getCurrentEmployee();
-  const attachments = await getAttachments('purchase_order', id);
+  const [employee, attachments, acceptanceReplaced, paymentReplaced] = await Promise.all([
+    getCurrentEmployee(),
+    getAttachments('purchase_order', id),
+    replacementFor('acceptance'),
+    replacementFor('expense_request'),
+  ]);
 
   const currentStep =
     detail.status === 'pending_approval' && detail.currentStepOrder !== null
@@ -97,21 +102,27 @@ export default async function PurchaseOrderDetailPage({
 
       <AttachmentsPanel formType="purchase_order" formId={id} attachments={attachments} />
 
-      {detail.status === 'approved' && (
-        <p>
-          <Link href={`/acceptances/new?orderId=${detail.id}`} className="text-blue-600 underline">
-            建立驗收單
-          </Link>
-        </p>
-      )}
+      {detail.status === 'approved' &&
+        (acceptanceReplaced ? (
+          <p className="text-sm text-td-muted">驗收單已改用新版表單，新版驗收單只能接續新版採購單。</p>
+        ) : (
+          <p>
+            <Link href={`/acceptances/new?orderId=${detail.id}`} className="text-blue-600 underline">
+              建立驗收單
+            </Link>
+          </p>
+        ))}
 
-      {detail.status === 'approved' && (
-        <p>
-          <Link href={`/expense-requests/new?orderId=${detail.id}`} className="text-blue-600 underline">
-            建立費用申請單
-          </Link>
-        </p>
-      )}
+      {detail.status === 'approved' &&
+        (paymentReplaced ? (
+          <p className="text-sm text-td-muted">費用申請單(採購付款)已改用新版表單，新版只能接續新版驗收單或採購單。</p>
+        ) : (
+          <p>
+            <Link href={`/expense-requests/new?orderId=${detail.id}`} className="text-blue-600 underline">
+              建立費用申請單
+            </Link>
+          </p>
+        ))}
 
       {canSelfEdit && (
         <section className="flex gap-3">

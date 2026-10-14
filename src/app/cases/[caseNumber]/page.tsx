@@ -1,7 +1,6 @@
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { getCaseOverview } from '@/lib/cases/queries';
-import { FORM_ROUTE_PREFIX } from '@/lib/procurement/form-registry';
 
 const STATUS_LABELS: Record<string, string> = {
   pending_approval: '簽核中',
@@ -35,7 +34,7 @@ export default async function CaseOverviewPage({
               <span className="text-gray-400">已建立（無檢視權限）</span>
             ) : f.exists ? (
               <span className="flex items-center gap-2">
-                <Link href={`${FORM_ROUTE_PREFIX[f.formType]}/${f.id}`} className="text-blue-600 underline">
+                <Link href={f.href ?? '#'} className="text-blue-600 underline">
                   {STATUS_LABELS[f.status ?? ''] ?? f.status}
                 </Link>
                 {!f.hasAttachments && (

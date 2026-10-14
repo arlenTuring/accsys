@@ -13,5 +13,5 @@ export const MIGRATION_BATCHES: Record<number, { title: string; forms: MigratedF
   2: { title: '出差報告暨旅費報支單', forms: [TRAVEL_EXPENSE_FORM] },
   3: { title: '費用申請單（部門版、部門版_單筆一萬元以下、產品專案版、營收專案版）', forms: EXPENSE_CLAIM_FORMS },
   4: { title: '資產異動申請單', forms: [ASSET_TRANSFER_FORM] },
-  5: { title: '採購流程（請購單、採購單）', forms: PROCUREMENT_FORMS },
+  5: { title: '採購流程（請購單、採購單、驗收單、採購付款、免走採購費用申請）', forms: PROCUREMENT_FORMS },
 };

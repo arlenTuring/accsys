@@ -52,6 +52,8 @@ export type TableColumn = {
    * number / money columns (formula results included) may also have a per-row ceiling.
    */
   rules?: ColumnRule[];
+  /** text columns: left blank by the applicant; finance / admin fill it in once approved (e.g. 財產編號). */
+  financeFill?: boolean;
 };
 
 export type ColumnRule = {
@@ -109,7 +111,7 @@ type FieldBase = {
 
 export type FieldDef = FieldBase &
   (
-    | { type: 'text'; maxLength: number; format: 'plain' | 'email' | 'phone' | 'tax_id'; sensitive?: boolean; default?: string }
+    | { type: 'text'; maxLength: number; format: TextFormat; sensitive?: boolean; default?: string }
     | { type: 'textarea'; maxLength: number; rows: number; sensitive?: boolean }
     | { type: 'number'; min: number | null; max: number | null; decimals: number; default?: number }
     | { type: 'money'; max: number | null }
@@ -124,12 +126,31 @@ export type FieldDef = FieldBase &
     | { type: 'supplier' }
     | { type: 'asset' }
     | { type: 'source'; sources: SourceRule[] }
-    | { type: 'table'; columns: TableColumn[]; minRows: number; maxRows: number; totalColumn: string | null }
+    | {
+        type: 'table';
+        columns: TableColumn[];
+        minRows: number;
+        maxRows: number;
+        totalColumn: string | null;
+        /** The total may not exceed this (e.g. 免走採購 under NT$10,000). */
+        maxTotal?: { value: number; message: string };
+      }
     | { type: 'attachments'; maxFiles: number | null }
     | { type: 'notice'; text: string }
   );
 
 export type FieldType = FieldDef['type'];
+
+export const TEXT_FORMATS = ['plain', 'email', 'phone', 'tax_id', 'bank_account', 'year_month'] as const;
+export type TextFormat = (typeof TEXT_FORMATS)[number];
+export const TEXT_FORMAT_LABELS: Record<TextFormat, string> = {
+  plain: '一般文字',
+  email: 'Email',
+  phone: '電話',
+  tax_id: '統一編號',
+  bank_account: '銀行帳號',
+  year_month: '年月（YYYY-MM）',
+};
 
 /**
  * 關聯單據: the applicant picks one of their own approved submissions of a
@@ -176,12 +197,30 @@ export type AssetRegisterLink = {
   custodians: { original: string; new: string; other: string | null };
 };
 
+/**
+ * 付款排程: on submit the server fills a blank 預計付款日 from 發票月份 (the
+ * 25th of the following month) and fixes the payment batch (廠商 on the 25th,
+ * 員工 on the 15th / 30th) from today's date.
+ */
+export type PaymentLink = {
+  /** select / radio whose option codes are employee and supplier. */
+  payeeType: string;
+  /** text field in year_month format. */
+  invoiceMonth: string | null;
+  /** date field. */
+  expectedPaymentDate: string | null;
+};
+
+/** Server-computed payment batch kept in the submission data. */
+export const PAYMENT_BATCH_KEY = '_paymentBatch';
+
 export type FormSchema = {
   version: 1;
   sections: FormSection[];
   /** 代為申請: the filer may name another employee as applicant, who confirms first. */
   onBehalf?: boolean;
   assetRegister?: AssetRegisterLink;
+  payment?: PaymentLink;
 };
 
 export const FIELD_TYPES: readonly FieldType[] = [
@@ -477,6 +516,14 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
       }
       col.required = false;
     }
+    if (v.financeFill === true) {
+      if (type !== 'text') errors.push(`${where}：只有文字欄可以設為核准後由財會填寫`);
+      else if (col.unique || col.rules) errors.push(`${where}：核准後由財會填寫的欄位不能設定不可重複或檢查規則`);
+      else {
+        col.financeFill = true;
+        col.required = false;
+      }
+    }
     return col;
   };
 
@@ -636,7 +683,7 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
     let def: FieldDef;
     switch (type) {
       case 'text': {
-        const format = (['plain', 'email', 'phone', 'tax_id'] as const).find((f) => f === v.format) ?? 'plain';
+        const format = TEXT_FORMATS.find((f) => f === v.format) ?? 'plain';
         def = { ...base, type, maxLength: int(v.maxLength, `${name} 字數上限`, 1, SCHEMA_LIMITS.textMax, 200), format };
         if (v.sensitive === true) def.sensitive = true;
         if (v.default !== undefined && v.default !== null && v.default !== '') {
@@ -733,6 +780,15 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
           errors.push(`${name}：標記為單據金額的明細表需以金額欄作為合計欄`);
         }
         def = { ...base, type, columns, minRows, maxRows, totalColumn };
+        if (v.maxTotal !== undefined && v.maxTotal !== null) {
+          const m = v.maxTotal;
+          if (totalColumn === null) errors.push(`${name}：需先設定合計欄才能限制合計上限`);
+          if (!isObj(m) || typeof m.value !== 'number' || !Number.isFinite(m.value) || m.value < 0) {
+            errors.push(`${name}：合計上限需為 0 以上的數字`);
+          } else {
+            def.maxTotal = { value: m.value, message: text(m.message, `${name} 合計上限提示訊息`, SCHEMA_LIMITS.ruleMessage, true) };
+          }
+        }
         break;
       }
       case 'attachments':
@@ -801,11 +857,47 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
   if (sourceFields > 1) errors.push('每張表單最多一個關聯單據欄位');
   checkSourceRows(sections.flatMap((s) => s.fields), errors);
   const assetRegister = raw.assetRegister === undefined || raw.assetRegister === null ? undefined : parseAssetRegister(raw.assetRegister, earlierDefs, errors);
+  const payment = raw.payment === undefined || raw.payment === null ? undefined : parsePayment(raw.payment, earlierDefs, errors);
   if (errors.length > 0) return { ok: false, errors: [...new Set(errors)] };
   return {
     ok: true,
-    schema: { version: 1, sections, ...(raw.onBehalf === true ? { onBehalf: true } : {}), ...(assetRegister ? { assetRegister } : {}) },
+    schema: {
+      version: 1,
+      sections,
+      ...(raw.onBehalf === true ? { onBehalf: true } : {}),
+      ...(assetRegister ? { assetRegister } : {}),
+      ...(payment ? { payment } : {}),
+    },
   };
+}
+
+/** 付款對象 must be a required, always-shown choice of employee / supplier; the date fields are optional. */
+function parsePayment(raw: unknown, fields: Map<string, FieldDef>, errors: string[]): PaymentLink | undefined {
+  const where = '付款排程';
+  const r = isObj(raw) ? raw : null;
+  if (!r || typeof r.payeeType !== 'string') {
+    errors.push(`${where}：請選擇付款對象欄位`);
+    return undefined;
+  }
+  const before = errors.length;
+  const payee = fields.get(r.payeeType);
+  if (payee?.type !== 'select' && payee?.type !== 'radio') errors.push(`${where}：付款對象需為下拉選單或單選欄位`);
+  else {
+    const codes = payee.options.map((o) => o.value).sort().join(',');
+    if (codes !== 'employee,supplier') errors.push(`${where}：付款對象的選項代碼需為 employee 與 supplier`);
+    if (!payee.required || payee.visibleWhen) errors.push(`${where}：付款對象需設為必填且不設顯示條件`);
+  }
+  const optional = (key: string, name: string, ok: (f: FieldDef) => boolean, need: string): string | null => {
+    const id = r[key];
+    if (id === undefined || id === null || id === '') return null;
+    const f = typeof id === 'string' ? fields.get(id) : undefined;
+    if (!f || !ok(f)) errors.push(`${where}：「${name}」需為${need}`);
+    return typeof id === 'string' ? id : null;
+  };
+  const invoiceMonth = optional('invoiceMonth', '發票月份', (f) => f.type === 'text' && f.format === 'year_month', '格式為年月的文字欄位');
+  const expectedPaymentDate = optional('expectedPaymentDate', '預計付款日', (f) => f.type === 'date', '日期欄位');
+  if (errors.length > before) return undefined;
+  return { payeeType: r.payeeType, invoiceMonth, expectedPaymentDate };
 }
 
 /**
@@ -830,7 +922,7 @@ function checkSourceRows(fields: FieldDef[], errors: string[]) {
     const seen = new Set<string>();
     for (const m of rule.rows.columns) {
       const col = table.columns.find((c) => c.id === m.to);
-      if (!col || col.formula || col.rateFor !== undefined) errors.push(`${where}：帶入欄位需為明細表中非計算的欄位`);
+      if (!col || col.formula || col.rateFor !== undefined || col.financeFill) errors.push(`${where}：帶入欄位需為明細表中非計算的欄位`);
       else if (seen.has(col.id)) errors.push(`${where}：「${col.label}」重複帶入`);
       seen.add(m.to);
     }

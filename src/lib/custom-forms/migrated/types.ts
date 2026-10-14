@@ -1,5 +1,5 @@
 import type { FlowDef } from '@/lib/approval/flow/types';
-import type { AssetRegisterLink } from '../schema';
+import type { AssetRegisterLink, PaymentLink } from '../schema';
 
 /** A hard-coded form rebuilt as a designer definition (published by `npm run forms:migrate`). */
 export type MigratedForm = {
@@ -12,6 +12,6 @@ export type MigratedForm = {
   /** form_type of the hard-coded form it replaces. */
   legacyFormType: string;
   /** Raw schema JSON; parseFormSchema checks it on publish (and in the unit tests). */
-  schema: { version: 1; onBehalf?: boolean; assetRegister?: AssetRegisterLink; sections: unknown[] };
+  schema: { version: 1; onBehalf?: boolean; assetRegister?: AssetRegisterLink; payment?: PaymentLink; sections: unknown[] };
   flow: FlowDef;
 };

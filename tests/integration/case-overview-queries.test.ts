@@ -62,10 +62,20 @@ describe('getCaseOverview', () => {
     const overview = await getCaseOverview(caseNumber);
     expect(overview).not.toBeNull();
     expect(overview!.forms).toEqual([
-      { formType: 'purchase_request', label: '請購單', itemCode: 'A1', exists: true, restricted: false, id: requestId, status: 'approved', hasAttachments: false },
-      { formType: 'purchase_order', label: '採購單', itemCode: 'B1', exists: false, restricted: false, id: null, status: null, hasAttachments: false },
-      { formType: 'acceptance', label: '驗收單', itemCode: 'C1', exists: false, restricted: false, id: null, status: null, hasAttachments: false },
-      { formType: 'expense_request', label: '費用申請單', itemCode: 'D1', exists: false, restricted: false, id: null, status: null, hasAttachments: false },
+      {
+        formType: 'purchase_request',
+        label: '請購單',
+        itemCode: 'A1',
+        exists: true,
+        restricted: false,
+        id: requestId,
+        href: `/requests/${requestId}`,
+        status: 'approved',
+        hasAttachments: false,
+      },
+      { formType: 'purchase_order', label: '採購單', itemCode: 'B1', exists: false, restricted: false, id: null, href: null, status: null, hasAttachments: false },
+      { formType: 'acceptance', label: '驗收單', itemCode: 'C1', exists: false, restricted: false, id: null, href: null, status: null, hasAttachments: false },
+      { formType: 'expense_request', label: '費用申請單', itemCode: 'D1', exists: false, restricted: false, id: null, href: null, status: null, hasAttachments: false },
     ]);
   });
 

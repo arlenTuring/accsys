@@ -5,16 +5,33 @@ import type { OrgSnapshot } from '@/lib/approval/flow/types';
 import { validateQuoteCount } from '@/lib/procurement/quote-requirement';
 import { validatePurchaseRequestInput } from '@/lib/purchase-requests/validate';
 import { parseDefinition } from '../definition';
-import { allFields, sourceTargets, SOURCE_ROW_KEY } from '../schema';
+import { allFields, parseFormSchema, PAYMENT_BATCH_KEY, sourceTargets, SOURCE_ROW_KEY } from '../schema';
 import { validateSubmission, type TableValue } from '../validate';
 import { MIGRATION_BATCHES } from '.';
-import { PAYMENT_TERMS, PROCUREMENT_FORMS, PURCHASE_ORDER_FORM, PURCHASE_REQUEST_FORM, PURCHASE_REQUEST_KEY } from './procurement';
+import { validateAcceptanceInput } from '@/lib/acceptances/validate';
+import { validateExpenseRequestInput } from '@/lib/expense-requests/validate';
+import { computeDefaultExpectedPaymentDate, computePaymentBatchDate } from '@/lib/procurement/payment-batch';
+import { applyPaymentSchedule, paymentBatchOf } from '../payment';
+import {
+  ACCEPTANCE_FORM,
+  ACCEPTANCE_KEY,
+  PAYMENT_TERMS,
+  PROCUREMENT_FORMS,
+  PROCUREMENT_PAYMENT_FORM,
+  PURCHASE_ORDER_FORM,
+  PURCHASE_ORDER_KEY,
+  PURCHASE_REQUEST_FORM,
+  PURCHASE_REQUEST_KEY,
+  STANDALONE_LIMIT_MESSAGE,
+  STANDALONE_PAYMENT_FORM,
+} from './procurement';
 import type { MigratedForm } from './types';
 
-// Parity checklist for batch 5a: 請購單 / 採購單 accept and reject what the
-// hard-coded services did (budget-owner sameness and the source request are
-// checked against the database, see tests/integration/legacy-procurement),
-// and resolve the same chain as buildChain.
+// Parity checklist for batch 5: the procurement forms accept and reject what
+// the hard-coded services did (budget-owner sameness, source documents and
+// one-per-case are checked against the database, see
+// tests/integration/legacy-procurement), and resolve the same chain as
+// buildChain.
 
 const TODAY = '2026-10-14';
 const BUDGET = '33333333-3333-4333-8333-333333333333';
@@ -54,7 +71,13 @@ function oldRequest(lines: ReturnType<typeof line>[], days: number | null): bool
 describe('batch 5a definitions', () => {
   it('parse and replace 請購單 / 採購單', () => {
     expect(MIGRATION_BATCHES[5].forms).toEqual(PROCUREMENT_FORMS);
-    expect(PROCUREMENT_FORMS.map((f) => f.legacyFormType)).toEqual(['purchase_request', 'purchase_order']);
+    expect(PROCUREMENT_FORMS.map((f) => f.legacyFormType)).toEqual([
+      'purchase_request',
+      'purchase_order',
+      'acceptance',
+      'expense_request',
+      'standalone_expense_request',
+    ]);
     for (const f of PROCUREMENT_FORMS) definition(f);
   });
 
@@ -163,7 +186,235 @@ describe('採購單: unit prices and the quote rule match the old service', () =
   }
 });
 
-describe('批次 5a approval chain matches buildChain', () => {
+describe('驗收單: carried PO rows and pass / fail', () => {
+  const { schema } = definition(ACCEPTANCE_FORM);
+  const row = (p: Record<string, unknown> = {}) => ({
+    budgetCodeId: BUDGET,
+    description: '筆電',
+    quantity: 2,
+    amount: '60000.00',
+    passFail: 'pass',
+    [SOURCE_ROW_KEY]: 0,
+    ...p,
+  });
+  const input = (rows: Record<string, unknown>[], p: Record<string, unknown> = {}) => ({
+    purchaseOrderId: SOURCE,
+    contractorSupplierId: SUPPLIER,
+    acceptanceDate: '2026-10-01',
+    items: { rows, total: null },
+    ...p,
+  });
+
+  it('continues an approved 採購單; mapped columns come from it, 財產編號 is left to finance', () => {
+    const source = allFields(schema).find((f) => f.type === 'source');
+    expect(source?.type === 'source' && source.sources.map((r) => r.form)).toEqual([PURCHASE_ORDER_KEY]);
+    expect([...(sourceTargets(schema).get('items') ?? [])].sort()).toEqual(['amount', 'budgetCodeId', 'description', 'quantity']);
+    const items = allFields(schema).find((f) => f.id === 'items');
+    expect(items?.type === 'table' && items.columns.find((c) => c.id === 'propertyTag')?.financeFill).toBe(true);
+  });
+
+  // Old: checkHeader (supplier, ISO date), resultsFor (pass / fail per line) and validateAcceptanceInput (at least one line).
+  const cases: { name: string; rows: Record<string, unknown>[]; p?: Record<string, unknown>; ok: boolean }[] = [
+    { name: 'accepts a complete form', rows: [row()], ok: true },
+    { name: 'failed lines are kept', rows: [row(), row({ passFail: 'fail', [SOURCE_ROW_KEY]: 1 })], ok: true },
+    { name: 'every line failed is still an acceptance', rows: [row({ passFail: 'fail' })], ok: true },
+    { name: 'unknown result', rows: [row({ passFail: 'maybe' })], ok: false },
+    { name: 'result is required', rows: [row({ passFail: '' })], ok: false },
+    { name: 'no lines', rows: [], ok: false },
+    { name: 'supplier is required', rows: [row()], p: { contractorSupplierId: '' }, ok: false },
+    { name: 'acceptance date is required', rows: [row()], p: { acceptanceDate: '' }, ok: false },
+    { name: 'acceptance date must be a date', rows: [row()], p: { acceptanceDate: '2026-02-30' }, ok: false },
+  ];
+  for (const c of cases) {
+    it(c.name, () => {
+      if (c.rows.length === 0) expect(validateAcceptanceInput({ items: [] }).ok).toBe(false);
+      const after = validateSubmission(schema, input(c.rows, c.p), TODAY);
+      expect({ ok: after.ok, errors: after.ok ? undefined : after.errors }).toMatchObject({ ok: c.ok });
+      if (after.ok) {
+        expect(after.value.promoted.totalAmount).toBe((60000 * c.rows.length).toFixed(2));
+        expect((after.value.data.items as TableValue).rows.every((r) => r.propertyTag === null)).toBe(true);
+      }
+    });
+  }
+
+  it('ignores a 財產編號 typed by the applicant', () => {
+    const after = validateSubmission(schema, input([row({ propertyTag: 'PT-001' })]), TODAY);
+    expect(after.ok && (after.value.data.items as TableValue).rows[0].propertyTag).toBeNull();
+  });
+});
+
+describe('費用申請單(採購付款): sources and payee rules match the old service', () => {
+  const { schema } = definition(PROCUREMENT_PAYMENT_FORM);
+  const input = (p: Record<string, unknown> = {}, rows = [{ budgetCodeId: BUDGET, description: '筆電', amount: '60000.00', [SOURCE_ROW_KEY]: 0 }]) => ({
+    sourceId: SOURCE,
+    items: { rows, total: null },
+    payeeType: 'supplier',
+    payeeSupplierId: SUPPLIER,
+    bankName: '',
+    bankAccount: '',
+    accountName: '',
+    paymentMethod: '匯款',
+    invoiceMonth: '',
+    expectedPaymentDate: '',
+    ...p,
+  });
+
+  it('takes passed lines of an approved 驗收單, or a prepaid 採購單 before acceptance', () => {
+    const source = allFields(schema).find((f) => f.type === 'source');
+    if (source?.type !== 'source') throw new Error('no source field');
+    const [acceptance, order] = source.sources;
+    expect(acceptance.form).toBe(ACCEPTANCE_KEY);
+    expect(acceptance.rows).toMatchObject({ filter: { column: 'passFail', value: 'pass' }, mode: 'subset' });
+    expect(order.form).toBe(PURCHASE_ORDER_KEY);
+    expect(order.when).toEqual({ field: 'paymentTerms', op: 'eq', value: '預付款' });
+    expect(order.unlessCaseHas).toBe(ACCEPTANCE_KEY);
+    expect(order.rows?.columns).toContainEqual({ to: 'amount', from: 'totalPrice' });
+    expect(schema.payment).toEqual({ payeeType: 'payeeType', invoiceMonth: 'invoiceMonth', expectedPaymentDate: 'expectedPaymentDate' });
+  });
+
+  const cases: { name: string; p: Record<string, unknown>; rows?: Record<string, unknown>[]; ok: boolean }[] = [
+    { name: 'supplier payee', p: {}, ok: true },
+    { name: 'supplier payee needs a supplier', p: { payeeSupplierId: '' }, ok: false },
+    { name: 'employee payee with a bank account', p: { payeeType: 'employee', payeeSupplierId: '', bankAccount: '012-3456 789' }, ok: true },
+    { name: 'employee payee needs a bank account', p: { payeeType: 'employee', payeeSupplierId: '' }, ok: false },
+    { name: 'bank account with letters', p: { payeeType: 'employee', bankAccount: 'ABC12345' }, ok: false },
+    { name: 'bank account of 3 digits', p: { payeeType: 'employee', bankAccount: '123' }, ok: false },
+    { name: 'bank account of 30 digits', p: { payeeType: 'employee', bankAccount: '1'.repeat(30) }, ok: true },
+    { name: 'bank name over 100 characters', p: { payeeType: 'employee', bankAccount: '12345678', bankName: 'x'.repeat(101) }, ok: false },
+    { name: 'unknown payee type', p: { payeeType: 'other' }, ok: false },
+    { name: 'payment method is required', p: { paymentMethod: '' }, ok: false },
+    { name: 'invoice month', p: { invoiceMonth: '2026-07' }, ok: true },
+    { name: 'invoice month 13', p: { invoiceMonth: '2026-13' }, ok: false },
+    { name: 'invoice month as a date', p: { invoiceMonth: '2026-07-01' }, ok: false },
+    { name: 'expected payment date must be a date', p: { expectedPaymentDate: '2026-02-30' }, ok: false },
+    { name: 'at least one line', p: {}, rows: [], ok: false },
+  ];
+  for (const c of cases) {
+    it(c.name, () => {
+      const after = validateSubmission(schema, c.rows ? input(c.p, c.rows as never) : input(c.p), TODAY);
+      expect({ ok: after.ok, errors: after.ok ? undefined : after.errors }).toMatchObject({ ok: c.ok });
+      const merged = { ...input(c.p), ...(c.rows ? { items: { rows: c.rows } } : {}) } as Record<string, unknown>;
+      const old = validateExpenseRequestInput({
+        payeeType: merged.payeeType as 'employee' | 'supplier',
+        payeeSupplierId: (merged.payeeSupplierId as string) || null,
+        bankAccount: (merged.bankAccount as string) || null,
+        includedItemCount: (merged.items as { rows: unknown[] }).rows.length,
+      });
+      if (!old.ok) expect(after.ok).toBe(false);
+    });
+  }
+
+  it('masks the bank account for other viewers', () => {
+    const bank = allFields(schema).find((f) => f.id === 'bankAccount');
+    expect(bank?.type === 'text' && bank.sensitive).toBe(true);
+  });
+});
+
+describe('付款排程 matches the old preparePayment', () => {
+  const link = { payeeType: 'payeeType', invoiceMonth: 'invoiceMonth', expectedPaymentDate: 'expectedPaymentDate' };
+  it('every payee, invoice month, expected date and day of submission', () => {
+    let cases = 0;
+    for (const payeeType of ['employee', 'supplier'] as const)
+      for (const invoiceMonth of [null, '2026-01', '2026-02', '2026-12'])
+        for (const expected of [null, '2026-03-10', '2026-03-16', '2026-03-31', '2026-02-28'])
+          for (const today of ['2026-01-05', '2026-03-12', '2026-03-24', '2026-12-31']) {
+            const out = applyPaymentSchedule(link, { payeeType, invoiceMonth: invoiceMonth ?? '', expectedPaymentDate: expected }, today);
+            const oldExpected = expected ?? (invoiceMonth ? computeDefaultExpectedPaymentDate(invoiceMonth) : null);
+            expect(out.expectedPaymentDate).toBe(oldExpected);
+            expect(paymentBatchOf(out)).toEqual(
+              computePaymentBatchDate({ payeeType, referenceDate: today, expectedPaymentDate: oldExpected, invoiceMonth })
+            );
+            cases += 1;
+          }
+    expect(cases).toBe(2 * 4 * 5 * 4);
+  });
+
+  it('client input cannot set the batch', () => {
+    const { schema } = definition(PROCUREMENT_PAYMENT_FORM);
+    const after = validateSubmission(
+      schema,
+      { ...{ sourceId: SOURCE, payeeType: 'supplier', payeeSupplierId: SUPPLIER, paymentMethod: '匯款' }, [PAYMENT_BATCH_KEY]: { batchDate: '2000-01-01' }, items: { rows: [{ budgetCodeId: BUDGET, description: 'x', amount: '1', [SOURCE_ROW_KEY]: 0 }] } },
+      TODAY
+    );
+    expect(after.ok && PAYMENT_BATCH_KEY in after.value.data).toBe(false);
+  });
+});
+
+describe('費用申請單(免走採購): old standalone checks', () => {
+  const { schema } = definition(STANDALONE_PAYMENT_FORM);
+  const input = (amounts: string[], p: Record<string, unknown> = {}) => ({
+    budgetCodeId: BUDGET,
+    items: { rows: amounts.map((amount) => ({ description: '文具', amount })), total: null },
+    payeeType: 'supplier',
+    payeeSupplierId: SUPPLIER,
+    paymentMethod: '匯款',
+    ...p,
+  });
+  const cases: { name: string; amounts: string[]; p?: Record<string, unknown>; ok: boolean }[] = [
+    { name: 'one line', amounts: ['500'], ok: true },
+    { name: 'total 9,999.99', amounts: ['5000', '4999.99'], ok: true },
+    { name: 'total 10,000 is rejected', amounts: ['5000', '5000'], ok: false },
+    { name: 'total over 10,000', amounts: ['12000'], ok: false },
+    { name: 'amount 0', amounts: ['0'], ok: false },
+    { name: '50 lines', amounts: Array.from({ length: 50 }, () => '1'), ok: true },
+    { name: '51 lines', amounts: Array.from({ length: 51 }, () => '1'), ok: false },
+    { name: 'no lines', amounts: [], ok: false },
+    { name: 'budget code is required', amounts: ['500'], p: { budgetCodeId: '' }, ok: false },
+  ];
+  for (const c of cases) {
+    it(c.name, () => {
+      const after = validateSubmission(schema, input(c.amounts, c.p), TODAY);
+      expect({ ok: after.ok, errors: after.ok ? undefined : after.errors }).toMatchObject({ ok: c.ok });
+      if (after.ok) expect(after.value.promoted.budgetCodeId).toBe(BUDGET);
+    });
+  }
+  it('explains the limit like the old form', () => {
+    const after = validateSubmission(schema, input(['10000']), TODAY);
+    expect(!after.ok && Object.values(after.errors).join('')).toContain(STANDALONE_LIMIT_MESSAGE);
+  });
+});
+
+describe('batch 5b schema checks', () => {
+  const base = (fields: unknown[], extra: Record<string, unknown> = {}) => ({ version: 1, sections: [{ id: 's', title: '', description: '', fields }], ...extra });
+  const choice = (p: Record<string, unknown> = {}) => ({
+    id: 'payee',
+    type: 'select',
+    label: '付款對象',
+    required: true,
+    options: [
+      { value: 'supplier', label: '廠商' },
+      { value: 'employee', label: '員工' },
+    ],
+    ...p,
+  });
+  const table = (cols: unknown[], p: Record<string, unknown> = {}) => ({ id: 't', type: 'table', label: '明細', columns: cols, ...p });
+
+  it('財會填寫 only on text columns, never required or unique', () => {
+    expect(parseFormSchema(base([table([{ id: 'a', label: 'A', type: 'number', financeFill: true }])])).ok).toBe(false);
+    expect(parseFormSchema(base([table([{ id: 'a', label: 'A', type: 'text', financeFill: true, unique: true }])])).ok).toBe(false);
+    const ok = parseFormSchema(base([table([{ id: 'a', label: 'A', type: 'text', required: true, financeFill: true }])]));
+    expect(ok.ok && ok.schema.sections[0].fields[0].type === 'table' && ok.schema.sections[0].fields[0].columns[0].required).toBe(false);
+  });
+
+  it('合計上限 needs a total column', () => {
+    expect(parseFormSchema(base([table([{ id: 'a', label: 'A', type: 'money' }], { maxTotal: { value: 10, message: 'x' } })])).ok).toBe(false);
+    expect(parseFormSchema(base([table([{ id: 'a', label: 'A', type: 'money' }], { totalColumn: 'a', maxTotal: { value: -1, message: 'x' } })])).ok).toBe(false);
+    expect(parseFormSchema(base([table([{ id: 'a', label: 'A', type: 'money' }], { totalColumn: 'a', maxTotal: { value: 10, message: 'x' } })])).ok).toBe(true);
+  });
+
+  it('付款排程 needs a required employee / supplier choice and typed date fields', () => {
+    const link = (p: Record<string, unknown> = {}) => ({ payment: { payeeType: 'payee', invoiceMonth: null, expectedPaymentDate: null, ...p } });
+    expect(parseFormSchema(base([choice()], link())).ok).toBe(true);
+    expect(parseFormSchema(base([choice({ required: false })], link())).ok).toBe(false);
+    expect(parseFormSchema(base([choice({ options: [{ value: 'a', label: 'A' }, { value: 'supplier', label: 'S' }] })], link())).ok).toBe(false);
+    expect(parseFormSchema(base([choice(), { id: 'm', type: 'text', label: '月', format: 'plain' }], link({ invoiceMonth: 'm' }))).ok).toBe(false);
+    expect(parseFormSchema(base([choice(), { id: 'm', type: 'text', label: '月', format: 'year_month' }], link({ invoiceMonth: 'm' }))).ok).toBe(true);
+    expect(parseFormSchema(base([choice(), { id: 'd', type: 'text', label: '日' }], link({ expectedPaymentDate: 'd' }))).ok).toBe(false);
+    expect(parseFormSchema(base([choice()], link({ payeeType: 'missing' }))).ok).toBe(false);
+  });
+});
+
+describe('批次 5 approval chain matches buildChain', () => {
   const people = ['P1', 'MGR', 'BO', 'GM', 'CH'];
   const amounts = [1, CHAIRMAN_THRESHOLD, CHAIRMAN_THRESHOLD + 0.01, 250000];
 
@@ -211,7 +462,7 @@ describe('批次 5a approval chain matches buildChain', () => {
                   departmentId: 'D1',
                   formKey: form.key,
                   today: TODAY,
-                  fields: { 'items.budgetCodeId': [BUDGET, BUDGET], items: amount.toFixed(2) },
+                  fields: { 'items.budgetCodeId': [BUDGET, BUDGET], budgetCodeId: BUDGET, items: amount.toFixed(2) },
                 },
                 org(manager, owner)
               );

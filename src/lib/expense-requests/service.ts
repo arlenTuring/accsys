@@ -1,6 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { recordAudit } from '@/lib/audit/record';
 import { isUuid } from '@/lib/authz/forms';
+import { assertLegacyOpen } from '@/lib/custom-forms/legacy';
 import {
   acceptanceItems,
   acceptances,
@@ -171,6 +172,7 @@ export function createExpenseRequest(actor: Actor, input: CreateExpenseRequestIn
       const { idempotencyKey, ...request } = input ?? ({} as CreateExpenseRequestInput);
       const claim = await claimIdempotencyKey<Claimed>(tx, { actorId: actor.id, operation, key: idempotencyKey, request });
       if ('replay' in claim) return claim.replay;
+      await assertLegacyOpen(tx, 'expense_request', '費用申請單(採購付款)');
 
       if (!isUuid(input.purchaseOrderId)) abort('not_found', '找不到來源採購單');
       const source = await lockForm(tx, 'purchase_order', input.purchaseOrderId);
@@ -257,6 +259,7 @@ export function createStandaloneExpenseRequest(
       const { idempotencyKey, ...request } = input ?? ({} as CreateStandaloneExpenseRequestInput);
       const claim = await claimIdempotencyKey<Claimed>(tx, { actorId: actor.id, operation, key: idempotencyKey, request });
       if ('replay' in claim) return claim.replay;
+      await assertLegacyOpen(tx, 'standalone_expense_request', '免走採購的費用申請單');
 
       if (!Array.isArray(input.items) || input.items.length === 0) abort('validation', '費用申請單至少需要一個明細項次');
       if (input.items.length > 50) abort('validation', '明細項次不可超過 50 項');

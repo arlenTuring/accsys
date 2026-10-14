@@ -165,10 +165,13 @@ export default async function DesignerFormDetailPage({
               {fieldText(f, detail.data[f.id], detail.labels, detail.data)}
             </Item>
           ))}
+          {detail.paymentBatch && (
+            <Item label="預計撥款批次日">{detail.paymentBatch.batchDate.replaceAll('-', '/')}</Item>
+          )}
         </dl>
       </section>
 
-      <SubmissionFields schema={detail.schema} data={detail.data} labels={detail.labels} />
+      <SubmissionFields schema={detail.schema} data={detail.data} labels={detail.labels} financeEdit={detail.canFinanceFill ? detail.id : undefined} />
 
       {detail.assetRegister && detail.assetRegister.lines.length > 0 && (
         <AssetRegisterLines lines={detail.assetRegister.lines} appliedAt={detail.assetRegister.appliedAt} />

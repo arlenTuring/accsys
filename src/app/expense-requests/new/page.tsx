@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { replacementFor } from '@/lib/custom-forms/legacy';
 import { getEligiblePurchaseOrdersForExpenseRequest } from '@/lib/expense-requests/queries';
 import { getBudgetCodeList } from '@/lib/budget-codes/queries';
 import { ExpenseRequestForm } from './expense-request-form';
@@ -17,6 +18,8 @@ export default async function NewExpenseRequestPage({
   const supabase = createAppDb();
   const employee = await getCurrentEmployee();
   if (!employee) redirect('/login');
+  const replacement = await replacementFor(mode === 'standalone' ? 'standalone_expense_request' : 'expense_request');
+  if (replacement) redirect(`/f/${replacement}/new`);
 
   if (mode === 'standalone') {
     const [budgetCodes, suppliersResult] = await Promise.all([

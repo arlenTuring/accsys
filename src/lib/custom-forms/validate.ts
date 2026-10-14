@@ -53,6 +53,8 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE = /^[0-9+\-() #]{6,30}$/;
 const TAX_ID = /^\d{8}$/;
+const BANK_ACCOUNT = /^[0-9 -]{4,30}$/;
+const YEAR_MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 const CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 
 const EMPTY_ORG: OrgSnapshot = {
@@ -328,6 +330,10 @@ function table(
       }
     };
     for (const col of inputColumns) {
+      if (col.financeFill) {
+        row[col.id] = null;
+        continue;
+      }
       attempt(col, () => {
         row[col.id] = col.rateFor !== undefined ? rateCell(col, r[col.id], row[col.rateFor]) : cell(col, r[col.id]);
         if (row[col.id] === null) return;
@@ -381,6 +387,7 @@ function table(
     } else {
       total = Number(values.reduce((s: number, x) => s + Number(x), 0).toFixed(col.decimals ?? 0));
     }
+    if (field.maxTotal && total !== null && Number(total) > field.maxTotal.value) bad(field.maxTotal.message);
   }
   return { rows, total };
 }
@@ -418,6 +425,8 @@ function value(
       if (field.format === 'email' && !EMAIL.test(s)) bad('Email 格式不正確');
       if (field.format === 'phone' && !PHONE.test(s)) bad('電話格式不正確');
       if (field.format === 'tax_id' && !TAX_ID.test(s)) bad('統一編號需為 8 碼數字');
+      if (field.format === 'bank_account' && !BANK_ACCOUNT.test(s)) bad('銀行帳號需為 4–30 碼數字（可含空格或連字號）');
+      if (field.format === 'year_month' && !YEAR_MONTH.test(s)) bad('格式需為 YYYY-MM');
       return s;
     }
     case 'textarea':

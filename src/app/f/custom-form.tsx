@@ -266,6 +266,8 @@ function TableInput({
                   <td key={c.id} className="border border-td-border p-1 align-top">
                     {c.formula ? (
                       <span className="block px-2 py-2 text-right tabular-nums text-td-blue-dark">{preview(field, c, row) || '—'}</span>
+                    ) : c.financeFill ? (
+                      <span className="block px-2 py-2 text-xs text-td-muted">核准後由財會填寫</span>
                     ) : carried?.locked.has(c.id) ? (
                       <span
                         className={`block px-2 py-2 text-td-blue-dark ${c.type === 'number' || c.type === 'money' ? 'text-right tabular-nums' : ''}`}
@@ -366,7 +368,8 @@ function FieldInput({
       return (
         <input
           type={field.format === 'email' ? 'email' : field.format === 'phone' ? 'tel' : 'text'}
-          inputMode={field.format === 'tax_id' ? 'numeric' : undefined}
+          inputMode={field.format === 'tax_id' || field.format === 'bank_account' ? 'numeric' : undefined}
+          placeholder={field.format === 'year_month' ? '2026-07' : undefined}
           maxLength={field.maxLength}
           value={str}
           onChange={(e) => onChange(e.target.value)}

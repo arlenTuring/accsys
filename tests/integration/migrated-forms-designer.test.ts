@@ -69,6 +69,9 @@ describe('migrated forms are ordinary designer forms', () => {
         'asset_transfer',
         'purchase_request',
         'purchase_order',
+        'acceptance',
+        'expense_request',
+        'standalone_expense_request',
       ].sort()
     );
   });

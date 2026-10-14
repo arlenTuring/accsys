@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
-import { canAttachToForm, canReadForm, isUuid } from '@/lib/authz/forms';
+import { canAttachToForm, canReadForm, isFinanceOrAdmin, isUuid } from '@/lib/authz/forms';
 import { getDb } from '@/lib/db';
 import { ACTIVE_ASSET_STATUSES, ASSET_STATUS_LABELS, type AssetStatus } from '@/lib/asset-transfers/constants';
 import {
@@ -24,6 +24,7 @@ import {
 import { parseDefinition } from './definition';
 import { allFields, sourceFieldOf, type BudgetScope, type FieldDef, type FormSchema } from './schema';
 import { canSeeSensitive, maskSensitive } from './sensitive';
+import { paymentBatchOf, type PaymentBatch } from './payment';
 import { ruleHolds, sourceOptions, type SourceOption } from './source';
 import type { TableValue } from './validate';
 import { canFile, parseVisibility } from './visibility';
@@ -359,6 +360,10 @@ export type SubmissionDetail = {
   /** Applicant or filer (may withdraw before the first decision). */
   isOwner: boolean;
   canAttach: boolean;
+  /** Finance / admin on an approved submission with 核准後由財會填寫 columns. */
+  canFinanceFill: boolean;
+  /** Forms with 付款排程 (null otherwise). */
+  paymentBatch: PaymentBatch | null;
   /** Register-linked forms only (null otherwise). */
   assetRegister: { lines: SubmissionAssetLine[]; appliedAt: Date | null } | null;
   /** Forms the applicant may file next from this approved submission (關聯單據). */
@@ -585,7 +590,12 @@ export async function getSubmissionDetail(id: string, opts: { withOptions?: bool
     canResubmit,
     isOwner,
     canAttach: await canAttachToForm(actor, FORM, id),
+    canFinanceFill:
+      s.status === 'approved' &&
+      isFinanceOrAdmin(actor) &&
+      allFields(parsed.schema).some((f) => f.type === 'table' && f.columns.some((c) => c.financeFill)),
     assetRegister: parsed.schema.assetRegister ? { lines: await assetLinesOf(s.id), appliedAt: s.registerAppliedAt } : null,
+    paymentBatch: parsed.schema.payment ? paymentBatchOf(stored) : null,
   };
 }
 

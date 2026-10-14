@@ -85,6 +85,15 @@ export async function returnCustomFormStep(id: string, reason: string, expectedV
   return result;
 }
 
+export async function setCustomFormFinanceCell(id: string, input: service.FinanceCellInput): Promise<ActionResult> {
+  const actor = await getCurrentEmployee();
+  if (!actor) return fail('unauthenticated', '找不到您的員工資料');
+  if (!(await canReadForm(actor, FORM, id))) return fail('not_found', '找不到這張申請單');
+  const result = await service.setFinanceCell(actor, id, input);
+  refresh();
+  return result;
+}
+
 export async function withdrawCustomForm(id: string): Promise<ActionResult> {
   const result = await service.withdrawSubmission(await getCurrentEmployee(), id);
   refresh();

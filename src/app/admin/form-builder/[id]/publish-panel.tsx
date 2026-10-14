@@ -115,6 +115,7 @@ export function PublishPanel({
                       {published && summary.sectionsChanged && <li>區段或欄位順序有調整</li>}
                       {summary.onBehalfChanged && <li>{draft?.schema.onBehalf ? '開啟' : '關閉'}「允許代為申請」</li>}
                       {summary.assetRegisterChanged && <li>{draft?.schema.assetRegister ? '調整' : '關閉'}「財產清冊串接」</li>}
+                      {summary.paymentChanged && <li>{draft?.schema.payment ? '調整' : '關閉'}「付款排程」</li>}
                       {published && summary.flowChanged && <li>簽核流程有變更（只影響發佈後新送出的單據）</li>}
                     </ul>
                   )}
