@@ -282,11 +282,12 @@ npm run test:db:down   # 刪除容器與資料
 - **CSRF／轉址**：Server Actions 使用 Next 內建來源檢查；登出等 route handler 要求 `Origin` 等於 `APP_ORIGIN`。所有轉址都用 `APP_ORIGIN`，不信任 Host／X-Forwarded-Host；`returnTo` 只接受站內路徑。
 - **限速**：登入開始與 callback 依 `TRUSTED_CLIENT_IP_HEADER` 每 10 分鐘 30 次；管理操作每人每 10 分鐘 60 次（PostgreSQL 共用計數，固定視窗到期自動解除，不會永久鎖帳號）。
 - **模式**：目前只支援 `AUTH_MODE=manual`；設定成 `directory` 會拒絕啟動登入，不會降級放行。
-- **Workspace 目錄同步（P6，第一階段）**：`src/lib/directory/` 解析 Directory `users.list`（逐頁驗證網域／customer、重複 ID、重複分頁 token、429／5xx 重試、401／403 立即停止；任何一頁失敗就整批放棄，不用部分名單）並產生同步計畫：只撤銷 suspended／archived 帳號的綁定與 session、email 跟隨目錄；名單中缺少的已綁定帳號與未綁定帳號只列入報告。名單為空、啟用人數比上次少 20% 以上、撤銷數超過 max(5, 10%) 時拒絕套用並寫 audit。同步不會恢復被停權或本地停用的帳號，也不改 `employees.access_enabled`。目前只能以 fixture dry-run：
-  ```bash
-  DATABASE_URL=... ALLOWED_GOOGLE_DOMAINS=example.com npm run directory:dry-run -- --fixture tests/fixtures/directory/users-pages.json
-  ```
-  `--apply` 與 `AUTH_MODE=directory` 需公司核准唯讀同步帳號（`admin.directory.user.readonly`）、接上正式資料來源並在測試 tenant 驗收後才開放。
+- **Workspace 目錄同步（P6）**：`src/lib/directory/` 解析 Directory `users.list`（逐頁驗證網域／customer、重複 ID、重複分頁 token、429／5xx 重試、401／403 立即停止；任何一頁失敗就整批放棄，不用部分名單）並產生同步計畫：只撤銷 suspended／archived 帳號的綁定與 session、email 跟隨目錄。名單為空、啟用人數比上次少 20% 以上、撤銷數超過 max(5, 10%) 時拒絕套用並寫 audit。同步不會建立員工、不會恢復被停權或本地停用的帳號，也不改 `employees.access_enabled`。套用時把名單寫入目錄快照（`directory_users`，含電話、職稱、部門、員工編號、主管；完整名單中不再出現的帳號標記為已移除），每次執行（成功／拒絕／失敗）記錄在 `directory_sync_runs`。
+  - **授權**：專用的 Desktop OAuth client，只要求 `admin.directory.user.readonly`（多給的 scope 會被拒絕）。由公司核准的最小權限帳號在伺服器上執行一次 `npm run directory:authorize -- --out /etc/accsys/secrets/gws_directory_refresh_token`（127.0.0.1 回呼＋PKCE，token 只寫入 0600 檔案、不顯示）。同步工作需要 `GWS_DIRECTORY_CLIENT_ID`、`GWS_DIRECTORY_CLIENT_SECRET(_FILE)`、`GWS_DIRECTORY_REFRESH_TOKEN(_FILE)`、`GWS_CUSTOMER_ID`、`ALLOWED_GOOGLE_DOMAINS`；網站本身不持有這些憑證。
+  - **執行**：`npm run directory:dry-run -- --fixture <users-pages.json>`（只讀、不寫入）、`directory:dry-run -- --live`（讀正式名單、不寫入）、`npm run directory:sync`（`--live --apply`）。正式環境由 `deploy/systemd/accsys-directory-sync.timer` 每 15 分鐘執行 compose 的 `directory-sync` 服務（profile `tools`）；fixture 一律不能 `--apply`，拒絕或失敗時 exit 1。
+  - **審查（`/admin/org/directory`「人員同步」）**：顯示最近同步與執行紀錄，並依快照列出：新進人員（啟用但未綁定的帳號；可依目錄資料建立員工，管理員選員工編號、部門與一般員工／財會角色；以 Email 或員工編號比對到的既有員工只作建議）、資料異動（已綁定員工的姓名、Email、電話、職稱與目錄不同，逐欄勾選、可批次套用，值由伺服器從快照重讀，同批次任一失敗全部不套用；目錄部門只提示）、離職／停權（已停權、封存、移除或目錄中找不到綁定帳號，但仍可使用的員工，列出其待簽關卡供交接後再停用）。建立員工**不會**建立登入綁定，本人首次登入後仍需在 `/admin/accounts` 核准。若沒有任何綁定能對應到目錄帳號，頁面會警告目錄 ID 可能不等於登入 `sub`，且不列出「找不到」的離職清單。
+  - **授權前的手動模式（`/admin/org/employees`「員工」）**：新增、修改員工（編號、姓名、部門、職稱、Email、電話、分機；角色／停用／綁定仍在 `/admin/accounts`），或匯入公司活頁簿「link」工作表（與 `seed` 相同欄位：B 編號、C 姓名、D 部門名稱、E 部門代碼、G 職稱）。匯入先在伺服器產生預覽（新增／更新／無變更／錯誤），勾選後以同一個檔案（SHA-256 比對）在單一交易內套用；部門依代碼（或唯一名稱）比對、不自動建立，空白欄位不清除資料，工作表中沒有的員工不會被停用。以上操作皆需 15 分鐘內登入過、每人每 10 分鐘 60 次，並寫 audit。
+  - **尚未驗收**：真實 tenant 需公司 Google Workspace 管理者核准唯讀同步帳號後才能授權與驗收；目錄帳號 ID 是否等於登入 ID token 的 `sub` 必須在真實 tenant 確認後才能依賴（在此之前新進／離職清單只作參考）。`AUTH_MODE=directory` 仍未開放。
 
 ### 第一位管理員（一次性 bootstrap）
 
@@ -369,4 +370,4 @@ npm run test:db:down   # 刪除容器與資料
   - 合約用印單的金額由申請人填寫（可為 0），董事長是否簽核依此金額判斷。
   - 由採購單建立的費用申請單，付款對象不強制等於採購單廠商；簽核人只看到帳號末 4 碼。
   - 預算編號未檢查年度、所屬部門與剩餘預算；單筆上限可拆單規避；採購單金額不受請購核准金額限制；差旅與報銷沒有重複請款偵測；後續表單沿用請購時的預算負責人。
-- 案件追蹤查詢沒有分頁，案件數極大時會變慢；session 沒有閒置逾時（最長 `SESSION_TTL_HOURS`），共用電腦請登出；Workspace 停權帳號需由管理員手動停用（`directory-sync --apply` 尚未啟用）。
+- 案件追蹤查詢沒有分頁，案件數極大時會變慢；session 沒有閒置逾時（最長 `SESSION_TTL_HOURS`），共用電腦請登出；Workspace 停權帳號由同步撤銷綁定與 session，但停用員工仍需管理員在「人員同步」頁確認（同步尚未在真實 tenant 驗收前，需手動停用）。

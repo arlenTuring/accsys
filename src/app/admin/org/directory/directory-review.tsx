@@ -29,7 +29,12 @@ const LEAVER_REASONS: Record<LeaverWithHandover['reason'], string> = {
   missing: '目錄中找不到綁定的帳號',
 };
 const STATUS_LABELS = { succeeded: '成功', blocked: '已阻擋', failed: '失敗' } as const;
-const stamp = (iso: string) => new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false });
+/** Taipei time (UTC+8, no DST), formatted by hand: Intl output differs between Node and browsers and breaks hydration. */
+function stamp(iso: string): string {
+  const d = new Date(Date.parse(iso) + 8 * 3600_000);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}/${p(d.getUTCMonth() + 1)}/${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}
 const th = 'px-2 py-1.5 text-left text-xs font-semibold text-td-muted';
 const td = 'px-2 py-1.5 align-top';
 
