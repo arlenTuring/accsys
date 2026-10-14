@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 
 const TABS = [
   { href: '/admin/org', label: '部門' },
+  { href: '/admin/org/employees', label: '員工' },
   { href: '/admin/org/levels', label: '組織層級' },
   { href: '/admin/org/roles', label: '職務類別' },
   { href: '/admin/org/groups', label: '員工群組' },

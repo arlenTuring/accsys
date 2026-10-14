@@ -4,6 +4,14 @@ import { recordAudit } from '@/lib/audit/record';
 import { isUuid } from '@/lib/authz/forms';
 import { getDb } from '@/lib/db';
 import { departments, directoryUsers, employeeIdentities, employees } from '@/lib/db/schema';
+import {
+  EMPLOYEE_CODE,
+  parseEmployeeWorkbook,
+  planEmployeeImport,
+  workbookHash,
+  WorkbookRejected,
+  type ImportPlan,
+} from '@/lib/admin/employees/import';
 import { CHANGE_FIELDS, fieldChanges, type ChangeField, type FieldChange } from '@/lib/directory/review';
 import { directoryIssuer } from '@/lib/directory/service';
 
@@ -15,7 +23,7 @@ const fail = (error: AccountActionError, detail?: string): EmployeeActionResult 
 
 /** New employees start as staff or finance; admin is granted afterwards through the audited role change. */
 const CREATE_ROLES = ['staff', 'finance'] as const;
-const CODE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
+const CODE = EMPLOYEE_CODE;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function text(value: unknown, max: number): string | null | undefined {
@@ -80,6 +88,72 @@ async function conflict(tx: Tx, f: { employeeCode?: string; googleEmail?: string
 async function departmentExists(tx: Tx, id: string): Promise<boolean> {
   const [dept] = await tx.select({ id: departments.id }).from(departments).where(and(eq(departments.id, id), eq(departments.active, true)));
   return Boolean(dept);
+}
+
+/** Manual entry (before Workspace sync, or for people without a Workspace account). */
+export async function createEmployee(actor: AdminActor | null, input: unknown): Promise<EmployeeActionResult> {
+  const denied = await guard(actor);
+  if (denied) return fail(denied);
+  const fields = parseEmployeeFields(input);
+  const role = (input as { role?: unknown })?.role ?? 'staff';
+  if (!fields || typeof role !== 'string' || !(CREATE_ROLES as readonly string[]).includes(role)) return fail('invalid_input');
+
+  return getDb().transaction(async (tx) => {
+    if (!(await lockAsAdmin(tx, actor!.id))) return fail('forbidden');
+    if (!(await departmentExists(tx, fields.departmentId))) return fail('invalid_input');
+    const clash = await conflict(tx, fields);
+    if (clash) return clash;
+    const [row] = await tx.insert(employees).values({ ...fields, role }).returning({ id: employees.id });
+    await recordAudit(tx, {
+      actorEmployeeId: actor!.id,
+      action: 'employee.created',
+      entityType: 'employee',
+      entityId: row.id,
+      details: { source: 'manual', employeeCode: fields.employeeCode, email: fields.googleEmail, role },
+    });
+    return { ok: true, employeeId: row.id };
+  });
+}
+
+const EDITABLE: (keyof EmployeeFields)[] = ['employeeCode', 'name', 'departmentId', 'title', 'googleEmail', 'phone', 'extension'];
+
+/**
+ * Replaces an employee's basic data. Role, access and login bindings have their
+ * own audited actions on /admin/accounts; changing the record email does not
+ * move a login binding.
+ */
+export async function updateEmployee(actor: AdminActor | null, input: { employeeId: string } & Record<string, unknown>): Promise<EmployeeActionResult> {
+  const denied = await guard(actor);
+  if (denied) return fail(denied);
+  const fields = parseEmployeeFields(input);
+  if (!isUuid(input?.employeeId) || !fields) return fail('invalid_input');
+
+  return getDb().transaction(async (tx) => {
+    if (!(await lockAsAdmin(tx, actor!.id))) return fail('forbidden');
+    const [before] = await tx.select().from(employees).where(eq(employees.id, input.employeeId)).for('update');
+    if (!before) return fail('not_found');
+    const changes = EDITABLE.filter((k) => (before[k] ?? null) !== fields[k]).map((k) => ({ field: k, from: before[k] ?? null, to: fields[k] }));
+    if (changes.length === 0) return { ok: true, employeeId: before.id };
+    if (fields.departmentId !== before.departmentId && !(await departmentExists(tx, fields.departmentId))) return fail('invalid_input');
+    const clash = await conflict(
+      tx,
+      {
+        employeeCode: fields.employeeCode !== before.employeeCode ? fields.employeeCode : undefined,
+        googleEmail: fields.googleEmail !== (before.googleEmail?.toLowerCase() ?? null) ? fields.googleEmail : null,
+      },
+      before.id
+    );
+    if (clash) return clash;
+    await tx.update(employees).set(fields).where(eq(employees.id, before.id));
+    await recordAudit(tx, {
+      actorEmployeeId: actor!.id,
+      action: 'employee.updated',
+      entityType: 'employee',
+      entityId: before.id,
+      details: { source: 'manual', changes },
+    });
+    return { ok: true, employeeId: before.id };
+  });
 }
 
 /**
@@ -247,4 +321,90 @@ async function applyOne(
     details: { directoryUserId: dir.directoryUserId, changes: changes.map((c) => ({ field: c.field, from: c.current, to: c.next })) },
   });
   return 'applied';
+}
+
+export type ImportPreviewResult = { ok: true; plan: ImportPlan; sha256: string } | { ok: false; error: AccountActionError; detail?: string };
+
+const WORKBOOK_REASONS: Record<string, string> = {
+  file_too_large: '檔案超過 5 MB',
+  too_many_rows: '超過 5000 列',
+  missing_link_sheet: '找不到工作表「link」',
+};
+
+async function readWorkbook(buffer: Buffer) {
+  try {
+    return { ok: true as const, rows: await parseEmployeeWorkbook(buffer) };
+  } catch (err) {
+    const reason = err instanceof WorkbookRejected ? (WORKBOOK_REASONS[err.message] ?? '檔案格式不正確') : '無法讀取此 Excel 檔案';
+    return { ok: false as const, result: fail('invalid_input', reason) };
+  }
+}
+
+async function planFor(tx: Tx | ReturnType<typeof getDb>, rows: Awaited<ReturnType<typeof parseEmployeeWorkbook>>) {
+  const [employeeRows, departmentRows] = await Promise.all([
+    tx
+      .select({ id: employees.id, employeeCode: employees.employeeCode, name: employees.name, departmentId: employees.departmentId, title: employees.title })
+      .from(employees),
+    tx.select({ id: departments.id, code: departments.code, name: departments.name }).from(departments).where(eq(departments.active, true)),
+  ]);
+  return planEmployeeImport(rows, employeeRows, departmentRows);
+}
+
+/** Read-only: what importing the workbook would change. */
+export async function previewEmployeeImport(actor: AdminActor | null, buffer: Buffer): Promise<ImportPreviewResult> {
+  const denied = await guard(actor);
+  if (denied) return fail(denied) as ImportPreviewResult;
+  const parsed = await readWorkbook(buffer);
+  if (!parsed.ok) return parsed.result as ImportPreviewResult;
+  return { ok: true, plan: await planFor(getDb(), parsed.rows), sha256: workbookHash(buffer) };
+}
+
+/**
+ * Applies the rows the admin kept from the preview. The same file must be sent
+ * again (checked by hash) and the plan is recomputed under the admin lock, so
+ * only changes still valid at that moment are made, all in one transaction.
+ */
+export async function applyEmployeeImport(
+  actor: AdminActor | null,
+  input: { buffer: Buffer; sha256: string; include: string[] }
+): Promise<EmployeeActionResult> {
+  const denied = await guard(actor);
+  if (denied) return fail(denied);
+  if (!Array.isArray(input?.include) || input.include.length === 0 || input.include.some((c) => typeof c !== 'string')) return fail('invalid_input');
+  if (workbookHash(input.buffer) !== input.sha256) return fail('invalid_state', '檔案與預覽時不同，請重新預覽');
+  const parsed = await readWorkbook(input.buffer);
+  if (!parsed.ok) return parsed.result;
+  const include = new Set(input.include);
+
+  return getDb().transaction(async (tx) => {
+    if (!(await lockAsAdmin(tx, actor!.id))) return fail('forbidden');
+    const plan = await planFor(tx, parsed.rows);
+    let applied = 0;
+    for (const c of plan.creates.filter((c) => include.has(c.employeeCode))) {
+      const [row] = await tx
+        .insert(employees)
+        .values({ employeeCode: c.employeeCode, name: c.name, departmentId: c.departmentId, title: c.title, role: 'staff' })
+        .returning({ id: employees.id });
+      await recordAudit(tx, {
+        actorEmployeeId: actor!.id,
+        action: 'employee.created',
+        entityType: 'employee',
+        entityId: row.id,
+        details: { source: 'excel', employeeCode: c.employeeCode, row: c.rowNumber },
+      });
+      applied++;
+    }
+    for (const u of plan.updates.filter((u) => include.has(u.employeeCode))) {
+      await tx.update(employees).set({ name: u.name, departmentId: u.departmentId, title: u.title }).where(eq(employees.id, u.employeeId));
+      await recordAudit(tx, {
+        actorEmployeeId: actor!.id,
+        action: 'employee.updated',
+        entityType: 'employee',
+        entityId: u.employeeId,
+        details: { source: 'excel', row: u.rowNumber, changes: u.changes.map((c) => ({ field: c.field, from: c.current, to: c.next })) },
+      });
+      applied++;
+    }
+    return { ok: true, applied };
+  });
 }

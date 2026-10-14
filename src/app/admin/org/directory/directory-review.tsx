@@ -73,7 +73,7 @@ function SyncStatus({ data, idMismatch }: { data: DirectoryPageData; idMismatch:
       </dl>
       {data.snapshotCount === 0 && (
         <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          尚無目錄快照。Workspace 授權完成並執行同步後，這裡才會列出新進、異動與離職人員。授權前請用員工資料頁手動維護或匯入 Excel。
+          尚無目錄快照。Workspace 授權完成並執行同步後，這裡才會列出新進、異動與離職人員。授權前請在「員工」頁手動維護或匯入 Excel。
         </p>
       )}
       {idMismatch && (
