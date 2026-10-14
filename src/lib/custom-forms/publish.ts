@@ -15,6 +15,7 @@ import {
 import { FORM_KEY, NUMBER_PREFIX } from '@/lib/form-builder/settings';
 import { abort, type Tx } from '@/lib/workflow/tx';
 import { parseDefinition } from './definition';
+import { assertSourceForms } from './source';
 import { parseVisibility, type Visibility } from './visibility';
 
 /**
@@ -73,6 +74,7 @@ export async function publishDefinition(
   if (!parsed.ok) abort('validation', parsed.errors.slice(0, 5).join('；'));
   const { schema, flow } = parsed as Extract<typeof parsed, { ok: true }>;
   await assertFlowReferencesExist(tx, flow);
+  await assertSourceForms(tx, schema);
 
   const [category] = await tx
     .select({ id: formCategories.id })

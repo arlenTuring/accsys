@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { replacementFor } from '@/lib/custom-forms/legacy';
 import { getEligiblePurchaseRequestsForOrder } from '@/lib/purchase-orders/queries';
 import { SourcePicker } from '@/app/components/source-picker';
 import { PurchaseOrderForm } from './purchase-order-form';
@@ -14,6 +15,8 @@ export default async function NewPurchaseOrderPage({
   const supabase = createAppDb();
   const employee = await getCurrentEmployee();
   if (!employee) redirect('/login');
+  const replacement = await replacementFor('purchase_order');
+  if (replacement) redirect(`/f/${replacement}/new`);
 
   const eligible = await getEligiblePurchaseRequestsForOrder();
 

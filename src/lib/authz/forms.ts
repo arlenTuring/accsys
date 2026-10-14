@@ -40,14 +40,19 @@ export function isFinanceOrAdmin(actor: Actor | null | undefined): boolean {
 export async function canReadForm(actor: Actor | null | undefined, formType: unknown, formId: unknown): Promise<boolean> {
   if (!actor || !isFormType(formType) || !isUuid(formId)) return false;
   const table = FORM_TABLE[formType]; // identifier from a fixed allowlist
+  // Designer forms record their filer per submission (a case may hold several); seal forms use the case creator.
+  const filer =
+    formType === 'custom'
+      ? `f.filed_by_employee_id = $2`
+      : `exists (select 1 from procurement_cases c
+                  where c.id = f.procurement_case_id and c.case_type in ('contract_seal', 'general_seal', 'invoice_seal')
+                    and c.created_by_employee_id = $2)`;
   const rows = await getSql().unsafe<{ ok: boolean }[]>(
     `select (f.applicant_employee_id = $2
              or $3::boolean
              or exists (select 1 from approval_steps s
                          where s.form_type = $4 and s.form_id = f.id and s.approver_employee_id = $2)
-             or exists (select 1 from procurement_cases c
-                         where c.id = f.procurement_case_id and c.case_type in ('contract_seal', 'general_seal', 'invoice_seal', 'custom')
-                           and c.created_by_employee_id = $2)) as ok
+             or ${filer}) as ok
        from ${table} f
       where f.id = $1`,
     [formId, actor.id, isFinanceOrAdmin(actor), formType]
@@ -79,8 +84,9 @@ export async function canAttachToForm(
     if (tx) await tx.execute(sql`select 1 from ${table} f where f.id = ${formId}${lock}`);
     return canReadForm(actor, formType, formId);
   }
+  const filer = formType === 'custom' ? sql`f.filed_by_employee_id` : sql`c.created_by_employee_id`;
   const rows = await (tx ?? getDb()).execute<{ ok: boolean }>(sql`
-    select ((f.applicant_employee_id = ${actor.id} or c.created_by_employee_id = ${actor.id})
+    select ((f.applicant_employee_id = ${actor.id} or ${filer} = ${actor.id})
             and (f.status = 'returned'
                  or (f.status = 'pending_approval'
                      and not exists (select 1 from approval_steps s

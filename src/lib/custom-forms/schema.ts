@@ -10,7 +10,7 @@ import { ASSET_TRANSFER_TYPES } from '@/lib/asset-transfers/constants';
 
 export type FieldOption = { value: string; label: string };
 
-export type ColumnType = 'text' | 'number' | 'money' | 'date' | 'select' | 'employee' | 'asset';
+export type ColumnType = 'text' | 'number' | 'money' | 'date' | 'select' | 'employee' | 'asset' | 'budget_code';
 
 export type TableColumn = {
   id: string;
@@ -19,6 +19,8 @@ export type TableColumn = {
   required: boolean;
   /** text / select / employee / asset columns: no two rows may hold the same value. */
   unique?: boolean;
+  /** budget_code columns: every row's code must have the same (set) budget owner. */
+  sameOwner?: boolean;
   /**
    * select columns: only the options ticked in this earlier checkboxes field
    * (whose options include every option of the column); with coverAll, every
@@ -107,9 +109,9 @@ type FieldBase = {
 
 export type FieldDef = FieldBase &
   (
-    | { type: 'text'; maxLength: number; format: 'plain' | 'email' | 'phone' | 'tax_id'; sensitive?: boolean }
+    | { type: 'text'; maxLength: number; format: 'plain' | 'email' | 'phone' | 'tax_id'; sensitive?: boolean; default?: string }
     | { type: 'textarea'; maxLength: number; rows: number; sensitive?: boolean }
-    | { type: 'number'; min: number | null; max: number | null; decimals: number }
+    | { type: 'number'; min: number | null; max: number | null; decimals: number; default?: number }
     | { type: 'money'; max: number | null }
     | { type: 'date'; notBeforeToday: boolean }
     | { type: 'select' | 'radio'; options: FieldOption[]; default?: string }
@@ -121,12 +123,44 @@ export type FieldDef = FieldBase &
     | { type: 'project' }
     | { type: 'supplier' }
     | { type: 'asset' }
+    | { type: 'source'; sources: SourceRule[] }
     | { type: 'table'; columns: TableColumn[]; minRows: number; maxRows: number; totalColumn: string | null }
     | { type: 'attachments'; maxFiles: number | null }
     | { type: 'notice'; text: string }
   );
 
 export type FieldType = FieldDef['type'];
+
+/**
+ * 關聯單據: the applicant picks one of their own approved submissions of a
+ * source form; the new submission joins its case (one per case and form,
+ * withdrawn ones included). Rows of a table can be carried over: the mapped
+ * columns are read-only and rewritten from the source by the server.
+ */
+export type SourceRule = {
+  /** Definition key of the source form. */
+  form: string;
+  /** The source must also satisfy this, tested on its own fields. */
+  when?: Condition;
+  /** Not offered while the case already has an approved submission of this form (that one is the source then). */
+  unlessCaseHas?: string;
+  rows?: SourceRowMap;
+};
+
+export type SourceRowMap = {
+  /** Table of this form: one row per source row. */
+  table: string;
+  /** Table of the source form. */
+  from: string;
+  columns: { to: string; from: string }[];
+  /** Only source rows whose select column holds this option (e.g. 驗收合格). */
+  filter?: { column: string; value: string };
+  /** all: every source row, in order; subset: rows may be removed (at least one stays), none added. */
+  mode: 'all' | 'subset';
+};
+
+/** Source-row index kept on carried-over rows. */
+export const SOURCE_ROW_KEY = '_src';
 
 export type FormSection = { id: string; title: string; description: string; fields: FieldDef[] };
 
@@ -166,10 +200,16 @@ export const FIELD_TYPES: readonly FieldType[] = [
   'project',
   'supplier',
   'asset',
+  'source',
   'table',
   'attachments',
   'notice',
 ];
+
+/** The 關聯單據 field of a form, if any (at most one). */
+export function sourceFieldOf(schema: FormSchema): Extract<FieldDef, { type: 'source' }> | undefined {
+  return allFields(schema).find((f): f is Extract<FieldDef, { type: 'source' }> => f.type === 'source');
+}
 
 /** Fields that hold no value in the submission data. */
 export const isDisplayOnly = (f: FieldDef) => f.type === 'notice' || f.type === 'attachments';
@@ -191,7 +231,8 @@ export const SCHEMA_LIMITS = {
 } as const;
 
 const ID = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
-const COLUMN_TYPES: readonly ColumnType[] = ['text', 'number', 'money', 'date', 'select', 'employee', 'asset'];
+const FORM_KEY = /^[a-z][a-z0-9-]{1,39}$/;
+const COLUMN_TYPES: readonly ColumnType[] = ['text', 'number', 'money', 'date', 'select', 'employee', 'asset', 'budget_code'];
 const UNIQUE_COLUMN_TYPES: readonly ColumnType[] = ['text', 'select', 'employee', 'asset'];
 const SEMANTIC_TYPES: Record<FieldSemantic, readonly FieldType[]> = {
   amount: ['money', 'table'],
@@ -231,6 +272,7 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
   const semantics = new Set<FieldSemantic>();
   let fieldCount = 0;
   let attachmentFields = 0;
+  let sourceFields = 0;
 
   const text = (v: unknown, where: string, max: number, required: boolean): string => {
     if (v === undefined || v === null) {
@@ -288,7 +330,8 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
     return v;
   };
 
-  const condition = (v: unknown, where: string, depth: number): Condition => {
+  /** foreign: the fields belong to another form (checked against it on publish). */
+  const condition = (v: unknown, where: string, depth: number, foreign = false): Condition => {
     if (depth > SCHEMA_LIMITS.conditionDepth || !isObj(v)) {
       errors.push(`${where}：顯示條件格式不正確`);
       return { all: [] };
@@ -300,14 +343,14 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
         errors.push(`${where}：條件群組需有 1–20 個條件`);
         return { all: [] };
       }
-      const parsed = list.map((c) => condition(c, where, depth + 1));
+      const parsed = list.map((c) => condition(c, where, depth + 1, foreign));
       return key === 'all' ? { all: parsed } : { any: parsed };
     }
-    if ('not' in v) return { not: condition(v.not, where, depth + 1) };
+    if ('not' in v) return { not: condition(v.not, where, depth + 1, foreign) };
     const field = typeof v.field === 'string' ? v.field : '';
     const type = earlier.get(field);
-    if (!type || !CONDITION_FIELD_TYPES.includes(type)) {
-      errors.push(`${where}：顯示條件只能參考排在前面的欄位`);
+    if (foreign ? !ID.test(field) : !type || !CONDITION_FIELD_TYPES.includes(type)) {
+      errors.push(foreign ? `${where}：條件欄位不正確` : `${where}：顯示條件只能參考排在前面的欄位`);
     }
     const op = v.op;
     if (typeof op !== 'string' || !(CONDITION_OPS as readonly string[]).includes(op)) {
@@ -402,6 +445,10 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
       if (!UNIQUE_COLUMN_TYPES.includes(type)) errors.push(`${where}：此欄位類型不能設定「不可重複」`);
       else col.unique = true;
     }
+    if (v.sameOwner === true) {
+      if (type !== 'budget_code') errors.push(`${where}：只有預算編號欄可以要求同一位預算負責人`);
+      else col.sameOwner = true;
+    }
     if (v.pickFrom !== undefined && v.pickFrom !== null) {
       const p = v.pickFrom;
       const src = isObj(p) && typeof p.field === 'string' ? earlierDefs.get(p.field) : undefined;
@@ -476,6 +523,44 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
         return rule;
       })
       .filter((r): r is FieldRule => r !== null);
+  };
+
+  const sourceRule = (r: unknown, where: string, seen: Set<string>): SourceRule => {
+    if (!isObj(r) || typeof r.form !== 'string' || !FORM_KEY.test(r.form)) {
+      errors.push(`${where}：請選擇來源表單`);
+      return { form: '' };
+    }
+    if (seen.has(r.form)) errors.push(`${where}：來源表單重複`);
+    seen.add(r.form);
+    const rule: SourceRule = { form: r.form };
+    if (r.when !== undefined && r.when !== null) rule.when = condition(r.when, `${where} 來源條件`, 1, true);
+    if (r.unlessCaseHas !== undefined && r.unlessCaseHas !== null && r.unlessCaseHas !== '') {
+      if (typeof r.unlessCaseHas !== 'string' || !FORM_KEY.test(r.unlessCaseHas)) errors.push(`${where}：「案件已有核准的表單時不提供」設定不正確`);
+      else rule.unlessCaseHas = r.unlessCaseHas;
+    }
+    if (r.rows === undefined || r.rows === null) return rule;
+    const m = r.rows;
+    const cols = isObj(m) && Array.isArray(m.columns) && m.columns.length > 0 && m.columns.length <= SCHEMA_LIMITS.columns ? m.columns : null;
+    if (!isObj(m) || typeof m.table !== 'string' || typeof m.from !== 'string' || !ID.test(m.from) || !cols) {
+      errors.push(`${where}：帶入明細設定不正確`);
+      return rule;
+    }
+    const columns = cols.map((c, i) => {
+      if (!isObj(c) || typeof c.to !== 'string' || typeof c.from !== 'string' || !ID.test(c.from)) {
+        errors.push(`${where} 帶入明細第 ${i + 1} 欄：設定不正確`);
+        return { to: '', from: '' };
+      }
+      return { to: c.to, from: c.from };
+    });
+    const rows: SourceRowMap = { table: m.table, from: m.from, columns, mode: m.mode === 'subset' ? 'subset' : 'all' };
+    if (m.filter !== undefined && m.filter !== null) {
+      const f = m.filter;
+      if (!isObj(f) || typeof f.column !== 'string' || !ID.test(f.column) || typeof f.value !== 'string' || !f.value || f.value.length > 100) {
+        errors.push(`${where}：帶入明細的篩選條件不正確`);
+      } else rows.filter = { column: f.column, value: f.value };
+    }
+    rule.rows = rows;
+    return rule;
   };
 
   const checkTable = (columns: TableColumn[], totalColumn: string | null, where: string) => {
@@ -554,6 +639,10 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
         const format = (['plain', 'email', 'phone', 'tax_id'] as const).find((f) => f === v.format) ?? 'plain';
         def = { ...base, type, maxLength: int(v.maxLength, `${name} 字數上限`, 1, SCHEMA_LIMITS.textMax, 200), format };
         if (v.sensitive === true) def.sensitive = true;
+        if (v.default !== undefined && v.default !== null && v.default !== '') {
+          const d = text(v.default, `${name} 預設內容`, def.maxLength, false);
+          if (d) def.default = d;
+        }
         break;
       }
       case 'textarea':
@@ -570,6 +659,21 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
         const max = optionalNumber(v.max, `${name} 最大值`);
         if (min !== null && max !== null && min > max) errors.push(`${name}：最小值大於最大值`);
         def = { ...base, type, min, max, decimals: int(v.decimals, `${name} 小數位數`, 0, 4, 0) };
+        if (v.default !== undefined && v.default !== null) {
+          const d = optionalNumber(v.default, `${name} 預設值`);
+          if (d !== null && ((min !== null && d < min) || (max !== null && d > max) || Number(d.toFixed(def.decimals)) !== d)) {
+            errors.push(`${name}：預設值不在允許範圍內`);
+          } else if (d !== null) def.default = d;
+        }
+        break;
+      }
+      case 'source': {
+        sourceFields += 1;
+        const list = Array.isArray(v.sources) && v.sources.length > 0 && v.sources.length <= 5 ? v.sources : null;
+        if (!list) errors.push(`${name}：需有 1–5 個來源表單`);
+        const seen = new Set<string>();
+        def = { ...base, type, required: true, sources: (list ?? []).map((r, i) => sourceRule(r, `${name} 第 ${i + 1} 個來源`, seen)) };
+        if (base.visibleWhen) errors.push(`${name}：關聯單據不能設定顯示條件`);
         break;
       }
       case 'money': {
@@ -646,7 +750,7 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
         def = { ...base, type } as FieldDef;
     }
     if (v.requiredWhen !== undefined && v.requiredWhen !== null) {
-      if (type === 'notice' || type === 'boolean') errors.push(`${name}：此元件不能設定條件式必填`);
+      if (type === 'notice' || type === 'boolean' || type === 'source') errors.push(`${name}：此元件不能設定條件式必填`);
       else def.requiredWhen = condition(v.requiredWhen, name, 1);
     }
     if (v.rules !== undefined && v.rules !== null) {
@@ -694,12 +798,55 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
   });
   if (attachmentFields > 1) errors.push('每張表單最多一個附件欄位');
   if (fieldCount === 0) errors.push('表單至少需要一個欄位');
+  if (sourceFields > 1) errors.push('每張表單最多一個關聯單據欄位');
+  checkSourceRows(sections.flatMap((s) => s.fields), errors);
   const assetRegister = raw.assetRegister === undefined || raw.assetRegister === null ? undefined : parseAssetRegister(raw.assetRegister, earlierDefs, errors);
   if (errors.length > 0) return { ok: false, errors: [...new Set(errors)] };
   return {
     ok: true,
     schema: { version: 1, sections, ...(raw.onBehalf === true ? { onBehalf: true } : {}), ...(assetRegister ? { assetRegister } : {}) },
   };
+}
+
+/**
+ * Carried-over rows go into a later, always-shown table; mapped columns are
+ * plain input columns (each mapped once). Source-side names are checked
+ * against the source form on publish.
+ */
+function checkSourceRows(fields: FieldDef[], errors: string[]) {
+  const at = fields.findIndex((f) => f.type === 'source');
+  if (at === -1) return;
+  const source = fields[at] as Extract<FieldDef, { type: 'source' }>;
+  for (const rule of source.sources) {
+    if (!rule.rows) continue;
+    const where = `關聯單據「${source.label}」來源 ${rule.form}`;
+    const index = fields.findIndex((f) => f.id === rule.rows!.table);
+    const table = fields[index];
+    if (table?.type !== 'table' || index < at) {
+      errors.push(`${where}：帶入的明細表需為排在關聯單據之後的明細表`);
+      continue;
+    }
+    if (table.visibleWhen) errors.push(`${where}：明細表「${table.label}」不能設定顯示條件`);
+    const seen = new Set<string>();
+    for (const m of rule.rows.columns) {
+      const col = table.columns.find((c) => c.id === m.to);
+      if (!col || col.formula || col.rateFor !== undefined) errors.push(`${where}：帶入欄位需為明細表中非計算的欄位`);
+      else if (seen.has(col.id)) errors.push(`${where}：「${col.label}」重複帶入`);
+      seen.add(m.to);
+    }
+  }
+}
+
+/** Table ids rows are carried into, with the columns that come from the source (read-only). */
+export function sourceTargets(schema: FormSchema): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const rule of sourceFieldOf(schema)?.sources ?? []) {
+    if (!rule.rows) continue;
+    const set = out.get(rule.rows.table) ?? new Set<string>();
+    rule.rows.columns.forEach((c) => set.add(c.to));
+    out.set(rule.rows.table, set);
+  }
+  return out;
 }
 
 /** The linked table / columns / custodian fields must exist, have the right type, be required and always shown. */
@@ -762,6 +909,7 @@ const COLUMN_TYPE_NAMES: Record<ColumnType, string> = {
   select: '下拉選單',
   employee: '員工',
   asset: '財產',
+  budget_code: '預算編號',
 };
 
 /** Every field in display order. */

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import Link from 'next/link';
 import { isDisplayOnly, type FieldDef, type FormSchema, type TableColumn } from '@/lib/custom-forms/schema';
 import type { TableValue } from '@/lib/custom-forms/validate';
 
@@ -20,7 +21,7 @@ const day = (v: unknown) => (typeof v === 'string' && v ? v.replaceAll('-', '/')
 
 function cellText(col: TableColumn, v: unknown, row: Record<string, unknown>, labels: Record<string, string>): string {
   if (v === null || v === undefined || v === '') return '—';
-  if (col.type === 'employee' || col.type === 'asset') return labels[String(v)] ?? '（資料已移除）';
+  if (col.type === 'employee' || col.type === 'asset' || col.type === 'budget_code') return labels[String(v)] ?? '（資料已移除）';
   if (col.type === 'money') {
     const code = col.currencyColumn ? row[col.currencyColumn] : undefined;
     return typeof code === 'string' && code ? `${code} ${amountText(v)}` : amountText(v);
@@ -53,6 +54,14 @@ export function fieldText(field: FieldDef, v: unknown, labels: Record<string, st
     case 'supplier':
     case 'asset':
       return typeof v === 'string' && v ? (labels[v] ?? '（資料已移除）') : '—';
+    case 'source':
+      return typeof v === 'string' && v ? (
+        <Link href={`/f/_/${v}`} className="text-td-blue hover:underline print:no-underline">
+          {labels[v] ?? '（資料已移除）'}
+        </Link>
+      ) : (
+        '—'
+      );
     case 'number':
       return v === null || v === undefined ? '—' : Number(v).toLocaleString('en-US', { maximumFractionDigits: 4 });
     default:

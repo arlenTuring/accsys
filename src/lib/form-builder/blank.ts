@@ -30,6 +30,7 @@ export const FIELD_TYPE_LABELS: Record<FieldType, string> = {
   project: '專案',
   supplier: '廠商',
   asset: '財產',
+  source: '關聯單據',
   table: '明細表',
   attachments: '附件上傳',
   notice: '說明區塊',
@@ -38,7 +39,7 @@ export const FIELD_TYPE_LABELS: Record<FieldType, string> = {
 export const FIELD_GROUPS: { title: string; types: FieldType[] }[] = [
   { title: '基本輸入', types: ['text', 'textarea', 'number', 'money', 'date', 'select', 'radio', 'checkboxes', 'boolean'] },
   { title: '組織與主檔', types: ['employee', 'department', 'budget_code', 'project', 'supplier', 'asset'] },
-  { title: '組合', types: ['table'] },
+  { title: '組合', types: ['table', 'source'] },
   { title: '附件與說明', types: ['attachments', 'notice'] },
 ];
 
@@ -119,6 +120,8 @@ export function newField(type: FieldType, takenIds: Iterable<string>): FieldDef 
         maxRows: 20,
         totalColumn: 'amount',
       };
+    case 'source':
+      return { ...base, type, required: true, sources: [] };
     case 'attachments':
       return { ...base, type, label: '附件', maxFiles: null };
     case 'notice':

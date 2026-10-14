@@ -1,6 +1,7 @@
 import { eq, inArray, sql } from 'drizzle-orm';
 import { recordAudit } from '@/lib/audit/record';
 import { isUuid } from '@/lib/authz/forms';
+import { assertLegacyOpen } from '@/lib/custom-forms/legacy';
 import { budgetCodes, procurementCases, purchaseRequestItems, purchaseRequests } from '@/lib/db/schema';
 import { addCents, centsToDecimal, MoneyError, toCents, type Cents } from '@/lib/money';
 import { validatePurchaseRequestInput } from '@/lib/purchase-requests/validate';
@@ -134,6 +135,7 @@ export function createPurchaseRequest(
         request: { neededWithinDays, items },
       });
       if ('replay' in claim) return claim.replay;
+      await assertLegacyOpen(tx, FORM, '請購單');
 
       const prepared = await prepare(tx, input);
       const chain = await buildChain(tx, {

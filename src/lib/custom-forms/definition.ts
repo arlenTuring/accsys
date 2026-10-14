@@ -24,7 +24,11 @@ export function parseDefinition(rawSchema: unknown, rawFlow: unknown): ParsedDef
   const errors = [...(s.ok ? [] : s.errors), ...(f.ok ? [] : f.errors.map((e) => `簽核流程 ${e}`))];
   if (!s.ok || !f.ok) return { ok: false, errors };
 
-  const types = new Map(allFields(s.schema).filter((x) => !isDisplayOnly(x)).map((x) => [x.id, x.type]));
+  const types = new Map<string, FieldType>(allFields(s.schema).filter((x) => !isDisplayOnly(x)).map((x) => [x.id, x.type]));
+  for (const t of allFields(s.schema)) {
+    if (t.type !== 'table') continue;
+    for (const c of t.columns) if (c.type === 'budget_code') types.set(`${t.id}.${c.id}`, 'budget_code');
+  }
   const needField = (fieldId: string | undefined, allowed: readonly FieldType[], where: string) => {
     const type = types.get(fieldId ?? '');
     if (!type) errors.push(`簽核流程「${where}」：參考的表單欄位不存在`);

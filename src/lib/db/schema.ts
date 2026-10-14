@@ -1159,6 +1159,10 @@ export const formSubmissions = pgTable(
     currentStepOrder: integer('current_step_order'),
     /** Forms linked to the asset register: when the approved lines were written into it. */
     registerAppliedAt: timestamp('register_applied_at', { withTimezone: true }),
+    /** 關聯單據: the approved submission this one continues (same case). */
+    sourceSubmissionId: uuid('source_submission_id'),
+    /** Who filed it (the applicant, or the 經辦 filing on their behalf); older rows use the case creator. */
+    filedByEmployeeId: uuid('filed_by_employee_id'),
     submittedAt: timestamp('submitted_at', { withTimezone: true }).notNull().defaultNow(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -1175,10 +1179,15 @@ export const formSubmissions = pgTable(
     fk('form_submissions_department_id_fkey', t.departmentId, departments.id),
     fk('form_submissions_budget_code_id_fkey', t.budgetCodeId, budgetCodes.id),
     fk('form_submissions_project_id_fkey', t.projectId, projects.id),
+    fk('form_submissions_source_submission_id_fkey', t.sourceSubmissionId, t.id),
+    fk('form_submissions_filed_by_employee_id_fkey', t.filedByEmployeeId, employees.id),
     check('form_submissions_status_check', FORM_STATUS),
     check('form_submissions_data_check', sql`jsonb_typeof(data) = 'object'`),
     check('form_submissions_version_check', sql`version > 0`),
-    unique('form_submissions_procurement_case_id_key').on(t.procurementCaseId),
+    /** One submission per form and case (a case holds a chain of different forms). */
+    unique('form_submissions_definition_case_key').on(t.definitionId, t.procurementCaseId),
+    index('form_submissions_procurement_case_id_idx').on(t.procurementCaseId),
+    index('form_submissions_source_submission_id_idx').on(t.sourceSubmissionId),
     index('form_submissions_definition_applicant_idx').on(t.definitionId, t.applicantEmployeeId),
     index('form_submissions_applicant_employee_id_idx').on(t.applicantEmployeeId),
     index('form_submissions_status_idx').on(t.status),

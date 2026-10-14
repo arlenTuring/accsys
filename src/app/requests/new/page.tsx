@@ -2,12 +2,15 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { replacementFor } from '@/lib/custom-forms/legacy';
 import { PurchaseRequestForm, type BudgetCodeOption } from './purchase-request-form';
 
 export default async function NewRequestPage() {
   const supabase = createAppDb();
   const employee = await getCurrentEmployee();
   if (!employee) redirect('/login');
+  const replacement = await replacementFor('purchase_request');
+  if (replacement) redirect(`/f/${replacement}/new`);
 
   const { data } = await supabase
     .from('budget_codes')

@@ -176,6 +176,7 @@ function Designer({
           setSelection={setFieldSel}
           publishedTypes={data.publishedTypes}
           options={data.options}
+          sourceForms={data.sourceForms}
         />
       )}
       {tab === 'flow' && (

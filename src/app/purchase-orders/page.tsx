@@ -1,23 +1,39 @@
 import Link from 'next/link';
 import { STATUS_BADGE, STATUS_LABELS } from '@/app/components/form-labels';
+import { SubmissionList } from '@/app/f/submission-list';
+import { replacementFor } from '@/lib/custom-forms/legacy';
+import { getMySubmissions } from '@/lib/custom-forms/queries';
 import { getMyPurchaseOrders } from '@/lib/purchase-orders/queries';
 
 export default async function PurchaseOrdersPage() {
-  const orders = await getMyPurchaseOrders();
+  const [orders, newItems, replacement] = await Promise.all([
+    getMyPurchaseOrders(),
+    getMySubmissions({ legacyFormType: 'purchase_order' }),
+    replacementFor('purchase_order'),
+  ]);
   return (
-    <main className="page-shell">
-      <section className="mb-6 flex flex-wrap items-end justify-between gap-4">
+    <main className="page-shell space-y-6">
+      <section className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="section-title">採購流程</p>
           <h1 className="page-title">我的採購單</h1>
           <p className="page-subtitle">請購核准後，選擇供應商建立採購單。</p>
         </div>
-        <Link href="/purchase-orders/new" className="btn-primary">
+        <Link href={replacement ? `/f/${replacement}/new` : '/purchase-orders/new'} className="btn-primary">
           + 新增採購單
         </Link>
       </section>
+
+      {newItems.length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold text-td-blue-dark">新版採購單</h2>
+          <SubmissionList items={newItems} showName />
+        </section>
+      )}
+
+      {newItems.length > 0 && orders.length > 0 && <h2 className="-mb-4 text-sm font-semibold text-td-blue-dark">舊版採購單</h2>}
       {orders.length === 0 ? (
-        <div className="card text-sm text-td-muted">尚無採購單。</div>
+        newItems.length === 0 && <div className="card text-sm text-td-muted">尚無採購單。</div>
       ) : (
         <ul className="card divide-y divide-td-border !p-0">
           {orders.map((o) => (

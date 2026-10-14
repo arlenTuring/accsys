@@ -20,9 +20,23 @@ describe('migrated forms are ordinary designer forms', () => {
   let sql: Sql;
   const tag = `md${Date.now()}`;
   const ids = {} as Record<'admin' | 'dept', string>;
-  const forms: MigratedForm[] = Object.values(MIGRATION_BATCHES)
-    .flatMap((b) => b.forms)
-    .map((f, i) => ({ ...clone(f), key: `${tag}-${i}` }));
+  const all = Object.values(MIGRATION_BATCHES).flatMap((b) => b.forms);
+  const keyOf = new Map(all.map((f, i) => [f.key, `${tag}-${i}`]));
+  /** 關聯單據 rules name other forms by key: point them at the tagged copies. */
+  const remapSources = (schema: MigratedForm['schema']) => {
+    for (const section of schema.sections as { fields: Record<string, unknown>[] }[])
+      for (const field of section.fields)
+        if (field.type === 'source')
+          for (const rule of field.sources as { form: string; unlessCaseHas?: string }[]) {
+            rule.form = keyOf.get(rule.form) ?? rule.form;
+            if (rule.unlessCaseHas) rule.unlessCaseHas = keyOf.get(rule.unlessCaseHas) ?? rule.unlessCaseHas;
+          }
+    return schema;
+  };
+  const forms: MigratedForm[] = all.map((f) => {
+    const copy = clone(f);
+    return { ...copy, key: keyOf.get(f.key)!, schema: remapSources(copy.schema) };
+  });
   const admin = () => ({ id: ids.admin, role: 'admin', authenticatedAt: new Date() });
   const rowVersion = async (id: string) => Number((await sql`select version from form_definitions where id = ${id}`)[0].version);
 
@@ -41,7 +55,7 @@ describe('migrated forms are ordinary designer forms', () => {
     currentEmployee.value = null;
   });
 
-  it('covers batches 1–3', () => {
+  it('covers every batch', () => {
     expect(forms.map((f) => f.legacyFormType).sort()).toEqual(
       [
         'contract_seal_request',
@@ -53,6 +67,8 @@ describe('migrated forms are ordinary designer forms', () => {
         'project_expense',
         'revenue_expense',
         'asset_transfer',
+        'purchase_request',
+        'purchase_order',
       ].sort()
     );
   });

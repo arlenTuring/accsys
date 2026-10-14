@@ -2,7 +2,17 @@ import { evaluateCondition } from '@/lib/approval/flow/condition';
 import type { Condition, OrgSnapshot } from '@/lib/approval/flow/types';
 import { BASE_CURRENCY, parseRateMicros, rateOutOfBounds } from '@/lib/exchange-rates';
 import { addCents, centsToDecimal, MAX_CENTS, MoneyError, toCents, type Cents } from '@/lib/money';
-import { allFields, isDisplayOnly, type BudgetScope, type FieldDef, type FormSchema, type RuleCompareOp, type TableColumn } from './schema';
+import {
+  allFields,
+  isDisplayOnly,
+  SOURCE_ROW_KEY,
+  sourceTargets,
+  type BudgetScope,
+  type FieldDef,
+  type FormSchema,
+  type RuleCompareOp,
+  type TableColumn,
+} from './schema';
 
 /**
  * Server-side validation of a submission against its definition version.
@@ -29,6 +39,8 @@ export type NormalizedSubmission = {
     /** Must still be in the register (保管中 / 出借中). */
     assets: string[];
     budgetScopes: { id: string; scope: BudgetScope }[];
+    /** Budget codes of one table column that must share a budget owner. */
+    sameOwner: { label: string; ids: string[] }[];
   };
   /** Whether a visible attachments field requires at least one file. */
   attachmentsRequired: boolean;
@@ -55,7 +67,8 @@ const EMPTY_ORG: OrgSnapshot = {
   assetCustodians: new Map(),
 };
 
-const holds = (cond: Condition, values: Record<string, unknown>) =>
+/** A condition on plain field values (no applicant or organisation lookups). */
+export const holds = (cond: Condition, values: Record<string, unknown>) =>
   evaluateCondition(cond, { applicantEmployeeId: '', filerEmployeeId: '', departmentId: '', formKey: null, today: '', fields: values }, EMPTY_ORG);
 
 /** visibleWhen only tests earlier form fields (the schema parser enforces it). */
@@ -229,8 +242,15 @@ function cell(col: TableColumn, v: unknown): unknown {
       return option(v, col.options ?? []);
     case 'employee':
     case 'asset':
+    case 'budget_code':
       return uuid(v);
   }
+}
+
+/** Index of the source row a carried-over row came from, or null. */
+export function sourceRowOf(row: Record<string, unknown>): number | null {
+  const v = row[SOURCE_ROW_KEY];
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < 10_000 ? v : null;
 }
 
 /** pickFrom: the row's option must be one of those ticked in the checkboxes field. */
@@ -270,6 +290,7 @@ function checkColumnRules(col: TableColumn, v: unknown, row: Record<string, unkn
 
 /** A row nobody filled in: every input is blank or still its default (rate columns follow the currency). */
 export function isUntouchedRow(columns: TableColumn[], row: Record<string, unknown>): boolean {
+  if (sourceRowOf(row) !== null) return false;
   return columns.every((c) => c.formula || c.rateFor !== undefined || blank(row[c.id]) || (c.default !== undefined && row[c.id] === c.default));
 }
 
@@ -280,7 +301,8 @@ function table(
   v: unknown,
   errors: Record<string, string>,
   values: Record<string, unknown>,
-  fieldOf: FieldLookup
+  fieldOf: FieldLookup,
+  carried: boolean
 ): TableValue {
   const rawRows = v && typeof v === 'object' && Array.isArray((v as TableValue).rows) ? (v as TableValue).rows : Array.isArray(v) ? v : null;
   if (v !== undefined && v !== null && rawRows === null) bad('格式不正確');
@@ -329,6 +351,8 @@ function table(
       if (!col.rules || failed.has(col.id) || row[col.id] === null) continue;
       attempt(col, () => checkColumnRules(col, row[col.id], row, values));
     }
+    const src = carried ? sourceRowOf(r) : null;
+    if (src !== null) row[SOURCE_ROW_KEY] = src;
     rows.push(row);
   }
   const minRows = Math.max(field.minRows, field.required ? 1 : 0);
@@ -367,9 +391,10 @@ function value(
   today: string,
   errors: Record<string, string>,
   earlier: Record<string, unknown>,
-  fieldOf: FieldLookup
+  fieldOf: FieldLookup,
+  carried: boolean
 ): unknown {
-  if (field.type === 'table') return table(field, v, errors, earlier, fieldOf);
+  if (field.type === 'table') return table(field, v, errors, earlier, fieldOf, carried);
   if (field.type === 'boolean') {
     if (v === undefined || v === null) return false;
     if (typeof v !== 'boolean') bad('格式不正確');
@@ -414,6 +439,7 @@ function value(
     case 'project':
     case 'supplier':
     case 'asset':
+    case 'source':
       return uuid(v);
     default:
       return null;
@@ -433,11 +459,13 @@ export function validateSubmission(schema: FormSchema, raw: unknown, today: stri
     suppliers: [],
     assets: [],
     budgetScopes: [],
+    sameOwner: [],
   };
   const promoted: NormalizedSubmission['promoted'] = { totalAmount: null, budgetCodeId: null, projectId: null };
   let attachmentsRequired = false;
   const declaredFields = new Map(allFields(schema).map((f) => [f.id, f]));
   const fieldOf = (id: string) => declaredFields.get(id);
+  const carriedTables = sourceTargets(schema);
 
   for (const declared of allFields(schema)) {
     if (!isFieldVisible(declared, flowFields)) continue;
@@ -448,7 +476,7 @@ export function validateSubmission(schema: FormSchema, raw: unknown, today: stri
     }
     if (isDisplayOnly(field)) continue;
     try {
-      const v = value(field, input[field.id], today, errors, flowFields, fieldOf);
+      const v = value(field, input[field.id], today, errors, flowFields, fieldOf, carriedTables.has(field.id));
       if (v !== null && v !== '' && field.rules) checkRules(field, v, flowFields, today);
       data[field.id] = v;
       flowFields[field.id] = field.type === 'table' ? (v as TableValue).total : v;
@@ -462,13 +490,20 @@ export function validateSubmission(schema: FormSchema, raw: unknown, today: stri
         if (field.type === 'asset') refs.assets.push(v);
       }
       if (field.type === 'table') {
-        for (const row of (v as TableValue).rows) {
+        const rows = (v as TableValue).rows;
+        for (const row of rows) {
           for (const col of field.columns) {
             const cellValue = row[col.id];
             if (typeof cellValue !== 'string') continue;
             if (col.type === 'employee') refs.employees.push(cellValue);
             if (col.type === 'asset') refs.assets.push(cellValue);
+            if (col.type === 'budget_code') refs.budgetCodes.push(cellValue);
           }
+        }
+        for (const col of field.columns.filter((c) => c.type === 'budget_code')) {
+          const ids = rows.map((r) => r[col.id]).filter((x): x is string => typeof x === 'string');
+          flowFields[`${field.id}.${col.id}`] = ids;
+          if (col.sameOwner && ids.length > 0) refs.sameOwner.push({ label: field.label, ids });
         }
       }
       if (field.semantic === 'amount') {

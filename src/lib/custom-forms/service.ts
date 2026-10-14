@@ -44,13 +44,14 @@ import {
 import { applyAssetLinesIfApproved, prepareAssetLines, writeAssetLines } from './asset-register';
 import { parseDefinition } from './definition';
 import { withApplicantConfirmation } from './on-behalf';
-import { allFields, BUDGET_SCOPE_LABELS, type FormSchema } from './schema';
+import { allFields, BUDGET_SCOPE_LABELS, sourceFieldOf, type FormSchema } from './schema';
+import { carryRows, loadSource } from './source';
 import { summarizeErrors, validateSubmission, type NormalizedSubmission } from './validate';
 import { canFile, parseVisibility, type Visibility } from './visibility';
 
 // Workflow of designer forms (form_type 'custom'). The department is always
 // the applicant's own. On a 代為申請 form (schema.onBehalf) the employee who
-// files (經辦, procurement_cases.created_by) may name someone else as the
+// files (經辦, form_submissions.filed_by) may name someone else as the
 // applicant; that applicant confirms first, and the filer may also edit,
 // withdraw and resubmit and hears about the outcome. Edits and resubmits stay
 // on the definition version the form was first submitted with.
@@ -164,6 +165,15 @@ async function assertRefs(tx: Tx, refs: NormalizedSubmission['refs']) {
     const gone = rows.find((r) => !ACTIVE_ASSET_STATUSES.includes(r.status as AssetStatus));
     if (gone) abort('validation', `財產 ${gone.tag} 已不在財產清冊中`);
   }
+  for (const group of refs.sameOwner) {
+    const rows = await tx
+      .select({ owner: budgetCodes.ownerEmployeeId })
+      .from(budgetCodes)
+      .where(inArray(budgetCodes.id, [...new Set(group.ids)]));
+    const owners = new Set(rows.map((r) => r.owner ?? ''));
+    if (owners.size > 1) abort('validation', `「${group.label}」各列的預算編號必須屬於同一位預算負責人`);
+    if (owners.has('')) abort('validation', '選取的預算編號沒有指定預算負責人');
+  }
   if (refs.budgetScopes.length > 0) {
     const rows = await tx
       .select({ id: budgetCodes.id, departmentId: budgetCodes.departmentId, projectKind: projects.kind })
@@ -219,10 +229,11 @@ function confirmed(steps: ResolvedStep[], p: { applicantId: string; filerId: str
 /** The employee who filed the form (the applicant, unless filed on their behalf). */
 async function filerOf(tx: Tx, form: LockedForm): Promise<string> {
   const [c] = await tx
-    .select({ createdBy: procurementCases.createdByEmployeeId })
-    .from(procurementCases)
-    .where(eq(procurementCases.id, form.procurementCaseId));
-  return c.createdBy;
+    .select({ filedBy: formSubmissions.filedByEmployeeId, createdBy: procurementCases.createdByEmployeeId })
+    .from(formSubmissions)
+    .innerJoin(procurementCases, eq(procurementCases.id, formSubmissions.procurementCaseId))
+    .where(eq(formSubmissions.id, form.id));
+  return c.filedBy ?? c.createdBy;
 }
 
 async function assertOwner(tx: Tx, form: LockedForm, actorId: string, verb: string): Promise<string> {
@@ -292,27 +303,38 @@ export function createSubmission(actor: Actor, key: string, input: CreateInput, 
       const applicant =
         applicantId === actor.id ? filer : await applicantOf(tx, applicantId, { code: 'validation', message: '選取的申請人無效或已停用' });
       if (!canFile(def.visibility, applicant)) abort('validation', '選取的申請人沒有這張表單的填寫權限');
-      const value = normalize(def.schema, rest.data);
+      const link = sourceFieldOf(def.schema);
+      const raw = rest.data && typeof rest.data === 'object' ? (rest.data as Record<string, unknown>) : {};
+      const source = link ? await loadSource(tx, def, link, raw[link.id], applicantId) : null;
+      const value = normalize(def.schema, source ? carryRows(source, raw) : rest.data);
       assertAttachments(def.schema, value, typeof fileCount === 'number' ? fileCount : 0);
       await assertRefs(tx, value.refs);
       const assetLines = def.schema.assetRegister ? await prepareAssetLines(tx, def.schema.assetRegister, value.data) : null;
       const parties = { applicantId, filerId: actor.id, departmentId: applicant.departmentId };
       const steps = confirmed(await resolveFlowInTx(tx, def.flow, flowContext(parties, def.key, value)), { ...parties, editorId: actor.id });
 
-      const [{ caseNumber }] = await tx.execute<{ caseNumber: string }>(sql`select next_case_number() as "caseNumber"`);
-      const [pcase] = await tx
-        .insert(procurementCases)
-        .values({ caseNumber, createdByEmployeeId: actor.id, caseType: 'custom' })
-        .returning({ id: procurementCases.id });
+      let caseId = source?.caseId;
+      let caseNumber: string;
+      if (caseId) {
+        [{ caseNumber }] = await tx.select({ caseNumber: procurementCases.caseNumber }).from(procurementCases).where(eq(procurementCases.id, caseId));
+      } else {
+        [{ caseNumber }] = await tx.execute<{ caseNumber: string }>(sql`select next_case_number() as "caseNumber"`);
+        [{ id: caseId }] = await tx
+          .insert(procurementCases)
+          .values({ caseNumber, createdByEmployeeId: actor.id, caseType: 'custom' })
+          .returning({ id: procurementCases.id });
+      }
       const formNumber = await nextFormNumber(tx, def.definitionId, def.numberPrefix);
       const firstPending = steps.findIndex((s) => s.status === 'pending');
       const [row] = await tx
         .insert(formSubmissions)
         .values({
-          procurementCaseId: pcase.id,
+          procurementCaseId: caseId!,
           definitionId: def.definitionId,
           versionId: def.versionId,
           formNumber,
+          sourceSubmissionId: source?.id ?? null,
+          filedByEmployeeId: actor.id,
           applicantEmployeeId: applicantId,
           departmentId: applicant.departmentId,
           status: firstPending === -1 ? 'approved' : 'pending_approval',
@@ -344,6 +366,7 @@ export function createSubmission(actor: Actor, key: string, input: CreateInput, 
           version: def.versionId,
           formNumber,
           caseNumber,
+          source: source ? source.formNumber : undefined,
           autoApproved: !first,
           onBehalfOf: applicantId === actor.id ? undefined : applicantId,
         },
@@ -413,7 +436,15 @@ export function reviseSubmission(actor: Actor, id: string, mode: 'update' | 'res
         message: '申請人的帳號已停用，無法修改或重新送出',
       });
       const def = await versionOfSubmission(tx, id);
-      const value = normalize(def.schema, input?.data);
+      const link = sourceFieldOf(def.schema);
+      let data = input?.data;
+      if (link) {
+        const [own] = await tx.select({ sourceId: formSubmissions.sourceSubmissionId }).from(formSubmissions).where(eq(formSubmissions.id, id));
+        const raw = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+        const source = await loadSource(tx, def, link, own.sourceId, form.applicantEmployeeId, id);
+        data = carryRows(source, { ...raw, [link.id]: source.id });
+      }
+      const value = normalize(def.schema, data);
       const [{ n }] = await tx
         .select({ n: count() })
         .from(attachments)

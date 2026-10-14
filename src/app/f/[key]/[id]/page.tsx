@@ -121,6 +121,11 @@ export default async function DesignerFormDetailPage({
           </p>
         </div>
         <div className="flex flex-wrap gap-2 print:hidden">
+          {detail.followUps.map((f) => (
+            <Link key={f.key} href={`/f/${f.key}/new?source=${detail.id}`} className="btn-primary">
+              接續建立{f.name}
+            </Link>
+          ))}
           {detail.status === 'approved' && <PrintButton label="列印申請單" />}
           {detail.canEdit && (
             <Link href={`/f/${detail.key}/${detail.id}/edit`} className="btn-secondary">

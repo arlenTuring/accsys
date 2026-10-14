@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ApprovalTimeline } from '@/app/components/approval-timeline';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { replacementFor } from '@/lib/custom-forms/legacy';
 import { getPurchaseRequestDetail } from '@/lib/purchase-requests/queries';
 import { withdrawPurchaseRequest } from '@/lib/purchase-requests/actions';
 import { ApprovalActions } from './approval-actions';
@@ -23,7 +24,7 @@ export default async function RequestDetailPage({
   const detail = await getPurchaseRequestDetail(id);
   if (!detail) notFound();
 
-    const employee = await getCurrentEmployee();
+  const [employee, orderReplaced] = await Promise.all([getCurrentEmployee(), replacementFor('purchase_order')]);
 
   const currentStep =
     detail.status === 'pending_approval' && detail.currentStepOrder !== null
@@ -81,13 +82,16 @@ export default async function RequestDetailPage({
         <ApprovalTimeline formType="purchase_request" formId={detail.id} />
       </div>
 
-      {detail.status === 'approved' && (
-        <p>
-          <Link href={`/purchase-orders/new?requestId=${detail.id}`} className="text-blue-600 underline">
-            建立採購單
-          </Link>
-        </p>
-      )}
+      {detail.status === 'approved' &&
+        (orderReplaced ? (
+          <p className="text-sm text-td-muted">採購單已改用新版表單，新版採購單只能接續新版請購單。</p>
+        ) : (
+          <p>
+            <Link href={`/purchase-orders/new?requestId=${detail.id}`} className="text-blue-600 underline">
+              建立採購單
+            </Link>
+          </p>
+        ))}
 
       {canSelfEdit && (
         <section className="mb-4 flex gap-3">

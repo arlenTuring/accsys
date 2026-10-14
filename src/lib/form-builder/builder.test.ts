@@ -14,14 +14,16 @@ import { parseSettings } from './settings';
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 
 describe('designer defaults', () => {
-  it('gives every field type defaults the schema parser accepts', () => {
+  it('gives every field type defaults the schema parser accepts (關聯單據 still needs a source form)', () => {
     let schema = emptySchema();
     for (const type of FIELD_TYPES) {
       if (type === 'attachments' && schemaFieldIds(schema).some((id) => id.startsWith('attachments'))) continue;
       schema = insertField(schema, 'main', schema.sections[0].fields.length, newField(type, schemaFieldIds(schema)));
     }
     const parsed = parseFormSchema(schema);
-    expect(parsed.ok ? [] : parsed.errors).toEqual([]);
+    const errors = parsed.ok ? [] : parsed.errors;
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/關聯單據.*需有 1–5 個來源表單/);
     expect(new Set(schemaFieldIds(schema)).size).toBe(FIELD_TYPES.length);
   });
 

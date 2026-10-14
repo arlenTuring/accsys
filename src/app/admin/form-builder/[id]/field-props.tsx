@@ -10,13 +10,17 @@ import {
   type FieldOption,
   type FieldRule,
   type FieldSemantic,
+  type FormSchema,
   type RuleCompareOp,
   type TableColumn,
 } from '@/lib/custom-forms/schema';
+import type { PickerOptions } from '@/lib/custom-forms/queries';
 import { FIELD_TYPE_LABELS, newColumn, uniqueId } from '@/lib/form-builder/blank';
+import type { BuilderSourceForm } from '@/lib/form-builder/queries';
 import { dangerBtn, smallBtn, smallInput } from '../../org/org-ui';
 import { Field } from '../builder-ui';
 import { ConditionEditor, type CondField } from './condition-editor';
+import { SourceRulesEditor } from './source-rules-editor';
 
 const SEMANTICS: Partial<Record<FieldDef['type'], { value: FieldSemantic; label: string }>> = {
   money: { value: 'amount', label: '這是單據金額（財會追蹤、金額條件）' },
@@ -33,6 +37,7 @@ const COLUMN_TYPES: { value: ColumnType; label: string }[] = [
   { value: 'select', label: '下拉選單' },
   { value: 'employee', label: '員工' },
   { value: 'asset', label: '財產' },
+  { value: 'budget_code', label: '預算編號' },
 ];
 const UNIQUE_TYPES: readonly ColumnType[] = ['text', 'select', 'employee', 'asset'];
 
@@ -281,6 +286,7 @@ function ColumnsEditor({
                   currencyColumn: type === 'money' ? c.currencyColumn : undefined,
                   unique: UNIQUE_TYPES.includes(type) ? c.unique : undefined,
                   pickFrom: type === 'select' ? c.pickFrom : undefined,
+                  sameOwner: type === 'budget_code' ? c.sameOwner : undefined,
                   rules: undefined,
                 });
               }}
@@ -294,6 +300,9 @@ function ColumnsEditor({
             {!c.formula && <Check label="必填" checked={c.required} onChange={(v) => setCol(i, { required: v })} />}
             {UNIQUE_TYPES.includes(c.type) && (
               <Check label="不可重複" checked={c.unique === true} onChange={(v) => setCol(i, { unique: v || undefined })} />
+            )}
+            {c.type === 'budget_code' && (
+              <Check label="各列需同一位預算負責人" checked={c.sameOwner === true} onChange={(v) => setCol(i, { sameOwner: v || undefined })} />
             )}
             {c.type === 'number' && (
               <label className="flex items-center gap-1 text-xs">
@@ -630,6 +639,9 @@ export function FieldProps({
   onChange,
   idLocked,
   condFields,
+  schema,
+  sourceForms,
+  options,
   sections,
   sectionId,
   onMoveToSection,
@@ -639,6 +651,9 @@ export function FieldProps({
   /** The id was published: data of old submissions is stored under it. */
   idLocked: boolean;
   condFields: CondField[];
+  schema: FormSchema;
+  sourceForms: BuilderSourceForm[];
+  options: PickerOptions;
   sections: { id: string; title: string }[];
   sectionId: string;
   onMoveToSection: (sectionId: string) => void;
@@ -646,6 +661,7 @@ export function FieldProps({
   const set = (p: Record<string, unknown>) => onChange({ ...field, ...p } as FieldDef);
   const semantic = SEMANTICS[field.type];
   const valueField = field.type !== 'notice' && field.type !== 'attachments';
+  const isSource = field.type === 'source';
 
   return (
     <div className="space-y-3 text-sm">
@@ -688,7 +704,12 @@ export function FieldProps({
           </select>
         </Field>
       </div>
-      {valueField && field.type !== 'boolean' && <Check label="必填" checked={field.required} onChange={(v) => set({ required: v })} />}
+      {valueField && field.type !== 'boolean' && !isSource && <Check label="必填" checked={field.required} onChange={(v) => set({ required: v })} />}
+      {field.type === 'source' && (
+        <Field label="來源表單" hint="一律必填、一律顯示；每張表單最多一個關聯單據欄位">
+          <SourceRulesEditor field={field} schema={schema} sourceForms={sourceForms} options={options} onChange={onChange} />
+        </Field>
+      )}
       {field.type === 'attachments' && <Check label="至少上傳一個檔案" checked={field.required} onChange={(v) => set({ required: v })} />}
       {valueField && field.type !== 'table' && <Check label="顯示在詳情頁表頭" checked={field.showInHeader} onChange={(v) => set({ showInHeader: v })} />}
       {semantic && (
@@ -707,6 +728,14 @@ export function FieldProps({
           </Field>
           <Field label="字數上限">
             <input className={smallInput} type="number" min={1} max={2000} value={field.maxLength} onChange={(e) => set({ maxLength: Number(e.target.value) })} />
+          </Field>
+          <Field label="預設內容（新單據預先填好）">
+            <input
+              className={smallInput}
+              maxLength={field.maxLength}
+              value={field.default ?? ''}
+              onChange={(e) => set({ default: e.target.value === '' ? undefined : e.target.value })}
+            />
           </Field>
         </div>
       )}
@@ -760,6 +789,9 @@ export function FieldProps({
           </Field>
           <Field label="小數位">
             <input className={smallInput} type="number" min={0} max={4} value={field.decimals} onChange={(e) => set({ decimals: Number(e.target.value) })} />
+          </Field>
+          <Field label="預設值">
+            <input className={smallInput} type="number" value={field.default ?? ''} onChange={(e) => set({ default: numOrNull(e.target.value) ?? undefined })} />
           </Field>
         </div>
       )}
@@ -831,7 +863,7 @@ export function FieldProps({
         </div>
       )}
 
-      {valueField && field.type !== 'boolean' && (
+      {valueField && field.type !== 'boolean' && !isSource && (
         <div className="border-t border-dashed border-td-border pt-3">
           <p className="text-xs font-semibold text-td-blue-dark">條件必填</p>
           <p className="mb-2 text-xs text-td-muted">符合條件時改為必填（即使上面沒勾「必填」）。</p>
@@ -839,11 +871,13 @@ export function FieldProps({
         </div>
       )}
 
-      <div className="border-t border-dashed border-td-border pt-3">
-        <p className="text-xs font-semibold text-td-blue-dark">顯示條件</p>
-        <p className="mb-2 text-xs text-td-muted">只能參考排在這個欄位前面的欄位；隱藏時不必填，也不會存進單據。</p>
-        <ConditionEditor value={field.visibleWhen} onChange={(c) => set({ visibleWhen: c })} fields={condFields} emptyText="一律顯示。" allowEmpty />
-      </div>
+      {!isSource && (
+        <div className="border-t border-dashed border-td-border pt-3">
+          <p className="text-xs font-semibold text-td-blue-dark">顯示條件</p>
+          <p className="mb-2 text-xs text-td-muted">只能參考排在這個欄位前面的欄位；隱藏時不必填，也不會存進單據。</p>
+          <ConditionEditor value={field.visibleWhen} onChange={(c) => set({ visibleWhen: c })} fields={condFields} emptyText="一律顯示。" allowEmpty />
+        </div>
+      )}
     </div>
   );
 }

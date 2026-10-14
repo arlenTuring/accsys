@@ -1,4 +1,4 @@
-import { asc, desc, eq, sql } from 'drizzle-orm';
+import { asc, desc, eq, ne, sql } from 'drizzle-orm';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { isUuid } from '@/lib/authz/forms';
 import type { FlowDef } from '@/lib/approval/flow/types';
@@ -147,7 +147,11 @@ export type DesignerData = {
   currentEmployeeId: string;
   /** Name of the hard-coded form this definition replaces once published (migration batches). */
   replacesLegacy: string | null;
+  /** Other forms a 關聯單據 field may continue: published schema, else the working draft (must be published first). */
+  sourceForms: BuilderSourceForm[];
 };
+
+export type BuilderSourceForm = { key: string; name: string; published: boolean; schema: FormSchema };
 
 const ALL_REFERENCE_TYPES: FormSchema = {
   version: 1,
@@ -182,7 +186,7 @@ export async function getDesignerData(id: string): Promise<DesignerData | null> 
   if (!row) return null;
   const d = row.d;
 
-  const [versionRows, counts, categories, emps, depts, groups, roles, levels, options] = await Promise.all([
+  const [versionRows, counts, categories, emps, depts, groups, roles, levels, options, others] = await Promise.all([
     db
       .select({
         id: formDefinitionVersions.id,
@@ -218,7 +222,26 @@ export async function getDesignerData(id: string): Promise<DesignerData | null> 
     db.select({ code: jobRoles.code, name: jobRoles.name }).from(jobRoles).where(eq(jobRoles.active, true)).orderBy(desc(jobRoles.isSystem), asc(jobRoles.name)),
     db.select({ code: orgLevels.code, name: orgLevels.name, rank: orgLevels.rank }).from(orgLevels).orderBy(desc(orgLevels.rank)),
     getPickerOptions(ALL_REFERENCE_TYPES),
+    db
+      .select({
+        key: formDefinitions.key,
+        name: formDefinitions.name,
+        draftSchema: formDefinitions.draftSchema,
+        draftFlow: formDefinitions.draftFlow,
+        schema: formDefinitionVersions.schema,
+        flow: formDefinitionVersions.flow,
+      })
+      .from(formDefinitions)
+      .leftJoin(formDefinitionVersions, eq(formDefinitionVersions.id, formDefinitions.publishedVersionId))
+      .where(ne(formDefinitions.id, d.id))
+      .orderBy(asc(formDefinitions.name)),
   ]);
+  const sourceForms: BuilderSourceForm[] = [];
+  for (const o of others) {
+    const published = o.schema !== null;
+    const parsed = published ? parseDefinition(o.schema, o.flow) : parseDefinition(o.draftSchema, o.draftFlow ?? emptyFlow());
+    if (parsed.ok) sourceForms.push({ key: o.key, name: o.name, published, schema: parsed.schema });
+  }
 
   const current = versionRows.find((v) => v.id === d.publishedVersionId);
   const currentParsed = current ? parseDefinition(current.schema, current.flow) : null;
@@ -271,6 +294,7 @@ export async function getDesignerData(id: string): Promise<DesignerData | null> 
     today: taipeiToday(),
     currentEmployeeId: me.id,
     replacesLegacy: d.legacyFormType ? (FORM_LABELS[d.legacyFormType as FormType] ?? d.legacyFormType) : null,
+    sourceForms,
   };
 }
 

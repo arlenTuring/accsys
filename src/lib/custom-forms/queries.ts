@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, or } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { canAttachToForm, canReadForm, isUuid } from '@/lib/authz/forms';
@@ -22,8 +22,9 @@ import {
   suppliers,
 } from '@/lib/db/schema';
 import { parseDefinition } from './definition';
-import { allFields, type BudgetScope, type FieldDef, type FormSchema } from './schema';
+import { allFields, sourceFieldOf, type BudgetScope, type FieldDef, type FormSchema } from './schema';
 import { canSeeSensitive, maskSensitive } from './sensitive';
+import { ruleHolds, sourceOptions, type SourceOption } from './source';
 import type { TableValue } from './validate';
 import { canFile, parseVisibility } from './visibility';
 
@@ -125,7 +126,12 @@ export type PickerOptions = {
   suppliers: { id: string; label: string }[];
   /** Assets still in the register; custodian / location pre-fill the register-linked rows. */
   assets: AssetPickerOption[];
+  /** 關聯單據: submissions this form may continue (with the rows each carries over). */
+  sources: SourceOption[];
 };
+
+/** Who files the form and, when editing, the source it already continues. */
+export type SourceContext = { definitionId: string; applicantId: string; current?: string | null };
 
 export type AssetPickerOption = { id: string; label: string; custodianId: string; location: string };
 
@@ -164,10 +170,11 @@ async function assetOptions(): Promise<AssetPickerOption[]> {
 }
 
 /** Choices for the reference fields the schema uses (active records only). */
-export async function getPickerOptions(schema: FormSchema): Promise<PickerOptions> {
+export async function getPickerOptions(schema: FormSchema, sourceCtx?: SourceContext): Promise<PickerOptions> {
   const types = usedTypes(schema);
   const db = getDb();
-  const [emps, depts, codes, projs, sups, assetChoices] = await Promise.all([
+  const link = sourceFieldOf(schema);
+  const [emps, depts, codes, projs, sups, assetChoices, sourceChoices] = await Promise.all([
     types.has('employee') || schema.onBehalf
       ? db
           .select({ id: employees.id, name: employees.name, dept: departments.name })
@@ -183,6 +190,7 @@ export async function getPickerOptions(schema: FormSchema): Promise<PickerOption
     types.has('project') ? db.select({ id: projects.id, code: projects.code, name: projects.name }).from(projects).orderBy(asc(projects.code)) : [],
     types.has('supplier') ? db.select({ id: suppliers.id, label: suppliers.name }).from(suppliers).orderBy(asc(suppliers.name)) : [],
     types.has('asset') ? assetOptions() : [],
+    link && sourceCtx ? sourceOptions(db, sourceCtx, link, sourceCtx.applicantId, sourceCtx.current ?? undefined) : [],
   ]);
   return {
     employees: emps.map((e) => ({ id: e.id, label: `${e.name}（${e.dept}）` })),
@@ -191,6 +199,7 @@ export async function getPickerOptions(schema: FormSchema): Promise<PickerOption
     projects: projs.map((p) => ({ id: p.id, label: `${p.code} ${p.name}` })),
     suppliers: sups,
     assets: assetChoices,
+    sources: sourceChoices,
   };
 }
 
@@ -209,6 +218,7 @@ export async function getNewFormContext(key: string): Promise<NewFormContext | n
   if (!employee || typeof key !== 'string' || key.length > 40) return null;
   const [row] = await getDb()
     .select({
+      id: formDefinitions.id,
       key: formDefinitions.key,
       name: formDefinitions.name,
       description: formDefinitions.description,
@@ -229,7 +239,7 @@ export async function getNewFormContext(key: string): Promise<NewFormContext | n
     name: row.name,
     description: row.description,
     schema: parsed.schema,
-    options: await getPickerOptions(parsed.schema),
+    options: await getPickerOptions(parsed.schema, { definitionId: row.id, applicantId: employee.id }),
     currentEmployeeId: employee.id,
   };
 }
@@ -274,7 +284,7 @@ export async function getMySubmissions(
     .innerJoin(procurementCases, eq(procurementCases.id, formSubmissions.procurementCaseId))
     .where(
       and(
-        or(eq(formSubmissions.applicantEmployeeId, employee.id), eq(procurementCases.createdByEmployeeId, employee.id)),
+        or(eq(formSubmissions.applicantEmployeeId, employee.id), eq(formSubmissions.filedByEmployeeId, employee.id)),
         scope
       )
     )
@@ -351,7 +361,60 @@ export type SubmissionDetail = {
   canAttach: boolean;
   /** Register-linked forms only (null otherwise). */
   assetRegister: { lines: SubmissionAssetLine[]; appliedAt: Date | null } | null;
+  /** Forms the applicant may file next from this approved submission (關聯單據). */
+  followUps: { key: string; name: string }[];
 };
+
+/**
+ * Published forms the employee may file whose 關聯單據 field accepts this
+ * submission (form `key`, rule condition met), minus those the case already has.
+ */
+async function followUpsOf(
+  employee: { id: string; departmentId: string },
+  source: { key: string; caseId: string; schema: FormSchema; data: Record<string, unknown> }
+): Promise<{ key: string; name: string }[]> {
+  const db = getDb();
+  const [defs, existing] = await Promise.all([
+    db
+      .select({
+        id: formDefinitions.id,
+        key: formDefinitions.key,
+        name: formDefinitions.name,
+        visibility: formDefinitions.visibility,
+        schema: formDefinitionVersions.schema,
+        flow: formDefinitionVersions.flow,
+      })
+      .from(formDefinitions)
+      .innerJoin(formDefinitionVersions, eq(formDefinitionVersions.id, formDefinitions.publishedVersionId))
+      .where(eq(formDefinitions.status, 'published'))
+      .orderBy(asc(formDefinitions.sortOrder), asc(formDefinitions.name)),
+    db
+      .select({ definitionId: formSubmissions.definitionId, key: formDefinitions.key, status: formSubmissions.status })
+      .from(formSubmissions)
+      .innerJoin(formDefinitions, eq(formDefinitions.id, formSubmissions.definitionId))
+      .where(eq(formSubmissions.procurementCaseId, source.caseId)),
+  ]);
+  const taken = new Set(existing.map((e) => e.definitionId));
+  const candidates = defs.filter((d) => {
+    if (taken.has(d.id)) return false;
+    const parsed = parseDefinition(d.schema, d.flow);
+    const link = parsed.ok ? sourceFieldOf(parsed.schema) : null;
+    return !!link?.sources.some(
+      (r) =>
+        r.form === source.key &&
+        ruleHolds(r, source.schema, source.data) &&
+        !(r.unlessCaseHas && existing.some((e) => e.key === r.unlessCaseHas && e.status === 'approved'))
+    );
+  });
+  if (candidates.length === 0) return [];
+  const roles = await jobRolesOf(employee.id);
+  return candidates
+    .filter((d) => {
+      const v = parseVisibility(d.visibility);
+      return v.ok && canFile(v.value, { departmentId: employee.departmentId, jobRoles: roles });
+    })
+    .map((d) => ({ key: d.key, name: d.name }));
+}
 
 /** Ids referenced by reference fields and employee / asset table columns, resolved to display names. */
 async function referenceLabels(fields: FieldDef[], data: Record<string, unknown>): Promise<Record<string, string>> {
@@ -362,6 +425,7 @@ async function referenceLabels(fields: FieldDef[], data: Record<string, unknown>
     project: [] as string[],
     supplier: [] as string[],
     asset: [] as string[],
+    source: [] as string[],
   };
   for (const f of fields) {
     const v = data[f.id];
@@ -369,23 +433,31 @@ async function referenceLabels(fields: FieldDef[], data: Record<string, unknown>
     if (f.type === 'table') {
       const rows = (v as TableValue | undefined)?.rows ?? [];
       for (const c of f.columns) {
-        if (c.type !== 'employee' && c.type !== 'asset') continue;
+        if (c.type !== 'employee' && c.type !== 'asset' && c.type !== 'budget_code') continue;
         for (const row of rows) if (isUuid(row[c.id])) ids[c.type].push(row[c.id] as string);
       }
     }
   }
   const db = getDb();
-  const [emps, depts, codes, projs, sups, assetRows] = await Promise.all([
+  const [emps, depts, codes, projs, sups, assetRows, sourceRows] = await Promise.all([
     ids.employee.length ? db.select({ id: employees.id, label: employees.name }).from(employees).where(inArray(employees.id, ids.employee)) : [],
     ids.department.length ? db.select({ id: departments.id, label: departments.name }).from(departments).where(inArray(departments.id, ids.department)) : [],
-    ids.budget_code.length ? budgetCodeLabels(ids.budget_code) : [],
+    ids.budget_code.length ? budgetCodeLabels([...new Set(ids.budget_code)]) : [],
     ids.project.length ? db.select({ id: projects.id, code: projects.code, name: projects.name }).from(projects).where(inArray(projects.id, ids.project)) : [],
     ids.supplier.length ? db.select({ id: suppliers.id, label: suppliers.name }).from(suppliers).where(inArray(suppliers.id, ids.supplier)) : [],
     ids.asset.length
       ? db.select({ id: assets.id, tag: assets.tag, name: assets.name }).from(assets).where(inArray(assets.id, [...new Set(ids.asset)]))
       : [],
+    ids.source.length
+      ? db
+          .select({ id: formSubmissions.id, formNumber: formSubmissions.formNumber, name: formDefinitions.name })
+          .from(formSubmissions)
+          .innerJoin(formDefinitions, eq(formDefinitions.id, formSubmissions.definitionId))
+          .where(inArray(formSubmissions.id, ids.source))
+      : [],
   ]);
   return Object.fromEntries([
+    ...sourceRows.map((s) => [s.id, `${s.formNumber}｜${s.name}`]),
     ...emps.map((e) => [e.id, e.label]),
     ...depts.map((d) => [d.id, d.label]),
     ...codes.map((c) => [c.id, c.label]),
@@ -441,7 +513,7 @@ export async function getSubmissionDetail(id: string, opts: { withOptions?: bool
       key: formDefinitions.key,
       name: formDefinitions.name,
       caseNumber: procurementCases.caseNumber,
-      filerEmployeeId: procurementCases.createdByEmployeeId,
+      filerEmployeeId: sql<string>`coalesce(${formSubmissions.filedByEmployeeId}, ${procurementCases.createdByEmployeeId})`,
       applicantName: employees.name,
       applicantEmail: employees.googleEmail,
       applicantPhone: employees.phone,
@@ -499,7 +571,14 @@ export async function getSubmissionDetail(id: string, opts: { withOptions?: bool
     schema: parsed.schema,
     data,
     labels: await referenceLabels(allFields(parsed.schema), data),
-    options: opts.withOptions && (canEdit || canResubmit) ? await getPickerOptions(parsed.schema) : null,
+    options:
+      opts.withOptions && (canEdit || canResubmit)
+        ? await getPickerOptions(parsed.schema, { definitionId: s.definitionId, applicantId: s.applicantEmployeeId, current: s.sourceSubmissionId })
+        : null,
+    followUps:
+      s.status === 'approved' && s.applicantEmployeeId === actor.id
+        ? await followUpsOf(actor, { key: row.key, caseId: s.procurementCaseId, schema: parsed.schema, data: stored })
+        : [],
     filerName: filer?.name ?? null,
     isCurrentApprover: s.status === 'pending_approval' && current?.status === 'pending' && current.approverEmployeeId === actor.id,
     canEdit,

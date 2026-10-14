@@ -65,9 +65,11 @@ export function flowCondFields(schema: FormSchema, options: PickerOptions, org: 
   ];
 }
 
-/** Form fields of the given types, for approver sources that read a field. */
+/** Form fields of the given types, for approver sources that read a field; budget-code table columns count as `table.column`. */
 export function fieldsOfType(schema: FormSchema, types: FieldDef['type'][]): { id: string; label: string }[] {
-  return allSchemaFields(schema)
-    .filter((f) => types.includes(f.type))
-    .map((f) => ({ id: f.id, label: f.label }));
+  return allSchemaFields(schema).flatMap((f) => {
+    if (types.includes(f.type)) return [{ id: f.id, label: f.label }];
+    if (f.type !== 'table' || !types.includes('budget_code')) return [];
+    return f.columns.filter((c) => c.type === 'budget_code').map((c) => ({ id: `${f.id}.${c.id}`, label: `${f.label}／${c.label}` }));
+  });
 }

@@ -1,6 +1,7 @@
 import { and, asc, eq } from 'drizzle-orm';
 import { recordAudit } from '@/lib/audit/record';
 import { isUuid } from '@/lib/authz/forms';
+import { assertLegacyOpen } from '@/lib/custom-forms/legacy';
 import { purchaseOrderItems, purchaseOrders, purchaseRequestItems, suppliers } from '@/lib/db/schema';
 import { addCents, centsToDecimal, centsToNumber, MoneyError, multiplyCents, toCents, type Cents } from '@/lib/money';
 import { validatePurchaseOrderInput } from '@/lib/purchase-orders/validate';
@@ -122,6 +123,7 @@ export function createPurchaseOrder(actor: Actor, input: CreatePurchaseOrderInpu
         request,
       });
       if ('replay' in claim) return claim.replay;
+      await assertLegacyOpen(tx, 'purchase_order', '採購單');
 
       // Lock order: source request first, then our own rows.
       if (!isUuid(input.purchaseRequestId)) abort('not_found', '找不到來源請購單');

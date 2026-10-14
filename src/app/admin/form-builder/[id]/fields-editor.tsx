@@ -7,6 +7,7 @@ import type { PickerOptions } from '@/lib/custom-forms/queries';
 import type { FieldDef, FieldType, FormSchema } from '@/lib/custom-forms/schema';
 import { FIELD_GROUPS, FIELD_TYPE_LABELS, newField } from '@/lib/form-builder/blank';
 import type { PublishedFieldTypes } from '@/lib/form-builder/diff';
+import type { BuilderSourceForm } from '@/lib/form-builder/queries';
 import {
   addSection,
   duplicateField,
@@ -58,6 +59,7 @@ export function FieldsEditor({
   setSelection,
   publishedTypes,
   options,
+  sourceForms,
 }: {
   schema: FormSchema;
   setSchema: (s: FormSchema) => void;
@@ -66,6 +68,7 @@ export function FieldsEditor({
   setSelection: (s: FieldSelection) => void;
   publishedTypes: PublishedFieldTypes;
   options: PickerOptions;
+  sourceForms: BuilderSourceForm[];
 }) {
   const [drag, setDrag] = useState<Drag>(null);
   const usedByFlow = new Set(flowFieldIds(flow));
@@ -268,6 +271,9 @@ export function FieldsEditor({
             }}
             idLocked={selectedField.id in publishedTypes}
             condFields={earlierCondFields(schema, selectedField.id, options)}
+            schema={schema}
+            sourceForms={sourceForms}
+            options={options}
             sections={schema.sections.map((s) => ({ id: s.id, title: s.title }))}
             sectionId={locateField(schema, selectedField.id)?.sectionId ?? ''}
             onMoveToSection={(sid) => {

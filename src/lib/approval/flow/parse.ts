@@ -21,7 +21,8 @@ export const FLOW_LIMITS = { blocks: 100, depth: 10, conditionDepth: 6, label: 6
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const CODE = /^[a-z][a-z0-9_]{0,39}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const FIELD = /^(\$applicant\.(id|department|orgLevel|jobRoles)|\$filer\.id|[A-Za-z0-9_-]{1,64})$/;
+/** A form field, a table column (`table.column`) or an applicant value. */
+const FIELD = /^(\$applicant\.(id|department|orgLevel|jobRoles)|\$filer\.id|[A-Za-z0-9_-]{1,64}|[A-Za-z][A-Za-z0-9_]{0,39}\.[A-Za-z][A-Za-z0-9_]{0,39})$/;
 const PARTIES: readonly FormParty[] = ['applicant', 'filer', 'field_employee', 'budget_owner', 'asset_custodian'];
 
 type Obj = Record<string, unknown>;

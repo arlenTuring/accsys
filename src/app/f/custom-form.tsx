@@ -6,7 +6,16 @@ import { inputCls, Req } from '@/app/components/form-fields';
 import { PendingFilesField } from '@/app/components/pending-files-field';
 import { reviseCustomForm, submitCustomForm, type SubmitResult } from '@/lib/custom-forms/actions';
 import type { PickerOptions } from '@/lib/custom-forms/queries';
-import { allFields, isDisplayOnly, type ColumnType, type FieldDef, type FormSchema, type TableColumn } from '@/lib/custom-forms/schema';
+import {
+  allFields,
+  isDisplayOnly,
+  sourceFieldOf,
+  sourceTargets,
+  type ColumnType,
+  type FieldDef,
+  type FormSchema,
+  type TableColumn,
+} from '@/lib/custom-forms/schema';
 import {
   computeFormula,
   isFieldRequired,
@@ -56,9 +65,24 @@ function initialValues(schema: FormSchema, initial?: Values): Values {
     } else if (f.type === 'boolean') out[f.id] = v === true;
     else if (f.type === 'checkboxes') out[f.id] = Array.isArray(v) ? v : [];
     else if ((f.type === 'select' || f.type === 'radio') && initial === undefined) out[f.id] = f.default ?? '';
+    else if ((f.type === 'text' || f.type === 'number') && initial === undefined) out[f.id] = f.default === undefined ? '' : String(f.default);
     else out[f.id] = v === null || v === undefined ? '' : String(v);
   }
   return out;
+}
+
+/** Picking a source (關聯單據) refills the tables it carries rows into; clearing it empties them. */
+function withSource(schema: FormSchema, values: Values, sourceId: unknown, options: PickerOptions): Values {
+  const next: Values = { ...values };
+  const picked = options.sources.find((o) => o.id === sourceId);
+  for (const f of allFields(schema)) {
+    if (f.type !== 'table' || !sourceTargets(schema).has(f.id)) continue;
+    next[f.id] =
+      picked?.table === f.id
+        ? { rows: picked.rows.map((r) => ({ ...newRow(f), ...r })), total: null }
+        : { rows: [newRow(f)], total: null };
+  }
+  return next;
 }
 
 const cellText = (row: Values | undefined, col: string) => String(row?.[col] ?? '');
@@ -70,6 +94,7 @@ const cellText = (row: Values | undefined, col: string) => String(row?.[col] ?? 
  * and the custodians, and rows follow a changed 新保管人.
  */
 function withFollowUps(schema: FormSchema, prev: Values, id: string, v: unknown, options: PickerOptions): Values {
+  if (sourceFieldOf(schema)?.id === id) return withSource(schema, { ...prev, [id]: v }, v, options);
   const next: Values = { ...prev, [id]: v };
   const mapRows = (tableId: string, fn: (row: Values, i: number) => Values) => {
     const t = next[tableId] as TableValue | undefined;
@@ -160,7 +185,20 @@ const COLUMN_MIN_WIDTH: Record<ColumnType, string> = {
   select: 'min-w-[6.5rem]',
   employee: 'min-w-[9rem]',
   asset: 'min-w-[14rem]',
+  budget_code: 'min-w-[14rem]',
 };
+
+/** A table filled from the picked source: `locked` columns come from the source, rows can only be dropped in subset mode. */
+type Carried = { locked: Set<string>; subset: boolean };
+
+/** Read-only text of a carried cell. */
+function cellLabel(c: TableColumn, v: unknown, options: PickerOptions): string {
+  const s = String(v ?? '');
+  if (c.type === 'budget_code') return options.budgetCodes.find((o) => o.id === s)?.label ?? s;
+  if (c.type === 'employee') return options.employees.find((o) => o.id === s)?.label ?? s;
+  if (c.type === 'select') return c.options?.find((o) => o.value === s)?.label ?? s;
+  return s;
+}
 
 function TableInput({
   field,
@@ -170,6 +208,7 @@ function TableInput({
   currency,
   options,
   ticked,
+  carried,
 }: {
   field: TableField;
   value: TableValue;
@@ -180,6 +219,7 @@ function TableInput({
   options: PickerOptions;
   /** Options currently ticked in a checkboxes field (pickFrom columns). */
   ticked: (fieldId: string) => string[];
+  carried: Carried | null;
 }) {
   const setCell = (i: number, col: string, v: unknown) =>
     onChange({ ...value, rows: value.rows.map((r, idx) => (idx === i ? { ...r, [col]: v } : r)) });
@@ -190,7 +230,9 @@ function TableInput({
         ? options.employees
         : c.type === 'asset'
           ? options.assets
-          : (c.options ?? []).filter((o) => !c.pickFrom || ticked(c.pickFrom.field).includes(o.value)).map((o) => ({ id: o.value, label: o.label }));
+          : c.type === 'budget_code'
+            ? options.budgetCodes
+            : (c.options ?? []).filter((o) => !c.pickFrom || ticked(c.pickFrom.field).includes(o.value)).map((o) => ({ id: o.value, label: o.label }));
     if (!c.unique) return all;
     const taken = new Set(value.rows.filter((_, idx) => idx !== i).map((r) => String(r[c.id] ?? '')));
     return all.filter((o) => !taken.has(o.id));
@@ -224,7 +266,13 @@ function TableInput({
                   <td key={c.id} className="border border-td-border p-1 align-top">
                     {c.formula ? (
                       <span className="block px-2 py-2 text-right tabular-nums text-td-blue-dark">{preview(field, c, row) || '—'}</span>
-                    ) : c.type === 'select' || c.type === 'employee' || c.type === 'asset' ? (
+                    ) : carried?.locked.has(c.id) ? (
+                      <span
+                        className={`block px-2 py-2 text-td-blue-dark ${c.type === 'number' || c.type === 'money' ? 'text-right tabular-nums' : ''}`}
+                      >
+                        {cellLabel(c, row[c.id], options) || '—'}
+                      </span>
+                    ) : c.type === 'select' || c.type === 'employee' || c.type === 'asset' || c.type === 'budget_code' ? (
                       <select value={String(row[c.id] ?? '')} onChange={(e) => setCell(i, c.id, e.target.value)} className={white} aria-label={`第 ${i + 1} 列 ${c.label}`}>
                         <Options list={choices(c, i)} />
                       </select>
@@ -248,14 +296,16 @@ function TableInput({
                 );
               })}
               <td className="border border-td-border text-center">
-                <button
-                  type="button"
-                  onClick={() => onChange({ ...value, rows: value.rows.length > 1 ? value.rows.filter((_, idx) => idx !== i) : [newRow(field)] })}
-                  className="text-slate-400 hover:text-red-600"
-                  aria-label={`刪除第 ${i + 1} 列`}
-                >
-                  ✕
-                </button>
+                {(!carried || (carried.subset && value.rows.length > 1)) && (
+                  <button
+                    type="button"
+                    onClick={() => onChange({ ...value, rows: value.rows.length > 1 ? value.rows.filter((_, idx) => idx !== i) : [newRow(field)] })}
+                    className="text-slate-400 hover:text-red-600"
+                    aria-label={`刪除第 ${i + 1} 列`}
+                  >
+                    ✕
+                  </button>
+                )}
               </td>
             </tr>
           ))}
@@ -273,7 +323,8 @@ function TableInput({
           )}
         </tbody>
       </table>
-      {value.rows.length < field.maxRows && (
+      {carried && <p className="mt-2 text-xs text-td-muted">明細由關聯單據帶入{carried.subset ? '，可移除本次不處理的項目' : ''}。</p>}
+      {!carried && value.rows.length < field.maxRows && (
         <button type="button" onClick={() => onChange({ ...value, rows: [...value.rows, newRow(field)] })} className="mt-2 text-sm font-semibold text-td-blue hover:underline">
           ＋ 新增一列
         </button>
@@ -292,6 +343,8 @@ function FieldInput({
   errors,
   labelId,
   ticked,
+  carried,
+  sourceFixed,
 }: {
   field: FieldDef;
   value: unknown;
@@ -302,6 +355,9 @@ function FieldInput({
   errors: Record<string, string>;
   labelId: string;
   ticked: (fieldId: string) => string[];
+  carried: Carried | null;
+  /** Editing: the source stays the one the form was filed with. */
+  sourceFixed: boolean;
 }) {
   const str = String(value ?? '');
   const a11y = { 'aria-labelledby': labelId, 'aria-invalid': errors[field.id] ? true : undefined };
@@ -395,6 +451,17 @@ function FieldInput({
         </select>
       );
     }
+    case 'source':
+      return (
+        <>
+          <select value={str} onChange={(e) => onChange(e.target.value)} disabled={sourceFixed} className={`${white} disabled:!bg-slate-100`} {...a11y}>
+            <Options list={options.sources} />
+          </select>
+          {!sourceFixed && options.sources.length === 0 && (
+            <p className="mt-1 text-xs text-td-muted">目前沒有可接續的已核准單據（需為本人申請、已核准，且該案件尚未建立此表單）。</p>
+          )}
+        </>
+      );
     case 'table':
       return (
         <TableInput
@@ -405,6 +472,7 @@ function FieldInput({
           currency={field.currencyField ? currency : null}
           options={options}
           ticked={ticked}
+          carried={carried}
         />
       );
     default:
@@ -422,6 +490,7 @@ export function CustomForm({
   mode,
   initial,
   currentEmployeeId,
+  presetSource,
 }: {
   formKey: string;
   name: string;
@@ -433,9 +502,21 @@ export function CustomForm({
   initial?: Values;
   /** Default applicant of a 代為申請 form (the filer themselves). */
   currentEmployeeId?: string;
+  /** 關聯單據 picked in advance (「接續」 from the source's page). */
+  presetSource?: string;
 }) {
   const router = useRouter();
-  const [values, setValues] = useState<Values>(() => initialValues(schema, initial));
+  const link = sourceFieldOf(schema);
+  const targets = useMemo(() => sourceTargets(schema), [schema]);
+  const [values, setValues] = useState<Values>(() => {
+    const start = initialValues(schema, initial);
+    return link && presetSource && options.sources.some((o) => o.id === presetSource)
+      ? withSource(schema, { ...start, [link.id]: presetSource }, presetSource, options)
+      : start;
+  });
+  const pickedSource = link ? options.sources.find((o) => o.id === values[link.id]) : undefined;
+  const carriedOf = (f: FieldDef): Carried | null =>
+    pickedSource && pickedSource.table === f.id ? { locked: targets.get(f.id) ?? new Set(), subset: pickedSource.subset } : null;
   const pickApplicant = schema.onBehalf === true && mode.kind !== 'update' && mode.kind !== 'resubmit';
   const [applicantId, setApplicantId] = useState(currentEmployeeId ?? '');
   const [files, setFiles] = useState<File[]>([]);
@@ -578,6 +659,8 @@ export function CustomForm({
                             errors={errors}
                             labelId={`field-${f.id}`}
                             ticked={ticked}
+                            carried={carriedOf(f)}
+                            sourceFixed={mode.kind === 'update' || mode.kind === 'resubmit'}
                           />
                         )}
                       </div>
