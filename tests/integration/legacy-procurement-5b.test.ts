@@ -282,6 +282,13 @@ describe('batch 5b: acceptance / payment / standalone payment on the designer ru
     expect((data.items as { rows: Record<string, unknown>[] }).rows.map((r) => [r.description, r.amount])).toEqual([['滑鼠', '1000.00']]);
     expect(data.payeeSupplierId).toBeUndefined();
     expect(data._paymentBatch).toMatchObject({ batchDate: '2026-10-30' });
+
+    // 付款條件提醒: counted from the order's approval date (Taipei), 3 days tolerance.
+    const { designerPaymentTermsCheck } = await import('@/lib/procurement/designer-forms');
+    const [order] = await sql`update form_submissions set updated_at = '2026-09-30T16:30:00Z' where id = ${orderId} returning procurement_case_id`;
+    expect(await designerPaymentTermsCheck(order.procurement_case_id, '2026-10-25')).toEqual({ terms: '預付款', consistent: false });
+    expect(await designerPaymentTermsCheck(order.procurement_case_id, '2026-10-04')).toEqual({ terms: '預付款', consistent: true });
+    expect(await designerPaymentTermsCheck(order.procurement_case_id, null)).toEqual({ terms: '預付款', consistent: true });
     // One payment per case.
     expect(await create(ids.applicant, pp.key, paymentData(orderId, [{ _src: 0 }]))).toMatchObject({ ok: false, code: 'conflict' });
 
@@ -338,9 +345,11 @@ describe('batch 5b: acceptance / payment / standalone payment on the designer ru
     expect(await create(ids.applicant, se.key, data(['500'], { budgetCodeId: ids.orphanBudget }))).toMatchObject({ ok: false });
     expect(await create(ids.applicant, se.key, data(['500'], { payeeType: 'employee' }))).toMatchObject({ ok: false, code: 'validation' });
     const ok = must(await create(ids.applicant, se.key, data(['5000', '4999.99'])));
-    const [row] = await sql`select s.total_amount, s.budget_code_id, c.case_type from form_submissions s
+    const [row] = await sql`select s.total_amount, s.budget_code_id, s.procurement_case_id, c.case_type from form_submissions s
       join procurement_cases c on c.id = s.procurement_case_id where s.id = ${ok.submissionId}`;
     expect(row).toMatchObject({ total_amount: '9999.99', budget_code_id: ids.budget, case_type: 'standalone_expense' });
     expect(await approvers(ok.submissionId)).toEqual([ids.mgr, ids.owner, ids.gm]);
+    const { designerPaymentTermsCheck } = await import('@/lib/procurement/designer-forms');
+    expect(await designerPaymentTermsCheck(row.procurement_case_id, '2026-10-25')).toBeNull();
   });
 });

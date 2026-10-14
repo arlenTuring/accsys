@@ -5,13 +5,15 @@ import type { OrgSnapshot } from '@/lib/approval/flow/types';
 import { validateQuoteCount } from '@/lib/procurement/quote-requirement';
 import { validatePurchaseRequestInput } from '@/lib/purchase-requests/validate';
 import { parseDefinition } from '../definition';
-import { allFields, parseFormSchema, PAYMENT_BATCH_KEY, sourceTargets, SOURCE_ROW_KEY } from '../schema';
+import { allFields, parseFormSchema, PAYMENT_BATCH_KEY, sourceFieldOf, sourceTargets, SOURCE_ROW_KEY } from '../schema';
 import { validateSubmission, type TableValue } from '../validate';
 import { MIGRATION_BATCHES } from '.';
 import { validateAcceptanceInput } from '@/lib/acceptances/validate';
 import { validateExpenseRequestInput } from '@/lib/expense-requests/validate';
 import { computeDefaultExpectedPaymentDate, computePaymentBatchDate } from '@/lib/procurement/payment-batch';
-import { applyPaymentSchedule, paymentBatchOf } from '../payment';
+import { applyPaymentSchedule, expectedPaymentDateOf, paymentBatchOf } from '../payment';
+import { previewSourceId, previewSourceOptions } from '@/lib/form-builder/preview-sources';
+import { PAYMENT_TERMS_DAYS } from '@/lib/procurement/payment-terms';
 import {
   ACCEPTANCE_FORM,
   ACCEPTANCE_KEY,
@@ -324,6 +326,7 @@ describe('付款排程 matches the old preparePayment', () => {
             expect(paymentBatchOf(out)).toEqual(
               computePaymentBatchDate({ payeeType, referenceDate: today, expectedPaymentDate: oldExpected, invoiceMonth })
             );
+            expect(expectedPaymentDateOf(link, out)).toBe(oldExpected);
             cases += 1;
           }
     expect(cases).toBe(2 * 4 * 5 * 4);
@@ -337,6 +340,49 @@ describe('付款排程 matches the old preparePayment', () => {
       TODAY
     );
     expect(after.ok && PAYMENT_BATCH_KEY in after.value.data).toBe(false);
+  });
+});
+
+describe('付款條件提醒', () => {
+  it('every 採購單 付款條件 option is one the legacy consistency check knows', () => {
+    expect([...PAYMENT_TERMS].sort()).toEqual(Object.keys(PAYMENT_TERMS_DAYS).sort());
+    const terms = allFields(definition(PURCHASE_ORDER_FORM).schema).find((f) => f.id === 'paymentTerms');
+    expect(terms?.type === 'select' && terms.options.map((o) => o.value)).toEqual([...PAYMENT_TERMS]);
+  });
+});
+
+describe('designer preview: sample 關聯單據', () => {
+  const sourceForms = PROCUREMENT_FORMS.map((f) => ({ key: f.key, name: f.name, published: true, schema: definition(f).schema }));
+  const options = { budgetCodes: [{ id: BUDGET, label: 'B', scope: 'department' as const }], employees: [], assets: [] };
+
+  it('one made-up document per source rule, rows carried with their source index', () => {
+    for (const form of [PURCHASE_ORDER_FORM, ACCEPTANCE_FORM, PROCUREMENT_PAYMENT_FORM]) {
+      const { schema } = definition(form);
+      const samples = previewSourceOptions(schema, sourceForms, options);
+      expect(samples).toHaveLength(sourceFieldOf(schema)!.sources.length);
+      samples.forEach((s, i) => {
+        expect(s.id).toBe(previewSourceId(i));
+        expect(s.label).toContain('預覽用，非真實單據');
+        expect(s.rows.map((r) => r[SOURCE_ROW_KEY])).toEqual([0, 1]);
+        expect(s.rows.every((r) => r.budgetCodeId === BUDGET && typeof r.description === 'string')).toBe(true);
+      });
+    }
+  });
+
+  it('a payment filled from either sample passes the field checks', () => {
+    const { schema } = definition(PROCUREMENT_PAYMENT_FORM);
+    for (const s of previewSourceOptions(schema, sourceForms, options)) {
+      const r = validateSubmission(
+        schema,
+        { sourceId: s.id, items: { rows: s.rows, total: null }, payeeType: 'supplier', payeeSupplierId: SUPPLIER, paymentMethod: '匯款' },
+        TODAY
+      );
+      expect(r.ok).toBe(true);
+    }
+  });
+
+  it('forms without a 關聯單據 field get none', () => {
+    expect(previewSourceOptions(definition(STANDALONE_PAYMENT_FORM).schema, sourceForms, options)).toEqual([]);
   });
 });
 

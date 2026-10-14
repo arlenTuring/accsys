@@ -21,10 +21,11 @@ import {
   projects,
   suppliers,
 } from '@/lib/db/schema';
+import { designerPaymentTermsCheck, type PaymentTermsCheck } from '@/lib/procurement/designer-forms';
 import { parseDefinition } from './definition';
 import { allFields, sourceFieldOf, type BudgetScope, type FieldDef, type FormSchema } from './schema';
 import { canSeeSensitive, maskSensitive } from './sensitive';
-import { paymentBatchOf, type PaymentBatch } from './payment';
+import { expectedPaymentDateOf, paymentBatchOf, type PaymentBatch } from './payment';
 import { ruleHolds, sourceOptions, type SourceOption } from './source';
 import type { TableValue } from './validate';
 import { canFile, parseVisibility } from './visibility';
@@ -364,6 +365,8 @@ export type SubmissionDetail = {
   canFinanceFill: boolean;
   /** Forms with 付款排程 (null otherwise). */
   paymentBatch: PaymentBatch | null;
+  /** Forms with 付款排程 in a case with an approved designer 採購單 (null otherwise). */
+  paymentTerms: PaymentTermsCheck | null;
   /** Register-linked forms only (null otherwise). */
   assetRegister: { lines: SubmissionAssetLine[]; appliedAt: Date | null } | null;
   /** Forms the applicant may file next from this approved submission (關聯單據). */
@@ -596,6 +599,9 @@ export async function getSubmissionDetail(id: string, opts: { withOptions?: bool
       allFields(parsed.schema).some((f) => f.type === 'table' && f.columns.some((c) => c.financeFill)),
     assetRegister: parsed.schema.assetRegister ? { lines: await assetLinesOf(s.id), appliedAt: s.registerAppliedAt } : null,
     paymentBatch: parsed.schema.payment ? paymentBatchOf(stored) : null,
+    paymentTerms: parsed.schema.payment
+      ? await designerPaymentTermsCheck(s.procurementCaseId, expectedPaymentDateOf(parsed.schema.payment, stored))
+      : null,
   };
 }
 

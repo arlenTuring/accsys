@@ -1,9 +1,11 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useMemo, useState, useTransition } from 'react';
 import type { FlowDef } from '@/lib/approval/flow/types';
 import type { PickerOptions } from '@/lib/custom-forms/queries';
-import { parseFormSchema, type FormSchema } from '@/lib/custom-forms/schema';
+import { parseFormSchema, sourceFieldOf, type FormSchema } from '@/lib/custom-forms/schema';
+import { previewSourceOptions } from '@/lib/form-builder/preview-sources';
+import type { BuilderSourceForm } from '@/lib/form-builder/queries';
 import { CustomForm } from '@/app/f/custom-form';
 import { SimulationResultView } from '../../org/simulator/flow-simulator';
 import { ApplicantPicker, runSimulation, type SimResult } from './sim-panel';
@@ -16,6 +18,7 @@ export function PreviewPanel({
   flow,
   flowValid,
   options,
+  sourceForms,
   today,
   defaultApplicantId,
 }: {
@@ -26,6 +29,7 @@ export function PreviewPanel({
   flow: FlowDef;
   flowValid: boolean;
   options: PickerOptions;
+  sourceForms: BuilderSourceForm[];
   today: string;
   defaultApplicantId: string;
 }) {
@@ -34,7 +38,12 @@ export function PreviewPanel({
   const [date, setDate] = useState(today);
   const [result, setResult] = useState<SimResult | 'valid' | null>(null);
   const [pending, start] = useTransition();
-  const parsed = parseFormSchema(schema);
+  const parsed = useMemo(() => parseFormSchema(schema), [schema]);
+  const previewOptions = useMemo(
+    () => (parsed.ok ? { ...options, sources: previewSourceOptions(parsed.schema, sourceForms, options) } : options),
+    [parsed, options, sourceForms]
+  );
+  const hasSource = parsed.ok && !!sourceFieldOf(parsed.schema);
 
   if (!parsed.ok) {
     return (
@@ -67,6 +76,11 @@ export function PreviewPanel({
           ))}
           <span className="ml-auto text-xs text-td-muted">這是申請人看到的填寫頁；試送出只做檢查，不會建立資料或上傳檔案。</span>
         </div>
+        {hasSource && (
+          <p className="rounded border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800">
+            關聯單據在預覽中改用範例單據（依來源表單的明細欄位產生，不讀取真實單據），可試看帶入與移除明細；來源條件與「案件已有核准單據」的限制只在正式送出時檢查。
+          </p>
+        )}
         <div className={device === 'mobile' ? 'mx-auto max-w-[390px]' : ''}>
           <CustomForm
             key={JSON.stringify(parsed.schema)}
@@ -74,7 +88,7 @@ export function PreviewPanel({
             name={name}
             description={description}
             schema={parsed.schema}
-            options={options}
+            options={previewOptions}
             today={today}
             mode={{
               kind: 'preview',

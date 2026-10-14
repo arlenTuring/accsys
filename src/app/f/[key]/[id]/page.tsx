@@ -169,6 +169,11 @@ export default async function DesignerFormDetailPage({
             <Item label="預計撥款批次日">{detail.paymentBatch.batchDate.replaceAll('-', '/')}</Item>
           )}
         </dl>
+        {detail.paymentTerms && !detail.paymentTerms.consistent && (
+          <p className="mt-4 rounded border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+            提醒：期望付款日與採購單付款條件「{detail.paymentTerms.terms}」不一致，請確認。
+          </p>
+        )}
       </section>
 
       <SubmissionFields schema={detail.schema} data={detail.data} labels={detail.labels} financeEdit={detail.canFinanceFill ? detail.id : undefined} />

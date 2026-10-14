@@ -27,6 +27,12 @@ export function applyPaymentSchedule(link: PaymentLink, data: SubmissionData, to
   return out;
 }
 
+/** The stored 期望付款日 (after the blank-date fill), or null. */
+export function expectedPaymentDateOf(link: PaymentLink, data: Record<string, unknown>): string | null {
+  const v = link.expectedPaymentDate ? data[link.expectedPaymentDate] : null;
+  return typeof v === 'string' && v !== '' ? v : null;
+}
+
 export function paymentBatchOf(data: Record<string, unknown>): PaymentBatch | null {
   const v = data[PAYMENT_BATCH_KEY];
   if (!v || typeof v !== 'object') return null;

@@ -1,7 +1,9 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { getDb } from '@/lib/db';
 import { departments, employees, formDefinitions, formSubmissions } from '@/lib/db/schema';
+import { taipeiToday } from '@/lib/taipei-date';
 import type { ProcurementFormType } from './form-registry';
+import { checkPaymentTermsConsistency } from './payment-terms';
 
 /** Designer forms (by their legacy form type) that take a step of the procurement chain. */
 export const PROCUREMENT_SLOT_OF_LEGACY: Record<string, ProcurementFormType> = {
@@ -47,4 +49,35 @@ export async function designerProcurementForms(caseIds: string[]): Promise<Desig
     department: r.departmentCode && r.departmentName ? { code: r.departmentCode, name: r.departmentName } : null,
     applicantName: r.applicantName,
   }));
+}
+
+export type PaymentTermsCheck = { terms: string; consistent: boolean };
+
+/**
+ * 付款條件提醒 of a payment in this case: the approved designer 採購單's
+ * 付款條件 (counted from its approval date) against the 期望付款日, within the
+ * legacy tolerance. Null when the case has no approved designer 採購單.
+ */
+export async function designerPaymentTermsCheck(caseId: string, expectedPaymentDate: string | null): Promise<PaymentTermsCheck | null> {
+  const [order] = await getDb()
+    .select({ data: formSubmissions.data, updatedAt: formSubmissions.updatedAt })
+    .from(formSubmissions)
+    .innerJoin(formDefinitions, eq(formDefinitions.id, formSubmissions.definitionId))
+    .where(
+      and(
+        eq(formSubmissions.procurementCaseId, caseId),
+        eq(formSubmissions.status, 'approved'),
+        eq(formDefinitions.legacyFormType, 'purchase_order')
+      )
+    )
+    .orderBy(desc(formSubmissions.updatedAt))
+    .limit(1);
+  const terms = (order?.data as Record<string, unknown> | undefined)?.paymentTerms;
+  if (!order || typeof terms !== 'string') return null;
+  const { consistent } = checkPaymentTermsConsistency({
+    paymentTerms: terms,
+    orderApprovedDate: taipeiToday(order.updatedAt),
+    expectedPaymentDate,
+  });
+  return { terms, consistent };
 }

@@ -218,6 +218,7 @@ function Designer({
           flow={flow}
           flowValid={parsed.ok}
           options={data.options}
+          sourceForms={data.sourceForms}
           today={data.today}
           defaultApplicantId={data.currentEmployeeId}
         />
