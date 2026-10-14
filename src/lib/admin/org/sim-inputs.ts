@@ -30,7 +30,13 @@ const KIND: Record<string, SimInputKind> = {
 /** The form fields the flow looks at (conditions, field-based approvers), as simulator inputs. */
 export function simulationInputs(schema: FormSchema, flow: FlowDef): SimInput[] {
   const fields = allFields(schema);
-  return flowFieldIds(flow).flatMap((id) => {
+  return flowFieldIds(flow).flatMap((id): SimInput[] => {
+    const [tableId, columnId] = id.split('.');
+    if (columnId) {
+      const t = fields.find((x) => x.id === tableId);
+      const col = t?.type === 'table' ? t.columns.find((c) => c.id === columnId) : undefined;
+      return col?.type === 'budget_code' ? [{ id, label: `${t!.label}的${col.label}`, kind: 'budget_code', options: [] }] : [];
+    }
     const f = fields.find((x) => x.id === id);
     const kind = f && KIND[f.type];
     if (!f || !kind) return [];
@@ -70,6 +76,10 @@ export function sanitizeSimFields(inputs: SimInput[], raw: unknown): Record<stri
         break;
       default:
         if (typeof v === 'string' && UUID.test(v)) out[input.id] = v.toLowerCase();
+        else if (Array.isArray(v) && input.id.includes('.')) {
+          const ids = v.filter((x): x is string => typeof x === 'string' && UUID.test(x)).map((x) => x.toLowerCase()).slice(0, 200);
+          if (ids.length > 0) out[input.id] = ids;
+        }
     }
   }
   return out;

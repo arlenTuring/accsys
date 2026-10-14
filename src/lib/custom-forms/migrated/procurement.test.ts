@@ -14,6 +14,8 @@ import { computeDefaultExpectedPaymentDate, computePaymentBatchDate } from '@/li
 import { applyPaymentSchedule, expectedPaymentDateOf, paymentBatchOf } from '../payment';
 import { previewSourceId, previewSourceOptions } from '@/lib/form-builder/preview-sources';
 import { PAYMENT_TERMS_DAYS } from '@/lib/procurement/payment-terms';
+import { sanitizeSimFields, simulationInputs } from '@/lib/admin/org/sim-inputs';
+import { flowFieldIds } from '@/lib/approval/flow/references';
 import {
   ACCEPTANCE_FORM,
   ACCEPTANCE_KEY,
@@ -383,6 +385,39 @@ describe('designer preview: sample 關聯單據', () => {
 
   it('forms without a 關聯單據 field get none', () => {
     expect(previewSourceOptions(definition(STANDALONE_PAYMENT_FORM).schema, sourceForms, options)).toEqual([]);
+  });
+
+  it('the trial run hands the budget codes of the carried rows to the flow', () => {
+    const { schema, flow } = definition(PROCUREMENT_PAYMENT_FORM);
+    const [sample] = previewSourceOptions(schema, sourceForms, options);
+    const r = validateSubmission(
+      schema,
+      { sourceId: sample.id, items: { rows: sample.rows, total: null }, payeeType: 'supplier', payeeSupplierId: SUPPLIER, paymentMethod: '匯款' },
+      TODAY
+    );
+    if (!r.ok) throw new Error('invalid');
+    expect(sanitizeSimFields(simulationInputs(schema, flow), r.value.flowFields)['items.budgetCodeId']).toEqual([BUDGET, BUDGET]);
+  });
+});
+
+describe('flow simulator: table budget-code columns', () => {
+  it('every table column a migrated flow reads is a budget-code input', () => {
+    for (const form of Object.values(MIGRATION_BATCHES).flatMap((b) => b.forms)) {
+      const { schema, flow } = definition(form);
+      const inputs = simulationInputs(schema, flow);
+      for (const id of flowFieldIds(flow).filter((x) => x.includes('.'))) {
+        expect(inputs.find((i) => i.id === id)?.kind, `${form.key} ${id}`).toBe('budget_code');
+      }
+    }
+  });
+
+  it('keeps well-formed ids only', () => {
+    const { schema, flow } = definition(PROCUREMENT_PAYMENT_FORM);
+    const inputs = simulationInputs(schema, flow);
+    expect(sanitizeSimFields(inputs, { 'items.budgetCodeId': [BUDGET.toUpperCase(), 'x', 3] })['items.budgetCodeId']).toEqual([BUDGET]);
+    expect(sanitizeSimFields(inputs, { 'items.budgetCodeId': BUDGET })['items.budgetCodeId']).toBe(BUDGET);
+    expect(sanitizeSimFields(inputs, { 'items.budgetCodeId': ['x'] })).not.toHaveProperty(['items.budgetCodeId']);
+    expect(sanitizeSimFields(inputs, { 'items.description': '筆電' })).not.toHaveProperty(['items.description']);
   });
 });
 

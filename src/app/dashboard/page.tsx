@@ -3,11 +3,13 @@ import { redirect } from 'next/navigation';
 import { STATUS_BADGE, STATUS_LABELS } from '@/app/components/form-labels';
 import { getMyApprovalQueueAll } from '@/lib/approvals/queue';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { getMySubmissions } from '@/lib/custom-forms/queries';
 import { FINANCE_LINKS } from '@/lib/forms/catalog';
 import { getFormCatalog } from '@/lib/forms/catalog-server';
 import { getUnreadNotificationCount } from '@/lib/notifications/queries';
 import { getMyRequests } from '@/lib/purchase-requests/queries';
 import { sealAmountLabel } from '@/lib/seal-requests/constants';
+import { taipeiToday } from '@/lib/taipei-date';
 
 const ROLE_LABELS: Record<string, string> = {
   staff: '一般員工',
@@ -25,12 +27,17 @@ export default async function DashboardPage() {
   const employee = await getCurrentEmployee();
   if (!employee) redirect('/login?error=not_registered');
 
-  const [pendingQueue, unread, myRequests, categories] = await Promise.all([
+  const [pendingQueue, unread, legacyRequests, designerRequests, categories] = await Promise.all([
     getMyApprovalQueueAll(),
     getUnreadNotificationCount(),
     getMyRequests(),
+    getMySubmissions({ legacyFormType: 'purchase_request' }),
     getFormCatalog(),
   ]);
+  const myRequests = [
+    ...designerRequests.map((s) => ({ id: s.id, href: `/f/${s.key}/${s.id}`, number: s.formNumber, status: s.status, totalAmount: s.totalAmount, date: taipeiToday(s.createdAt) })),
+    ...legacyRequests.map((r) => ({ id: r.id, href: `/requests/${r.id}`, number: r.caseNumber, status: r.status, totalAmount: r.totalAmount, date: r.requestDate })),
+  ].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   const pendingCount = pendingQueue.length;
   const isApplicant = employee.role === 'staff' && !employee.isGeneralManager;
   const isFinance = employee.role === 'finance' || employee.role === 'admin';
@@ -124,10 +131,10 @@ export default async function DashboardPage() {
               <ul className="divide-y divide-td-border">
                 {myRequests.slice(0, 5).map((r) => (
                   <li key={r.id}>
-                    <Link href={`/requests/${r.id}`} className="flex flex-wrap items-center justify-between gap-2 py-3 hover:text-td-blue">
-                      <span className="mono-case">{r.caseNumber}</span>
+                    <Link href={r.href} className="flex flex-wrap items-center justify-between gap-2 py-3 hover:text-td-blue">
+                      <span className="mono-case">{r.number}</span>
                       <span className={STATUS_BADGE[r.status] ?? 'badge-withdrawn'}>{STATUS_LABELS[r.status] ?? r.status}</span>
-                      <span className="text-sm text-td-muted">NT$ {r.totalAmount.toLocaleString()}</span>
+                      <span className="text-sm text-td-muted">{r.totalAmount === null ? '' : `NT$ ${r.totalAmount.toLocaleString()}`}</span>
                     </Link>
                   </li>
                 ))}
