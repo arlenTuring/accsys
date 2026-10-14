@@ -1,0 +1,19 @@
+# Install only after the company approves the read-only sync account and
+# `npm run directory:authorize` has written gws_directory_refresh_token:
+#   copy to /etc/systemd/system/, adjust WorkingDirectory, then
+#   systemctl daemon-reload && systemctl enable --now accsys-directory-sync.timer
+# A refused run (sharp drop in accounts, too many revocations) or a failed
+# listing exits non-zero: it shows in `systemctl --failed`; wire OnFailure= to
+# the company's alerting. Runs never overlap (oneshot + database lock).
+[Unit]
+Description=ACCSYS Google Workspace directory sync (read-only)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/accsys
+ExecStart=/usr/bin/docker compose -f deploy/compose.prod.yml --env-file /etc/accsys/accsys.env run --rm directory-sync
+TimeoutStartSec=10min
+Nice=10

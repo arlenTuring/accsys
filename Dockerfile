@@ -32,7 +32,7 @@ COPY package.json tsconfig.json ./
 COPY drizzle ./drizzle
 COPY db/baseline-fingerprint.json ./db/
 COPY scripts/db-migrate.ts scripts/db-baseline.ts scripts/db-fingerprint.ts ./scripts/
-COPY scripts/auth-bootstrap.ts scripts/directory-sync.ts ./scripts/
+COPY scripts/auth-bootstrap.ts scripts/directory-sync.ts scripts/directory-authorize.ts ./scripts/
 COPY scripts/lib/migrations.ts ./scripts/lib/
 COPY src/lib ./src/lib
 USER node

@@ -11,6 +11,8 @@ export const SECRET_NAMES = [
   'SESSION_SECRET',
   'GOOGLE_CLIENT_SECRET',
   'SMTP_PASSWORD',
+  'GWS_DIRECTORY_CLIENT_SECRET',
+  'GWS_DIRECTORY_REFRESH_TOKEN',
 ] as const;
 
 type Env = Record<string, string | undefined>;

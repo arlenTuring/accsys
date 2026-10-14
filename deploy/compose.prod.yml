@@ -197,6 +197,32 @@ services:
     <<: *hardening
     logging: *logging
 
+  # Google Workspace directory sync (run by deploy/systemd/accsys-directory-sync.timer).
+  # Only this job mounts the directory OAuth secrets; the web app never does.
+  directory-sync:
+    profiles: ["tools"]
+    image: ${ACCSYS_MIGRATE_IMAGE:?set ACCSYS_MIGRATE_IMAGE (accsys-migrate@sha256:...)}
+    user: *runtime-user
+    depends_on:
+      db:
+        condition: service_healthy
+    # backend for PostgreSQL, edge for outbound HTTPS to oauth2.googleapis.com / admin.googleapis.com.
+    networks: [backend, edge]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/app_database_url
+      ALLOWED_GOOGLE_DOMAINS: ${ALLOWED_GOOGLE_DOMAINS:?set ALLOWED_GOOGLE_DOMAINS}
+      GWS_CUSTOMER_ID: ${GWS_CUSTOMER_ID:-}
+      GWS_DIRECTORY_CLIENT_ID: ${GWS_DIRECTORY_CLIENT_ID:-}
+      GWS_DIRECTORY_CLIENT_SECRET_FILE: /run/secrets/gws_directory_client_secret
+      GWS_DIRECTORY_REFRESH_TOKEN_FILE: /run/secrets/gws_directory_refresh_token
+    secrets: [app_database_url, gws_directory_client_secret, gws_directory_refresh_token]
+    command: ["scripts/directory-sync.ts", "--live", "--apply"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    <<: *hardening
+    logging: *logging
+
   backup:
     profiles: ["tools"]
     image: postgres:16.15-alpine3.24@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
@@ -253,3 +279,7 @@ secrets:
     file: ${ACCSYS_SECRETS_DIR:-/etc/accsys/secrets}/migrator_database_url
   backup_db_password:
     file: ${ACCSYS_SECRETS_DIR:-/etc/accsys/secrets}/backup_db_password
+  gws_directory_client_secret:
+    file: ${ACCSYS_SECRETS_DIR:-/etc/accsys/secrets}/gws_directory_client_secret
+  gws_directory_refresh_token:
+    file: ${ACCSYS_SECRETS_DIR:-/etc/accsys/secrets}/gws_directory_refresh_token

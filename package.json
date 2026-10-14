@@ -34,6 +34,8 @@
     "auth:bootstrap": "tsx scripts/auth-bootstrap.ts",
     "attachments:rescan": "tsx scripts/attachments-rescan.ts",
     "directory:dry-run": "tsx scripts/directory-sync.ts",
+    "directory:sync": "tsx scripts/directory-sync.ts --live --apply",
+    "directory:authorize": "tsx scripts/directory-authorize.ts",
     "dev:all": "bash scripts/start-dev.sh",
     "dev:all:seed": "bash scripts/start-dev.sh --seed"
   },
