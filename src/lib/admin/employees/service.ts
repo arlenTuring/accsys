@@ -12,7 +12,7 @@ import {
   WorkbookRejected,
   type ImportPlan,
 } from '@/lib/admin/employees/import';
-import { CHANGE_FIELDS, fieldChanges, type ChangeField, type FieldChange } from '@/lib/directory/review';
+import { CHANGE_FIELDS, fieldChanges, splitPhone, type ChangeField, type FieldChange } from '@/lib/directory/review';
 import { directoryIssuer } from '@/lib/directory/service';
 
 export type EmployeeActionResult =
@@ -195,7 +195,7 @@ export async function createEmployeeFromDirectory(
         departmentId: input.departmentId,
         title: dir.title,
         googleEmail: dir.primaryEmail,
-        phone: dir.phone,
+        ...splitPhone(dir.phone),
         role,
       })
       .returning({ id: employees.id });
@@ -275,6 +275,7 @@ async function applyOne(
       name: employees.name,
       googleEmail: employees.googleEmail,
       phone: employees.phone,
+      extension: employees.extension,
       title: employees.title,
     })
     .from(employees)
@@ -306,6 +307,7 @@ async function applyOne(
     if (c.field === 'name') set.name = c.next;
     if (c.field === 'email') set.googleEmail = c.next;
     if (c.field === 'phone') set.phone = c.next;
+    if (c.field === 'extension') set.extension = c.next;
     if (c.field === 'title') set.title = c.next;
   }
   if (set.googleEmail) {

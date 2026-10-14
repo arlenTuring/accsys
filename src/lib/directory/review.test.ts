@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildDirectoryReview, sameName, type EmployeeRow, type SnapshotRow } from './review';
+import { buildDirectoryReview, fieldChanges, sameName, splitPhone, type EmployeeRow, type SnapshotRow } from './review';
 
 const dir = (id: string, over: Partial<SnapshotRow> = {}): SnapshotRow => ({
   directoryUserId: id,
@@ -22,6 +22,7 @@ const emp = (id: string, over: Partial<EmployeeRow> = {}): EmployeeRow => ({
   name: `User ${id}`,
   googleEmail: null,
   phone: null,
+  extension: null,
   title: null,
   departmentName: '業務部',
   accessEnabled: true,
@@ -33,6 +34,29 @@ describe('sameName', () => {
     expect(sameName('王小明', '小明 王')).toBe(true);
     expect(sameName('王小明', '王 小明')).toBe(true);
     expect(sameName('王小明', '王大明')).toBe(false);
+  });
+});
+
+describe('splitPhone', () => {
+  it('takes a trailing extension marker off the Workspace phone', () => {
+    expect(splitPhone('02-2345-6789 #123')).toEqual({ phone: '02-2345-6789', extension: '123' });
+    expect(splitPhone('+886 2 2345 6789 ext. 45')).toEqual({ phone: '+886 2 2345 6789', extension: '45' });
+    expect(splitPhone('(02)2345-6789分機 8')).toEqual({ phone: '(02)2345-6789', extension: '8' });
+    expect(splitPhone('02-2345-6789轉12')).toEqual({ phone: '02-2345-6789', extension: '12' });
+    expect(splitPhone('0912-345-678')).toEqual({ phone: '0912-345-678', extension: null });
+    expect(splitPhone('#123')).toEqual({ phone: '#123', extension: null });
+    expect(splitPhone('  ')).toEqual({ phone: null, extension: null });
+    expect(splitPhone(null)).toEqual({ phone: null, extension: null });
+  });
+
+  it('reports phone and extension as separate changes, without clearing either', () => {
+    const base = { fullName: '', primaryEmail: 'a@example.com', title: null };
+    const employee = { name: 'A', googleEmail: 'a@example.com', phone: '02-1111', extension: '9', title: null };
+    expect(fieldChanges({ ...base, phone: '02-2222 #10' }, employee)).toEqual([
+      { field: 'phone', current: '02-1111', next: '02-2222' },
+      { field: 'extension', current: '9', next: '10' },
+    ]);
+    expect(fieldChanges({ ...base, phone: '02-1111' }, employee)).toEqual([]);
   });
 });
 

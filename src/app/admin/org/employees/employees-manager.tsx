@@ -86,7 +86,25 @@ export function EmployeesManager({ data, currentEmployeeId }: { data: Data; curr
             withRole
             pending={pending}
             submitLabel="建立員工"
-            onSubmit={(v) => run(() => adapt(createEmployeeAction(v)), `已建立員工 ${v.employeeCode.trim()}`, () => setAdding(false))}
+            onSubmit={(v) => {
+              let createdId: string | undefined;
+              run(
+                async () => {
+                  const r = await createEmployeeAction(v);
+                  if (r.ok) createdId = r.employeeId;
+                  return adapt(Promise.resolve(r));
+                },
+                `已建立員工 ${v.employeeCode.trim()}，可在下方指定職務`,
+                () => {
+                  setAdding(false);
+                  setFilter('');
+                  setDepartmentFilter('');
+                  setJobRoleFilter('');
+                  setStatusFilter('');
+                  if (createdId) setEditing(createdId);
+                }
+              );
+            }}
           />
         )}
         <div className="flex flex-wrap items-center gap-2">

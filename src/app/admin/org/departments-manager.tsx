@@ -1,11 +1,19 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { saveDepartmentAction, setDepartmentActiveAction } from '@/lib/admin/org/actions';
+import { useMemo, useState, type DragEvent } from 'react';
+import { moveDepartmentAction, saveDepartmentAction, setDepartmentActiveAction } from '@/lib/admin/org/actions';
 import type { OrgDepartmentRow, OrgDirectory } from '@/lib/admin/org/queries';
 import { ActionMessage, EmployeeSelect, InUseNote, Section, dangerBtn, employeeLabel, smallBtn, smallInput, useOrgAction } from './org-ui';
 
 type Draft = { id: string | null; code: string; name: string; parentId: string; orgLevelId: string; managerId: string; sortOrder: string };
+type DropMode = 'before' | 'inside' | 'after';
+type DropHint = { targetId: string; mode: DropMode } | { targetId: 'root'; mode: 'after' };
+
+const DROP_STYLES: Record<DropMode, string> = {
+  before: 'border-t-2 border-t-td-blue',
+  inside: 'ring-2 ring-inset ring-td-blue',
+  after: 'border-b-2 border-b-td-blue',
+};
 
 const blank = (parentId = ''): Draft => ({ id: null, code: '', name: '', parentId, orgLevelId: '', managerId: '', sortOrder: '0' });
 
@@ -21,6 +29,52 @@ function subtree(id: string, departments: OrgDepartmentRow[]): Set<string> {
     }
   }
   return out;
+}
+
+function DepartmentDetail({ department, data }: { department: OrgDepartmentRow; data: OrgDirectory }) {
+  const members = data.employees.filter((e) => e.active && e.departmentId === department.id);
+  const manager = data.employees.find((e) => e.id === department.managerId);
+  const bindings = data.jobRoles.flatMap((r) =>
+    r.holders.filter((h) => h.departmentId === department.id).map((h) => ({ ...h, role: r, employee: data.employees.find((e) => e.id === h.employeeId) }))
+  );
+  return (
+    <div className="mt-4 space-y-3 border-t border-td-border pt-3 text-sm">
+      <div>
+        <h3 className="text-xs font-semibold text-td-blue-dark">主管</h3>
+        <p>{manager ? `${manager.code} ${manager.name}` : <span className="text-amber-700">未設定</span>}</p>
+      </div>
+      <div>
+        <h3 className="text-xs font-semibold text-td-blue-dark">成員（{members.length}）</h3>
+        {members.length === 0 ? (
+          <p className="text-xs text-td-muted">沒有在職員工。</p>
+        ) : (
+          <ul className="max-h-48 space-y-0.5 overflow-y-auto text-xs">
+            {members.map((e) => (
+              <li key={e.id}>
+                {e.code} {e.name}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div>
+        <h3 className="text-xs font-semibold text-td-blue-dark">本部門範圍的職務（{bindings.length}）</h3>
+        {bindings.length === 0 ? (
+          <p className="text-xs text-td-muted">沒有綁定在本部門的職務；全公司範圍的職務請看「職務類別」頁。</p>
+        ) : (
+          <ul className="space-y-0.5 text-xs">
+            {bindings.map((b) => (
+              <li key={b.bindingId}>
+                {b.role.name}：{b.employee ? `${b.employee.code} ${b.employee.name}` : '（已不存在）'}
+                {b.isPrimary ? '・主要' : ''}
+                {b.employee && !b.employee.active ? <span className="text-red-700">・已停用</span> : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function DepartmentsManager({ data }: { data: OrgDirectory }) {
@@ -64,6 +118,50 @@ export function DepartmentsManager({ data }: { data: OrgDirectory }) {
   const parentChoices = departments.filter((d) => (d.active || d.id === draft?.parentId) && !blocked.has(d.id));
   const set = (patch: Partial<Draft>) => setDraft((d) => (d ? { ...d, ...patch } : d));
 
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [hint, setHint] = useState<DropHint | null>(null);
+  const dragBlocked = useMemo(() => (dragId ? subtree(dragId, departments) : new Set<string>()), [dragId, departments]);
+  const byId = useMemo(() => new Map(departments.map((d) => [d.id, d])), [departments]);
+  const parentOf = (d: OrgDepartmentRow) => (d.parentId && byId.has(d.parentId) ? d.parentId : null);
+
+  const dropMode = (e: DragEvent<HTMLElement>, target: OrgDepartmentRow): DropMode => {
+    const box = e.currentTarget.getBoundingClientRect();
+    const y = (e.clientY - box.top) / box.height;
+    if (y < 0.25) return 'before';
+    if (y > 0.75) return 'after';
+    return target.active ? 'inside' : 'after';
+  };
+  const onDragOver = (e: DragEvent<HTMLElement>, target: OrgDepartmentRow) => {
+    if (!dragId || dragBlocked.has(target.id)) return;
+    e.preventDefault();
+    const mode = dropMode(e, target);
+    if (hint?.targetId !== target.id || hint.mode !== mode) setHint({ targetId: target.id, mode });
+  };
+  const endDrag = () => {
+    setDragId(null);
+    setHint(null);
+  };
+  const move = (moving: OrgDepartmentRow, parentId: string | null, beforeId: string | null) =>
+    run(() => moveDepartmentAction({ id: moving.id, parentId, beforeId }), `已移動「${moving.name}」`);
+  const onDrop = (e: DragEvent<HTMLElement>, target: OrgDepartmentRow) => {
+    e.preventDefault();
+    const moving = dragId ? byId.get(dragId) : undefined;
+    endDrag();
+    if (!moving || dragBlocked.has(target.id)) return;
+    const mode = dropMode(e, target);
+    if (mode === 'inside') return move(moving, target.id, null);
+    const parentId = parentOf(target);
+    if (mode === 'before') return move(moving, parentId, target.id);
+    const level = departments.filter((d) => parentOf(d) === parentId && d.id !== moving.id);
+    move(moving, parentId, level[level.findIndex((d) => d.id === target.id) + 1]?.id ?? null);
+  };
+  const onDropRoot = (e: DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    const moving = dragId ? byId.get(dragId) : undefined;
+    endDrag();
+    if (moving) move(moving, null, null);
+  };
+
   const save = () => {
     if (!draft) return;
     run(
@@ -87,7 +185,7 @@ export function DepartmentsManager({ data }: { data: OrgDirectory }) {
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
       <Section
         title={`部門（${departments.filter((d) => d.active).length}）`}
-        description="部門主管用在「部門主管」關卡；組織層級用在「組織層級」關卡（從申請部門往上找到指定層級的主管）。"
+        description="部門主管用在「部門主管」關卡；組織層級用在「組織層級」關卡（從申請部門往上找到指定層級的主管）。可拖拉部門調整位置：拖到部門上緣／下緣放在它之前／之後，拖到中間成為它的下層；也可在編輯表單設定上層部門與排序。"
         actions={
           <div className="flex items-center gap-3">
             <label className="flex items-center gap-1.5 text-xs text-td-muted">
@@ -105,8 +203,27 @@ export function DepartmentsManager({ data }: { data: OrgDirectory }) {
             const level = levels.find((l) => l.id === d.orgLevelId);
             const manager = employees.find((e) => e.id === d.managerId);
             return (
-              <li key={d.id} className={`flex flex-wrap items-center gap-2 px-3 py-2 text-sm ${draft?.id === d.id ? 'bg-td-blue-light/60' : ''}`}>
+              <li
+                key={d.id}
+                draggable={d.active && !pending}
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = 'move';
+                  e.dataTransfer.setData('text/plain', d.id);
+                  setDragId(d.id);
+                }}
+                onDragOver={(e) => onDragOver(e, d)}
+                onDrop={(e) => onDrop(e, d)}
+                onDragEnd={endDrag}
+                className={`flex flex-wrap items-center gap-2 px-3 py-2 text-sm ${draft?.id === d.id ? 'bg-td-blue-light/60' : ''} ${
+                  hint?.targetId === d.id ? DROP_STYLES[hint.mode] : ''
+                } ${dragId === d.id ? 'opacity-50' : ''}`}
+              >
                 <span style={{ paddingLeft: `${depth * 1.25}rem` }} className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                  {d.active && (
+                    <span className="cursor-grab select-none text-td-muted" title="拖拉調整位置" aria-hidden>
+                      ⋮⋮
+                    </span>
+                  )}
                   {depth > 0 && <span className="text-td-muted">└</span>}
                   <span className={`font-semibold ${d.active ? 'text-td-blue-dark' : 'text-slate-400 line-through'}`}>{d.name}</span>
                   <span className="mono-case text-xs">{d.code}</span>
@@ -132,6 +249,18 @@ export function DepartmentsManager({ data }: { data: OrgDirectory }) {
           })}
           {rows.length === 0 && <li className="px-3 py-6 text-center text-sm text-td-muted">尚無部門</li>}
         </ul>
+        {dragId && (
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (hint?.targetId !== 'root') setHint({ targetId: 'root', mode: 'after' });
+            }}
+            onDrop={onDropRoot}
+            className={`rounded border-2 border-dashed px-3 py-3 text-center text-xs text-td-muted ${hint?.targetId === 'root' ? 'border-td-blue bg-td-blue-light/40' : 'border-td-border'}`}
+          >
+            拖到這裡：移到最上層（排在最後）
+          </div>
+        )}
       </Section>
 
       {draft && (
@@ -211,6 +340,7 @@ export function DepartmentsManager({ data }: { data: OrgDirectory }) {
             </div>
             {editing && <p className="text-xs text-td-muted">停用前需先移走在職員工與啟用中的下層部門，且不能被簽核流程使用。</p>}
           </div>
+          {editing && <DepartmentDetail department={editing} data={data} />}
         </Section>
       )}
     </div>

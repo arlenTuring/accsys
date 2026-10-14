@@ -29,6 +29,7 @@ export type EmployeeRow = {
   name: string;
   googleEmail: string | null;
   phone: string | null;
+  extension: string | null;
   title: string | null;
   departmentName: string;
   accessEnabled: boolean;
@@ -37,7 +38,7 @@ export type EmployeeRow = {
 export type IdentityRow = { employeeId: string; subject: string; active: boolean };
 export type LinkRequestRow = { id: string; subject: string; email: string };
 
-export const CHANGE_FIELDS = ['name', 'email', 'phone', 'title'] as const;
+export const CHANGE_FIELDS = ['name', 'email', 'phone', 'extension', 'title'] as const;
 export type ChangeField = (typeof CHANGE_FIELDS)[number];
 export type FieldChange = { field: ChangeField; current: string | null; next: string };
 
@@ -89,10 +90,20 @@ export function sameName(record: string, directory: string): boolean {
   return squash(record) === squash(directory) || squash(record) === parts.reverse().join('');
 }
 
+const EXTENSION = /^(.*?\d.*?)[\s,;]*(?:#|ext\.?|x|分機|轉)\s*(\d{1,10})$/i;
+
+/** Workspace has one phone value; a trailing "#123", "ext. 123" or "分機 123" is the extension. */
+export function splitPhone(raw: string | null): { phone: string | null; extension: string | null } {
+  const value = raw?.trim() ?? '';
+  if (!value) return { phone: null, extension: null };
+  const m = EXTENSION.exec(value);
+  return m ? { phone: m[1].trim(), extension: m[2] } : { phone: value, extension: null };
+}
+
 /** Directory values that differ from the employee record (empty directory values never overwrite). */
 export function fieldChanges(
   dir: Pick<SnapshotRow, 'fullName' | 'primaryEmail' | 'phone' | 'title'>,
-  emp: Pick<EmployeeRow, 'name' | 'googleEmail' | 'phone' | 'title'>
+  emp: Pick<EmployeeRow, 'name' | 'googleEmail' | 'phone' | 'extension' | 'title'>
 ): FieldChange[] {
   const out: FieldChange[] = [];
   const add = (field: ChangeField, current: string | null, next: string | null) => {
@@ -101,7 +112,9 @@ export function fieldChanges(
   const fullName = dir.fullName.trim();
   if (fullName && !sameName(emp.name, fullName)) out.push({ field: 'name', current: emp.name, next: fullName });
   add('email', emp.googleEmail?.toLowerCase() ?? null, dir.primaryEmail);
-  add('phone', emp.phone, dir.phone);
+  const phone = splitPhone(dir.phone);
+  add('phone', emp.phone, phone.phone);
+  add('extension', emp.extension, phone.extension);
   add('title', emp.title, dir.title);
   return out;
 }

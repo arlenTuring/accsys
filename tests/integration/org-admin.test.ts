@@ -99,6 +99,48 @@ describe('organisation admin (/admin/org)', () => {
     expect(row).toEqual({ parent_department_id: ids.root, manager_employee_id: ids.m1 });
   });
 
+  it('moves departments in the tree: reparent and reorder in one audited step, never into a cycle', async () => {
+    const { saveDepartment, setDepartmentActive, moveDepartment } = await org();
+    const make = async (code: string, parentId: string | null) => ok(await saveDepartment(admin(), null, { code: `${tag}-${code}`, name: code, parentId })).id;
+    const a = await make('MA', ids.root);
+    const b = await make('MB', ids.root);
+    const c = await make('MC', ids.root);
+    const a1 = await make('MA1', a);
+    const level = async () =>
+      (await sql`select id from departments where parent_department_id = ${ids.root} and code like ${`${tag}-M%`} order by sort_order, name`).map((r) => r.id);
+
+    ok(await moveDepartment(admin(), { id: c, parentId: ids.root, beforeId: a }));
+    expect(await level()).toEqual([c, a, b]);
+    const [audit] = await sql`select details from audit_events where action = 'org.department.moved' and entity_id = ${c}`;
+    expect(audit.details).toMatchObject({ before: { parentDepartmentId: ids.root }, after: { parentDepartmentId: ids.root } });
+
+    ok(await moveDepartment(admin(), { id: b, parentId: a, beforeId: null }));
+    expect(await level()).toEqual([c, a]);
+    const [moved] = await sql`select parent_department_id from departments where id = ${b}`;
+    expect(moved.parent_department_id).toBe(a);
+
+    // into itself, its own subtree, a position under another parent, or an inactive parent
+    expect(await moveDepartment(admin(), { id: a, parentId: a1, beforeId: null })).toMatchObject({ ok: false, code: 'validation' });
+    expect(await moveDepartment(admin(), { id: a, parentId: a, beforeId: null })).toMatchObject({ ok: false, code: 'validation' });
+    expect(await moveDepartment(admin(), { id: c, parentId: ids.root, beforeId: a1 })).toMatchObject({ ok: false, code: 'validation' });
+    ok(await setDepartmentActive(admin(), b, false));
+    expect(await moveDepartment(admin(), { id: c, parentId: b, beforeId: null })).toMatchObject({ ok: false, code: 'validation' });
+    expect(await moveDepartment(admin(), { id: 'nope', parentId: null, beforeId: null })).toMatchObject({ ok: false, code: 'not_found' });
+    expect(await moveDepartment({ id: ids.staff, role: 'staff', authenticatedAt: new Date() }, { id: c, parentId: null, beforeId: null })).toMatchObject({
+      ok: false,
+      code: 'forbidden',
+    });
+    expect(await level()).toEqual([c, a]);
+
+    // dropping where it already is changes nothing and writes no audit
+    const moves = async () => (await sql`select count(*)::int as n from audit_events where action = 'org.department.moved'`)[0].n as number;
+    ok(await moveDepartment(admin(), { id: a, parentId: ids.root, beforeId: null }));
+    const settled = await moves();
+    ok(await moveDepartment(admin(), { id: a, parentId: ids.root, beforeId: null }));
+    expect(await moves()).toBe(settled);
+    expect(await level()).toEqual([c, a]);
+  });
+
   it('keeps exactly one primary holder per scope', async () => {
     const { saveJobRole, addRoleHolder, removeRoleHolder, setPrimaryHolder } = await org();
     const role = ok(await saveJobRole(admin(), null, { code: `${tag}_it`, name: '資訊' }));

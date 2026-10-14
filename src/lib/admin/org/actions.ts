@@ -31,6 +31,10 @@ export async function saveDepartmentAction(id: string | null, input: unknown) {
   return done(await org.saveDepartment(await me(), id, input));
 }
 
+export async function moveDepartmentAction(input: { id: string; parentId: string | null; beforeId: string | null }) {
+  return done(await org.moveDepartment(await me(), input));
+}
+
 export async function setDepartmentActiveAction(id: string, active: boolean) {
   return done(await org.setDepartmentActive(await me(), id, active));
 }

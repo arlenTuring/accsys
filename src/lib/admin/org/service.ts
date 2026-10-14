@@ -256,6 +256,54 @@ export function setDepartmentActive(actor: OrgActor, id: unknown, active: unknow
   });
 }
 
+/**
+ * Drag and drop in the department tree: puts a department under `parentId`
+ * (null = top level) just before `beforeId` (null = last), then renumbers the
+ * sort order of that level, all in one transaction.
+ */
+export function moveDepartment(actor: OrgActor, raw: unknown) {
+  return run(actor, 'department.move', async (tx, actorId) => {
+    const r = (raw ?? {}) as Record<string, unknown>;
+    const deptId = needId(r.id);
+    const parentId = r.parentId === null || r.parentId === undefined || r.parentId === '' ? null : needId(r.parentId);
+    const beforeId = r.beforeId === null || r.beforeId === undefined || r.beforeId === '' ? null : needId(r.beforeId);
+    const all = await tx
+      .select({ id: departments.id, code: departments.code, parentId: departments.parentDepartmentId, active: departments.active, sortOrder: departments.sortOrder })
+      .from(departments)
+      .orderBy(asc(departments.sortOrder), asc(departments.name), asc(departments.id))
+      .for('update');
+    const dept = all.find((d) => d.id === deptId);
+    if (!dept) abort('not_found', '找不到這個部門');
+    if (parentId) {
+      const parent = all.find((d) => d.id === parentId);
+      if (!parent || !parent.active) abort('validation', '上層部門不存在或已停用');
+      if (subtreeOf(deptId, all).has(parentId)) abort('validation', '上層部門不能是自己或自己的下層部門');
+    }
+    const siblings = all.filter((d) => d.parentId === parentId && d.id !== deptId);
+    const at = beforeId === null ? siblings.length : siblings.findIndex((d) => d.id === beforeId);
+    if (at < 0) abort('validation', '目標位置已變動，請重新整理');
+
+    const order = [...siblings.slice(0, at), dept!, ...siblings.slice(at)];
+    const step = order.length * 10 <= 9999 ? 10 : 1;
+    const changes: { id: string; code: string; from: number; to: number }[] = [];
+    for (const [i, d] of order.entries()) {
+      const to = (i + 1) * step;
+      if (d.sortOrder !== to) changes.push({ id: d.id, code: d.code, from: d.sortOrder, to });
+    }
+    const reparented = dept!.parentId !== parentId;
+    if (!reparented && changes.length === 0) return {};
+    if (reparented) await tx.update(departments).set({ parentDepartmentId: parentId }).where(eq(departments.id, deptId));
+    for (const c of changes) await tx.update(departments).set({ sortOrder: c.to }).where(eq(departments.id, c.id));
+    await audit(tx, actorId, 'org.department.moved', 'department', deptId, {
+      code: dept!.code,
+      before: { parentDepartmentId: dept!.parentId },
+      after: { parentDepartmentId: parentId },
+      sortOrder: changes,
+    });
+    return {};
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Job roles and holders
 // ---------------------------------------------------------------------------

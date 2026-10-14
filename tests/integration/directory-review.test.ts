@@ -59,7 +59,7 @@ describe('directory review: create employees, apply changes, leavers (disposable
 
   it('creates an employee from the snapshot values, without a login binding', async () => {
     const { createEmployeeFromDirectory } = await import('@/lib/admin/employees/service');
-    await addDirectory(1, { full_name: '新人 一', phone: '02-1111', title: '工程師' });
+    await addDirectory(1, { full_name: '新人 一', phone: '02-1111 #21', title: '工程師' });
     const r = await createEmployeeFromDirectory(admin, { directoryUserId: dirId(1), employeeCode: `${tag}-n1`, departmentId: deptId });
     expect(r).toMatchObject({ ok: true });
     if (!r.ok) return;
@@ -68,6 +68,7 @@ describe('directory review: create employees, apply changes, leavers (disposable
       name: '新人 一',
       google_email: email('d1'),
       phone: '02-1111',
+      extension: '21',
       title: '工程師',
       role: 'staff',
       access_enabled: true,

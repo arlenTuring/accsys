@@ -24,7 +24,7 @@ async function adapt(promise: Promise<ServiceResult>) {
   return { ok: false as const, code: r.error, error: r.detail ? `${text}（${r.detail}）` : text };
 }
 
-const FIELD_LABELS: Record<ChangeField, string> = { name: '姓名', email: 'Email', phone: '電話', title: '職稱' };
+const FIELD_LABELS: Record<ChangeField, string> = { name: '姓名', email: 'Email', phone: '電話', extension: '分機', title: '職稱' };
 const LEAVER_REASONS: Record<LeaverWithHandover['reason'], string> = {
   suspended: 'Workspace 帳號已停權',
   archived: 'Workspace 帳號已封存',

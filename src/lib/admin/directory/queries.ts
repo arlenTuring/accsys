@@ -60,6 +60,7 @@ export async function getDirectoryPageData(): Promise<DirectoryPageData> {
         name: employees.name,
         googleEmail: employees.googleEmail,
         phone: employees.phone,
+        extension: employees.extension,
         title: employees.title,
         departmentName: departments.name,
         accessEnabled: employees.accessEnabled,
