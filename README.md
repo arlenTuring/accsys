@@ -4,7 +4,7 @@
 
 ## 技術棧
 
-- **框架**：Next.js 15（App Router + Server Actions）、React 19、TypeScript 5（strict）
+- **框架**：Next.js 16（App Router + Server Actions，Turbopack 建置）、React 19、TypeScript 5（strict）
 - **樣式**：Tailwind CSS 3
 - **後端 / 資料庫**：PostgreSQL 16 + Drizzle（本機 Docker；正式環境為公司地端主機）
 - **測試**：Vitest
@@ -45,19 +45,84 @@
 | 預算編號、專案維護；財會追蹤 | finance、admin（預算金額只給 finance／admin 看） |
 | 帳號綁定、停權、角色 | admin |
 
-費用申請單的完整銀行帳號只給申請人與 finance／admin；簽核人只看到末 4 碼。
+費用申請單的完整銀行帳號只給申請人與 finance／admin；簽核人只看到末 4 碼（全形數字一併遮罩）。
+
+- **代為申請的用印單**：經辦人替別人申請（或改由別人修改後重送）時，簽核鏈第一關固定是「申請人確認」，經辦人與最後修改者都會從簽核鏈中移除，不能簽自己送出的單。
+- **簽核鏈**：建立或重送時若有任何一關的簽核人帳號已停用，會直接拒絕並請管理員更新主管或預算負責人；總經理／董事長若有多位，固定取最早建立的帳號。
+- **外幣匯率**：差旅與費用報銷的匯率必須落在各幣別的合理範圍內（`src/lib/travel-expenses/constants.ts` 的 `RATE_BOUNDS`），避免填錯匯率而改變簽核層級；匯率大幅變動時需調整此範圍。
+- **預算編號與專案**：新增、修改、刪除都會寫入稽核紀錄（含修改前後內容）；負責人帳號若已停用，不能指定為負責人。
+- **財產異動單**：所填的原保管人、新保管人與其他保管人都必須實際出現在至少一列財產上，避免填入無關的人，讓其單位主管頂替應有的總經理簽核。
+- **Email 通知**：寄到員工目前綁定的 Google 帳號 email（隨 Workspace 改名更新），停用帳號不寄；SMTP 強制 TLS（587 需 STARTTLS）並設逾時。
+- **伺服器 log**：資料庫錯誤只記錯誤碼、表格與限制名稱與參考碼，不記 SQL 參數與資料內容；正式環境 PostgreSQL 也不記錄查詢參數。
+
+### 簽核流程引擎（`src/lib/approval/flow/`）
+
+- 流程以「積木」定義（JSON，`version: 1`）：簽核關卡的來源可為指定員工、部門主管（可往上 N 層）、部門成員、組織層級（逐級往上簽到指定層級）、表單關係人（申請人／經辦人／表單欄位指定的員工／預算負責人／財產保管人）、員工群組、職務類別；另有條件式積木（依序比對條件，都不符走「其他」）。
+- 送出時在交易內讀取當下組織資料並解析成具體簽核步驟，結果固定寫入 `approval_steps`；之後主管異動不影響已送出的單，重送時重新解析。
+- 申請人、經辦人或前面已出現的簽核人再次出現時，該關標記「由系統代簽」並記錄原因；明確指定「申請人」本人確認的關卡不會代簽。找不到簽核人時依積木設定擋下送出或略過（略過會留下紀錄）；全部關卡都被代簽時依流程設定自動核准或擋下。
+- 代理人：`approval_delegations` 依台北日期與表單範圍生效，步驟記錄原簽核人（時間軸顯示「由 X 代理」）。
+- 「第一關審核前可修改／撤回」改為「第一個需要人工決定的關卡之前」，代簽／略過的關卡不算。
+- 總經理／董事長改以職務類別 `general_manager`／`chairman` 表示，資料庫 trigger 自動與 `employees.is_general_manager`／`is_chairman` 同步。部門可設上層部門（資料庫擋循環）與組織層級。
+- 尚未轉換的內建表單仍使用原本寫死的簽核鏈；`standardFlow` 預設流程已以單元測試證明與舊簽核鏈逐一等價，轉換方式見「內建表單轉換為設計器表單」。各表單明細頁的「簽核流程」時間軸已改用共用元件 `ApprovalTimeline`。
+
+### 自訂表單（`src/lib/custom-forms/`、`/f/<代號>`）
+
+- 表單定義（欄位 + 簽核流程）以「發布版本」保存在 `form_definition_versions`，版本一經發布由資料庫 trigger 禁止修改或刪除；表單代號在第一次發布後不能更改。發布時檢查欄位、流程與欄位引用是否一致，並確認流程指定的員工、部門、群組、職務類別、組織層級都存在且啟用。
+- 申請單存在 `form_submissions`（`form_type = 'custom'`），每張單固定使用送出時的版本：之後發布新版本不影響修改、退回重送中的單。表單編號為台北日期 + 字首 + 當日流水號（例：`20261013GA0001`），另有共用案號。
+- 伺服器重新驗證所有欄位：未知欄位丟棄、隱藏欄位（條件顯示不成立）不保存、明細表的公式與合計一律由伺服器重算（不採信瀏覽器送來的金額）、引用的員工／部門／預算編號／專案／廠商必須存在。
+- 明細表欄位可設定：新增列時的預設選項、文字字數上限、與前面日期／數字欄位比較的檢查規則（例：日期需在出差期間內）。多幣別：數字欄可設為「匯率欄，依幣別」（幣別為 TWD 時固定為 1，外幣必填且需落在 `src/lib/exchange-rates.ts` 的合理範圍內），金額欄可指定「幣別依」某下拉欄以顯示每列幣別；每列幣別不同的金額欄不能當合計欄，需以「金額 × 匯率」的換算欄合計（以整數運算四捨五入到分）。只有預設值、未填其他內容的列視為空白列不保存。
+- 預算編號選單顯示「專案或部門：預算負責人（類別｜編號）」。預算編號欄可限定「預算範圍」（部門／產品專案／營收專案）：選單只列該範圍，伺服器送出時再檢查。
+- 「廠商」欄位從供應商主檔選擇；選單與明細頁只帶廠商 id 與名稱，不帶銀行資料。
+- 文字欄可勾選「敏感資料」（例：匯款帳號）：申請人、經辦、財會、管理員看得到完整內容，其他讀者（含簽核人）由伺服器遮蔽為只剩末四碼數字（`sensitive.ts`）；資料庫仍存原文，稽核紀錄（只能從資料庫讀）保存修改前的完整資料。
+- 其他欄位選項：下拉／單選的預設選項（新單預選）；文字欄「不可填入特定內容」規則（可加條件，例：付款方式為匯款時不可填「無」）；明細表數字／金額欄（含換算欄）的「上限」規則，可限定只檢查某下拉欄為指定選項的列（例：材料類單筆不超過新臺幣 10,000 元）。
+- 可填寫範圍（`visibility`：部門、職務類別）不符合時與「表單不存在」回應相同。讀取、核准、附件權限與其他表單一致（`canReadForm`、`canAttachToForm`）；附件數另受表單附件欄位的上限限制，沒有附件欄位的表單不能上傳附件。
+- 已發布的表單自動出現在「申請表單」選單、`/forms` 與「我的申請」，待簽核清單與數字包含自訂表單。
+- 表單由「表單設計器」建立與發布（見下節）；本機啟動時 `npm run seed:forms` 會發布範例「行政採買申請單」（`samples.ts`，只在本機資料庫執行，已存在則略過）。
+- 代為申請（經辦）：表單勾選「允許代為申請」後，填寫者可改選申請人（申請人需在職且有該表單填寫權限）。經辦送出的單第一關是「申請人確認」，確認後才送主管；經辦與申請人都能在第一個人工決定前修改／撤回、退回後重送，退回與核准結果同時通知兩人。扣掉經辦與申請人後沒有其他簽核人時拒絕送出。
+- 尚未支援：案件總覽／簽核追蹤納入自訂表單、財產欄位、核准後自動動作。
+
+### 內建表單轉換為設計器表單（`src/lib/custom-forms/migrated/`）
+
+- 原本寫死的表單分批改由設計器定義（批次 1：用印申請合約類／非合約類／開立發票；批次 2：出差報告暨旅費報支單；批次 3：費用申請單部門版／部門版_單筆一萬元以下／產品專案版／營收專案版）。定義以既有常數組成，並以單元測試逐項比對新舊驗證與簽核人結果（`migrated/*.test.ts`），切換行為另有整合測試（`tests/integration/legacy-travel.test.ts`、`legacy-expense-claims.test.ts`）。
+- 安裝：`npm run forms:migrate -- --batch <批次>`（預設只連本機資料庫；加 `--dry-run` 只檢查）。預設建立「草稿」，使用者看不到任何改變；管理員在表單設計器用「預覽」「模擬」確認後按「發佈」才切換。`--publish` 直接發佈。已存在的代號一律略過，不覆蓋設計器中的修改。`start.sh` 會自動建立批次 1–3 草稿。
+- 出差報支（批次 2）與舊版的差異：非交通費列不會停用起訖站／里程欄；不顯示預支差額（應補發／應退還）與「依出差期間帶入日期」按鈕；未填預支金額存為空值而非 0；預算來源清單也列出未指定負責人的預算編號（標示「未指定預算負責人」，送出時仍會被擋）；退回後重送若沒有任何簽核人會自動核准（舊版拒絕）。
+- 費用申請（批次 3）與舊版的差異：不會自動選申請人部門的預算編號；期望付款日不預填建議日、不顯示收件截止日與「帶入建議付款日」；改選現金／支票時不會自動在匯款資訊填「無」（仍需自行填寫）；預算來源清單同樣列出未指定負責人的預算編號；退回後重送沒有簽核人時自動核准；錯誤訊息文字不同（例：「第 1 列「小計」：單筆不可超過新臺幣 10,000 元…」）。匯款資訊為敏感欄位，簽核人看到的是遮蔽後內容（與舊版相同）。
+- 遠端資料庫需同時加 `--allow-remote --actor <啟用中管理員 email>`。
+- 切換：表單定義帶有 `legacy_form_type`，發佈後選單、`/forms`、各類別首頁的「新增」改指向 `/f/<代號>/new`，舊版新增頁轉址，舊版建立 API 以衝突拒絕；已送出的舊單照常簽核、修改、重送與查閱。新單存在 `form_submissions`，各類別首頁另列「新版」清單。
+- 回復：在設計器「下架」該表單即恢復舊版入口與建立（已送出的新版單仍可簽核）。
+
+### 表單設計器（`/admin/form-builder`，`src/lib/form-builder/`）
+
+- 系統管理員在「管理 → 表單設計器」新增表單（空白或複製既有表單），以拖拉或點選加入欄位、分區與明細表，設定必填、說明、寬度、條件顯示；簽核流程以積木拼成（七種簽核人來源 + 條件式與「其他」），右側可即時模擬簽核人。「預覽」分頁以實際填寫畫面試填（含手機寬度），試送出只做驗證與模擬，不建立資料。
+- 欄位與流程的修改先存成草稿，不影響使用中的表單；按「發布」才建立新版本（伺服器重新檢查所有欄位、流程與引用的組織資料）。名稱、說明、分類、字首、可填寫範圍屬於「發布設定」，儲存後立即生效。
+- 同一欄位代號在所有已發布版本中類型必須一致（要改類型請用新代號）；已發布欄位的代號鎖定。發布後表單代號不能更改。
+- 多人同時編輯以表單的 `version` 樂觀鎖保護：別人先儲存時，後儲存者會收到衝突訊息而不是覆蓋。
+- 只能刪除從未發布的表單；已發布的表單只能「下架」（不再出現在選單、不能新送出，已送出的單可照常簽核、修改、重送），可再「重新上架」。
+- 權限與組織設定頁相同：系統管理員、1 小時內登入過、每人每 10 分鐘 300 次頻率限制；每次修改在交易內鎖定該表單並重新確認管理員身分，寫入稽核紀錄（設定修改含前後值）。模擬在唯讀交易中執行。
+- 尚未支援：選項組管理、財產欄位與財產保管人來源、條件只支援單一「全部符合／任一符合」群組（更複雜的條件以唯讀顯示）、核准後自動動作、欄位改代號時自動更新流程中的引用（發布檢查會擋下失效的引用）。
+
+### 組織與簽核設定（`/admin/org`，`src/lib/admin/org/`）
+
+- 系統管理員維護簽核流程會用到的組織資料：部門樹（上層部門、組織層級、部門主管、排序、停用）、組織層級（數字越大越高）、職務類別與擔任者（全公司或指定部門，每個範圍固定一位「主要」人員）、員工群組（成員依序簽核）、代理人（期間、全部或部分表單、撤銷）。
+- 修改需系統管理員且 1 小時內登入過（帳號管理維持 15 分鐘），另有每人每 10 分鐘 300 次的頻率限制；每次修改在交易內以 advisory lock 排隊、重新確認操作者仍是啟用中的管理員，並寫入稽核紀錄（含修改前後值）。
+- 已發布表單目前版本、以及簽核中／退回中申請單所用版本的流程，所指定的部門、層級、職務、群組不能被停用、刪除或清空；部門停用前需先移走在職員工與啟用中的下層部門，上層停用時下層不能啟用；部門不能掛到自己或自己的下層。
+- 總經理／董事長是系統職務：只能設定為全公司，透過 `employees.is_general_manager`／`is_chairman` 增減（trigger 同步職務綁定），不能移除最後一位在職者；名稱與啟用狀態不能修改。
+- 代理只轉一次：同一被代理人的代理期間與表單範圍不能重疊，代理人在同期間不能也設定代理，正在代理別人的人也不能同時請人代理。代理在產生簽核關卡時套用，已在等待的關卡不改派；舊版內建表單轉換成新流程前不受代理影響。
+- 「流程模擬」以目前組織資料試算已發布表單的簽核人（可指定申請人、日期與流程會參考的欄位），在唯讀交易中執行，不建立任何資料。
 
 ### 附件
 
 - 以附件 ID 下載（`/api/attachments/<id>`），每次重新檢查授權；一律以下載方式回應（`Content-Disposition: attachment`、`nosniff`、`CSP sandbox`）。
-- 只接受 PDF／PNG／JPEG，**以檔案內容判斷**（副檔名與瀏覽器 MIME 不採信）；單檔 10 MB、每張表單 20 個。
+- 只接受 PDF／PNG／JPEG，**以檔案內容判斷**（副檔名與瀏覽器 MIME 不採信）；單檔 10 MB、每張表單 20 個（同一張表單同時上傳時以資料庫鎖確保不超過上限）。
+- 申請人／經辦人只能在「還沒有人核准」或「被退回修改」時上傳附件；一旦有人核准，就不能再補附件改變已簽核的內容（finance／admin 不受此限）。上傳時會鎖定表單並重新檢查，且表單版本加 1：上傳前就開著頁面的簽核人必須重新整理、看過新附件後才能核准。
 - 儲存路徑由伺服器產生（UUID），原檔名只作顯示；讀檔限制在儲存根目錄內且不跟隨 symlink，寫檔不覆蓋既有檔案。
 - 掃描：`ATTACHMENT_SCAN=clamav` 時每個上傳檔先放隔離區，由本機 clamd 掃描（檔案不送外部），通過才搬到正式位置。掃描失敗或逾時不會標為安全，保留在隔離區，由 `npm run attachments:rescan` 重試；中毒檔直接刪除。正式環境沒有掃描器會拒絕上傳；開發環境可 `ATTACHMENT_SCAN=disabled`（標記為「未掃描」，正式環境不提供下載）。
 - 儲存目錄不在 `public/`，也不應由 reverse proxy 直接對外提供。
+- `public/` 的檔案不經過資料庫 session 檢查（`src/proxy.ts` 只看有沒有 cookie），只能放公開的靜態資源。內部參考文件放 `assets/docs/`，由 `src/app/docs/[file]/route.ts` 依允許清單、登入後才提供。
 
 ### 瀏覽器安全標頭
 
-每個回應都有 CSP（script 使用每次請求的 nonce，不用 `unsafe-inline`／`unsafe-eval`；style 允許 inline）、`frame-ancestors 'none'`、`X-Frame-Options: DENY`、`nosniff`、`Referrer-Policy`、`Permissions-Policy`。HSTS 需在 HTTPS 與正式網域確認後以 `ENABLE_HSTS=true` 開啟。PDF 工具完全在瀏覽器執行，限制 30 MB、100 頁，停用 eval，不抓取外部資源。預算 Excel 匯入限制 5 MB、5000 列，並先檢查壓縮檔宣告的解壓大小（防 zip bomb）。
+每個回應都有 CSP（script 使用每次請求的 nonce，不用 `unsafe-inline`／`unsafe-eval`；style 允許 inline）、`frame-ancestors 'none'`、`X-Frame-Options: DENY`、`nosniff`、`Referrer-Policy`、`Permissions-Policy`。HSTS 需在 HTTPS 與正式網域確認後以 `ENABLE_HSTS=true` 開啟。PDF 工具完全在瀏覽器執行，限制 30 MB、100 頁，停用 eval，不抓取外部資源。預算 Excel 匯入限制 5 MB、5000 列，並在交給 exceljs 前實際解壓每個項目、以上限截斷，宣告大小與實際不符、加密或不支援的壓縮方式一律拒絕（防 zip bomb）。附件下載的 CSP 為 `default-src 'none'; sandbox`，不會被一般頁面的 CSP 覆蓋。正式環境（`APP_ORIGIN` 為 https）只接受 `__Host-accsys_sid` cookie。
 
 ## 專案結構
 
@@ -71,7 +136,7 @@ src/
     approval/             簽核鏈建構邏輯
     auth/                 Google OAuth、session、角色、白名單網域
     db/                   Postgres client（Drizzle schema + 查詢層）
-    storage/              本機附件儲存（之後換 GCS）
+    attachments/          附件上傳、掃描與授權下載（主機持久目錄）
 drizzle/                  版控 SQL migrations（由 src/lib/db/schema.ts 產生並人工審查）
 db/
   roles.sql               資料庫角色與權限（DBA 執行）
@@ -105,7 +170,8 @@ SESSION_TTL_HOURS=8
 STORAGE_LOCAL_PATH=./data/attachments
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
-# 本機略過 Google：只在 `next dev` 且旗標為 true 時生效；build／容器一律 404，共享環境勿開
+# 本機略過 Google：只在 `next dev`、旗標為 true 且 APP_ORIGIN 為 localhost／127.0.0.1 時生效；
+# build／容器一律 404，共享環境勿開
 DEV_LOGIN_EMAIL=
 NEXT_PUBLIC_DEV_LOGIN=false
 # Email 通知（目前程式碼已支援，尚未正式啟用寄送）
@@ -119,6 +185,20 @@ SMTP_FROM=
 `.env.local` 內含真實憑證，**絕不可提交到版本控制**。
 
 ## 開始使用
+
+最簡單的方式是在專案根目錄執行：
+
+```bash
+./start.sh             # 開 Docker Desktop → Postgres → 角色／migrations／dev 種子 → Next.js（前台與後台 API），就緒後自動開瀏覽器
+./start.sh --seed      # 同上，並匯入示範假資料
+./start.sh --port 3005 # 指定 port（預設 3001）
+./start.sh --no-open   # 不自動開瀏覽器
+./start.sh --stop      # 關閉本專案的 Next.js 與資料庫容器（資料保留在 volume）
+```
+
+重複執行會先關掉本專案先前啟動的 Next.js／啟動腳本（只認工作目錄在本專案內的程序），再重新啟動；資料庫容器若卡在 unhealthy 會自動重啟。port 被其他程式占用時不會關掉它，而是往後找空的 port，並以環境變數覆寫 `APP_ORIGIN` 讓登入可用。`.env.local` 不存在時會從範本建立（隨機 `SESSION_SECRET`、開啟 dev 登入）。
+
+手動步驟：
 
 ```bash
 cp .env.local.example .env.local
@@ -148,6 +228,16 @@ npm run test:watch  # 監看模式
 npm run check       # lint + typecheck + 單元測試 + production build
 npm run app:up      # 以 Docker 啟動 Postgres + app 容器（http://127.0.0.1:3000）
 ```
+
+### 依賴與基底映像
+
+- 安裝一律 `npm ci`（`scripts/start-dev.sh` 也是）。npm 11 預設不執行未核准的 install script；目前 esbuild／unrs-resolver 的 postinstall 未核准，不影響建置與測試。
+- CI 對正式依賴執行 `npm audit --omit=dev --audit-level=high`，有 high／critical 即失敗。開發／建置工具的告警逐項判斷，不使用 `npm audit fix --force`。
+- Next 依賴的 postcss 以 `overrides` 統一為專案版本（8.5.x）。
+- 目前已判斷不影響執行環境、暫不處理的告警：Tailwind 3 與 eslint-config-next 底下的 `braces` 3.0.3（GHSA-vfj7-8cjw-p6xm，尚無修補版；只在建置／lint 時展開設定檔裡的固定 glob，不接觸使用者輸入；修正需升級 Tailwind 4）、drizzle-kit 底下的 esbuild（開發工具）、exceljs 依賴的 uuid（只用 v4，告警在 v3/v5/v6）。
+- Node 基底映像與 PostgreSQL 映像以 digest 固定（`Dockerfile`、`docker-compose*.yml`、CI）。更新方式：查官方映像同 tag 的新 digest（例如 `docker buildx imagetools inspect node:24.21.0-bookworm-slim`），四處一起替換後重跑 CI 與容器冒煙測試。
+- 字型（Inter、Noto Sans TC）由 `@fontsource` 套件隨 lockfile 打包，build 與執行時都不連 Google Fonts；Docker build 只需要 npm registry。
+- 支援期限（2026-10 查核）：Node 24 維護到 2028-04；PostgreSQL 16 到 2028-11；Next.js 已升級 16.4（15 的維護期到 2026-10-21 結束）。Next 16 的 request 攔截檔為 `src/proxy.ts`（原 `middleware.ts`，改在 Node runtime 執行）。
 
 ### 執行測試
 
@@ -184,7 +274,12 @@ npm run test:db:down   # 刪除容器與資料
 - **Session**：cookie 只放隨機 token（`__Host-accsys_sid`，HttpOnly、Secure、SameSite=Lax），資料庫只存 SHA-256。絕對壽命預設 8 小時、不自動續期。每個請求都重新檢查 session、員工停用狀態、綁定狀態與目前角色；登出（POST）、停用、撤銷綁定立即失效。舊版只有 email 的 `accsys_session` cookie 一律丟棄。
 - **CSRF／轉址**：Server Actions 使用 Next 內建來源檢查；登出等 route handler 要求 `Origin` 等於 `APP_ORIGIN`。所有轉址都用 `APP_ORIGIN`，不信任 Host／X-Forwarded-Host；`returnTo` 只接受站內路徑。
 - **限速**：登入開始與 callback 依 `TRUSTED_CLIENT_IP_HEADER` 每 10 分鐘 30 次；管理操作每人每 10 分鐘 60 次（PostgreSQL 共用計數，固定視窗到期自動解除，不會永久鎖帳號）。
-- **模式**：目前只支援 `AUTH_MODE=manual`；`directory`（Workspace 目錄同步、停權 freshness）屬 P6，設定成 directory 會拒絕啟動登入，不會降級放行。
+- **模式**：目前只支援 `AUTH_MODE=manual`；設定成 `directory` 會拒絕啟動登入，不會降級放行。
+- **Workspace 目錄同步（P6，第一階段）**：`src/lib/directory/` 解析 Directory `users.list`（逐頁驗證網域／customer、重複 ID、重複分頁 token、429／5xx 重試、401／403 立即停止；任何一頁失敗就整批放棄，不用部分名單）並產生同步計畫：只撤銷 suspended／archived 帳號的綁定與 session、email 跟隨目錄；名單中缺少的已綁定帳號與未綁定帳號只列入報告。名單為空、啟用人數比上次少 20% 以上、撤銷數超過 max(5, 10%) 時拒絕套用並寫 audit。同步不會恢復被停權或本地停用的帳號，也不改 `employees.access_enabled`。目前只能以 fixture dry-run：
+  ```bash
+  DATABASE_URL=... ALLOWED_GOOGLE_DOMAINS=example.com npm run directory:dry-run -- --fixture tests/fixtures/directory/users-pages.json
+  ```
+  `--apply` 與 `AUTH_MODE=directory` 需公司核准唯讀同步帳號（`admin.directory.user.readonly`）、接上正式資料來源並在測試 tenant 驗收後才開放。
 
 ### 第一位管理員（一次性 bootstrap）
 
@@ -219,6 +314,20 @@ npm run test:db:down   # 刪除容器與資料
 
 授權在應用層檢查，不使用 RLS；資料庫以角色權限限制 app 帳號能做的事。
 
+## 地端正式部署
+
+`docker-compose.yml`／`docker-compose.app.yml` 只供本機開發。正式環境使用 `deploy/`：
+
+| 檔案 | 用途 |
+|---|---|
+| `deploy/compose.prod.yml` | nginx → app → PostgreSQL（DB 只在 internal 網路、無 published port）、ClamAV（只在獨立的 internal `scan` 網路與病毒碼更新用的對外網路，碰不到 DB）；一次性 `migrate`／`admin-cli`／`backup`。所有 ACCSYS 容器以專用 uid／gid `10001`（`ACCSYS_UID`／`ACCSYS_GID`）執行，避免與主機第一個登入帳號（常為 1000）共用檔案權限 |
+| `deploy/nginx/templates/accsys.conf.template` | TLS、未知 Host／SNI 拒絕、覆寫 forwarded headers、log 不記 query string |
+| `deploy/accsys.env.example` | 非機密設定；機密一律以檔案掛載（`*_FILE`，`src/lib/secret-files.ts`） |
+| `deploy/backup/backup.sh`、`restore-drill.sh` | 每日 logical 備份（DB + 附件 + SHA256SUMS）與拋棄式還原演練 |
+| `deploy/systemd/` | 備份 timer |
+
+操作手冊：[部署](docs/operations/deployment.md)、[備份與還原](docs/operations/backup-restore.md)、[資安事件與金鑰輪替](docs/operations/incident-response.md)。
+
 ## 開發歷程
 
 本專案採用分階段規劃與 AI 輔助的 subagent-driven 開發流程實作，各階段的設計文件與實作計畫收錄於 `docs/superpowers/`：
@@ -234,7 +343,7 @@ npm run test:db:down   # 刪除容器與資料
 
 - 年度預算按月編列、預算新增／變更申請書、預算執行追蹤與超支警示
 - 簽核追蹤頁的報表匯出（給記帳士/會計師事務所）
-- **組織架構與簽核關係人維護**：目前部門主管（`departments.manager_employee_id`）、總經理／董事長身分（`employees.is_general_manager`／`is_chairman`）只能透過 `npm run seed` 重新匯入 Excel 或直接改資料庫，沒有網頁介面可以維護。
+- **既有內建表單改用設計器流程**：請購、採購、驗收、費用、差旅、用印等內建表單仍使用寫死的簽核鏈，尚未轉換為可在設計器調整的流程。
 
 ## 已知限制
 
@@ -242,4 +351,15 @@ npm run test:db:down   # 刪除容器與資料
 - 專案型預算編號若未指定負責人，需在資料庫手動指定 `owner_employee_id`，否則無法用於建立請購單。
 - 編輯「預算編號」欄位本身（不是編輯其他欄位）會因為 upsert-on-code 的設計而變成新增一筆，而不是改名——之後可考慮把編輯模式下的預算編號欄位改成唯讀。
 - 刪除預算編號沒有確認對話框（點了就刪，雖然被引用中的編號會被程式邏輯與資料庫外鍵雙重擋下）。
-- 正式環境部署於公司地端主機（Docker Compose）；reverse proxy、HTTPS、備份屬 P7。
+- 地端部署設定與手冊已備妥（`deploy/`、`docs/operations/`），尚未在公司主機實際部署；真實 HTTPS 憑證、Google 登入與異機備份需公司主機與授權。
+- 目前備份為每日 logical dump（RPO 約 24 小時）；WAL／PITR（pgBackRest）需在目標主機驗證後啟用。
+- 若主機上已有以 uid 1000 建立的 `ACCSYS_DATA_DIR`／`ACCSYS_BACKUP_DIR`，改用 uid 10001 前需依[部署手冊](docs/operations/deployment.md)建立系統帳號並 `chown`。
+- ClamAV 容器仍需對外連線更新病毒碼；clamd 尚未設定 `AlertExceedsMax`，超過掃描上限的檔案目前依 clamd 預設處理。
+- 登入／API 速率限制依 `TRUSTED_CLIENT_IP_HEADER` 取得用戶端 IP；若未設定（正式 compose 已設定），所有請求共用同一個額度。
+- 核准／退回動作對不存在與無權限的表單 ID 回應略有不同，理論上可推測 UUID 是否存在（UUID 不可猜，風險低）。
+- **簽核流程規則（待以表單／簽核組織機制統一處理，見 `docs/superpowers/specs/2026-10-13-form-builder-and-approval-org-design.md`）**：
+  - 申請人同時是自己的部門主管、預算負責人與總經理且金額 ≤ NT$100,000 時，簽核鏈為空，表單建立即自動核准。
+  - 合約用印單的金額由申請人填寫（可為 0），董事長是否簽核依此金額判斷。
+  - 由採購單建立的費用申請單，付款對象不強制等於採購單廠商；簽核人只看到帳號末 4 碼。
+  - 預算編號未檢查年度、所屬部門與剩餘預算；單筆上限可拆單規避；採購單金額不受請購核准金額限制；差旅與報銷沒有重複請款偵測；後續表單沿用請購時的預算負責人。
+- 案件追蹤查詢沒有分頁，案件數極大時會變慢；session 沒有閒置逾時（最長 `SESSION_TTL_HOURS`），共用電腦請登出；Workspace 停權帳號需由管理員手動停用（`directory-sync --apply` 尚未啟用）。

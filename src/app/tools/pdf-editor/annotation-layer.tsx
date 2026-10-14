@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { StampGlyph } from './stamps';
 import type { Annotation } from './types';
 
@@ -30,7 +30,9 @@ export function AnnotationLayer({
   onDuplicate,
 }: Props) {
   const annRef = useRef(annotation);
-  annRef.current = annotation;
+  useLayoutEffect(() => {
+    annRef.current = annotation;
+  });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const left = annotation.x * pageWidth;

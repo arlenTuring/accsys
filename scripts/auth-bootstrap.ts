@@ -14,6 +14,7 @@ import { desc, eq } from 'drizzle-orm';
 import { bootstrapFirstAdminBinding } from '../src/lib/admin/accounts/service';
 import { getDb, getSql } from '../src/lib/db';
 import { identityLinkRequests } from '../src/lib/db/schema';
+import { loadSecretFiles } from '../src/lib/secret-files';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -21,6 +22,7 @@ function arg(name: string): string | undefined {
 }
 
 async function main() {
+  loadSecretFiles();
   if (process.argv.includes('--list')) {
     const rows = await getDb()
       .select({

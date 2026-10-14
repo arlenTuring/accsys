@@ -1,7 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import {
-  createServiceRoleTestClient,
-} from './supabase-test-client';
+import { createServiceRoleTestClient, versionOf } from './supabase-test-client';
 
 const currentEmployee = vi.hoisted(() => ({ value: null as null | { id: string } }));
 vi.mock('@/lib/auth/current-employee', () => ({
@@ -145,7 +143,7 @@ describe('expense request approve/return', () => {
     const expenseRequestId = await makeExpenseRequestWithOneStep();
     currentEmployee.value = { id: managerId };
     const { approveExpenseRequestStep } = await import('@/lib/expense-requests/actions');
-    const result = await approveExpenseRequestStep(expenseRequestId);
+    const result = await approveExpenseRequestStep(expenseRequestId, await versionOf('expense_requests', expenseRequestId));
     expect(result).toEqual({ ok: true });
 
     const { data: expenseRequest } = await admin
@@ -167,7 +165,7 @@ describe('expense request approve/return', () => {
     const expenseRequestId = await makeExpenseRequestWithOneStep();
     currentEmployee.value = { id: managerId };
     const { returnExpenseRequestStep } = await import('@/lib/expense-requests/actions');
-    const result = await returnExpenseRequestStep(expenseRequestId, '銀行帳號填寫錯誤');
+    const result = await returnExpenseRequestStep(expenseRequestId, '銀行帳號填寫錯誤', await versionOf('expense_requests', expenseRequestId));
     expect(result).toEqual({ ok: true });
 
     const { data: expenseRequest } = await admin
@@ -182,7 +180,7 @@ describe('expense request approve/return', () => {
     const expenseRequestId = await makeExpenseRequestWithOneStep();
     currentEmployee.value = { id: applicantId };
     const { approveExpenseRequestStep } = await import('@/lib/expense-requests/actions');
-    const result = await approveExpenseRequestStep(expenseRequestId);
+    const result = await approveExpenseRequestStep(expenseRequestId, await versionOf('expense_requests', expenseRequestId));
     expect(result).toMatchObject({ ok: false, error: '您不是這張費用申請單目前的簽核人' });
   });
 
@@ -192,8 +190,8 @@ describe('expense request approve/return', () => {
     const { approveExpenseRequestStep } = await import('@/lib/expense-requests/actions');
 
     const [first, second] = await Promise.all([
-      approveExpenseRequestStep(expenseRequestId),
-      approveExpenseRequestStep(expenseRequestId),
+      approveExpenseRequestStep(expenseRequestId, await versionOf('expense_requests', expenseRequestId)),
+      approveExpenseRequestStep(expenseRequestId, await versionOf('expense_requests', expenseRequestId)),
     ]);
     const results = [first, second];
     expect(results.filter((r) => r.ok)).toHaveLength(1);

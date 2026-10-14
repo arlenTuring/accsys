@@ -1,4 +1,4 @@
-import { createAppDb } from '@/lib/db/app-client';
+import { createAppDb, rowsOrThrow } from '@/lib/db/app-client';
 import { canReadForm } from '@/lib/authz/forms';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 
@@ -131,21 +131,25 @@ export async function getMyApprovalQueue(): Promise<QueueItem[]> {
   const supabase = createAppDb();
   const employee = await getCurrentEmployee();
   if (!employee) return [];
-  const { data: steps } = await supabase
-    .from('approval_steps')
-    .select('form_id, step_order')
-    .eq('form_type', 'purchase_request')
-    .eq('approver_employee_id', employee.id)
-    .eq('status', 'pending');
+  const steps = rowsOrThrow(
+    await supabase
+      .from('approval_steps')
+      .select('form_id, step_order')
+      .eq('form_type', 'purchase_request')
+      .eq('approver_employee_id', employee.id)
+      .eq('status', 'pending')
+  );
   const formIds = (steps ?? []).map((s) => s.form_id);
   if (formIds.length === 0) return [];
-  const { data: requests } = await supabase
-    .from('purchase_requests')
-    .select(
-      'id, total_amount, request_date, current_step_order, status, procurement_cases(case_number), applicant:employees!applicant_employee_id(name)'
-    )
-    .in('id', formIds)
-    .eq('status', 'pending_approval');
+  const requests = rowsOrThrow(
+    await supabase
+      .from('purchase_requests')
+      .select(
+        'id, total_amount, request_date, current_step_order, status, procurement_cases(case_number), applicant:employees!applicant_employee_id(name)'
+      )
+      .in('id', formIds)
+      .eq('status', 'pending_approval')
+  );
   const stepOrderByForm = new Map((steps ?? []).map((s) => [s.form_id, s.step_order]));
   return (requests ?? [])
     .filter((r) => r.current_step_order === stepOrderByForm.get(r.id))

@@ -1,5 +1,5 @@
-# Local development / single-host baseline. Not the production deployment
-# (reverse proxy, TLS, secrets, backups and least-privilege DB roles come in P1/P7).
+# Local development only. Production uses deploy/compose.prod.yml
+# (reverse proxy, TLS, secret files, no published DB port, backups).
 #
 #   npm run db:up      # PostgreSQL only (for `npm run dev`)
 #   npm run app:up     # PostgreSQL + app container (adds docker-compose.app.yml)
@@ -7,7 +7,7 @@
 # Every published port binds to 127.0.0.1 only; nothing is reachable from the LAN.
 services:
   db:
-    image: postgres:16.15-alpine3.24
+    image: postgres:16.15-alpine3.24@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
     container_name: accsys-db
     restart: unless-stopped
     ports:

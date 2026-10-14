@@ -1,10 +1,15 @@
 import { createAppDb } from '@/lib/db/app-client';
 import { canReadForm } from '@/lib/authz/forms';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
-import { FORM_TYPES, FORM_TABLE, FORM_LABELS, type FormType } from '@/lib/procurement/form-registry';
+import {
+  FORM_LABELS,
+  FORM_TABLE,
+  PROCUREMENT_FORM_TYPES,
+  type ProcurementFormType,
+} from '@/lib/procurement/form-registry';
 
 export type CaseFormStatus = {
-  formType: FormType;
+  formType: ProcurementFormType;
   label: string;
   itemCode: string;
   exists: boolean;
@@ -20,7 +25,7 @@ export type CaseOverview = {
   forms: CaseFormStatus[];
 };
 
-const FORM_ITEM_CODES: Record<FormType, string> = {
+const FORM_ITEM_CODES: Record<ProcurementFormType, string> = {
   purchase_request: 'A1',
   purchase_order: 'B1',
   acceptance: 'C1',
@@ -44,7 +49,7 @@ export async function getCaseOverview(caseNumber: string): Promise<CaseOverview 
   if (!pcase) return null;
 
   const forms: CaseFormStatus[] = [];
-  for (const formType of FORM_TYPES) {
+  for (const formType of PROCUREMENT_FORM_TYPES) {
     const { data } = await supabase
       .from(FORM_TABLE[formType])
       .select('id, status')

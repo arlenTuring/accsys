@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { generateApprovalChain } from './chain';
+import { generateApprovalChain, withoutFiler } from './chain';
 
 const base = {
   applicantEmployeeId: 'E1',
@@ -40,6 +40,13 @@ describe('generateApprovalChain', () => {
     ]);
   });
 
+  it('skips the budget owner step for forms without a budget source', () => {
+    expect(generateApprovalChain({ ...base, budgetOwnerEmployeeId: null, totalAmount: 0 })).toEqual([
+      { approverEmployeeId: 'E2', approverRole: 'department_manager' },
+      { approverEmployeeId: 'E4', approverRole: 'general_manager' },
+    ]);
+  });
+
   it('drops the applicant when they would otherwise appear as an approver', () => {
     expect(
       generateApprovalChain({ ...base, applicantEmployeeId: 'E2', totalAmount: 50000 })
@@ -60,5 +67,17 @@ describe('generateApprovalChain', () => {
         totalAmount: 50000,
       })
     ).toEqual([]);
+  });
+});
+
+describe('withoutFiler', () => {
+  it('drops the filer, keeping the order of the others', () => {
+    const chain = generateApprovalChain({ ...base, totalAmount: 1000 });
+    expect(withoutFiler(chain, 'E2').map((s) => s.approverEmployeeId)).toEqual(['E3', 'E4']);
+  });
+
+  it('can leave nothing when the filer is the only approver', () => {
+    const chain = generateApprovalChain({ ...base, departmentManagerEmployeeId: 'E4', budgetOwnerEmployeeId: null, totalAmount: 0 });
+    expect(withoutFiler(chain, 'E4')).toEqual([]);
   });
 });

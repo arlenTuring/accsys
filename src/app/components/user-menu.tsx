@@ -11,19 +11,21 @@ const ROLE_LABELS: Record<CurrentEmployee['role'], string> = {
   admin: '系統管理員',
 };
 
+export type MenuEmployee = Pick<
+  CurrentEmployee,
+  | 'name'
+  | 'email'
+  | 'employeeCode'
+  | 'title'
+  | 'departmentName'
+  | 'departmentCode'
+  | 'role'
+  | 'isGeneralManager'
+  | 'isChairman'
+>;
+
 type UserMenuProps = {
-  employee: Pick<
-    CurrentEmployee,
-    | 'name'
-    | 'email'
-    | 'employeeCode'
-    | 'title'
-    | 'departmentName'
-    | 'departmentCode'
-    | 'role'
-    | 'isGeneralManager'
-    | 'isChairman'
-  >;
+  employee: MenuEmployee;
 };
 
 function roleBadgeClass(role: CurrentEmployee['role']): string {

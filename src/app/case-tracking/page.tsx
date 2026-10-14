@@ -6,7 +6,7 @@ import {
   getFinanceCaseTracking,
   type CaseTrackingFilters,
 } from '@/lib/case-tracking/queries';
-import { FORM_TYPES, FORM_LABELS } from '@/lib/procurement/form-registry';
+import { FORM_LABELS, PROCUREMENT_FORM_TYPES } from '@/lib/procurement/form-registry';
 import type { CaseBucket } from '@/lib/case-tracking/determine-bucket';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -36,7 +36,11 @@ export default async function CaseTrackingPage({
     q?: string;
   }>;
 }) {
-  const params = await searchParams;
+  const raw = await searchParams;
+  // A repeated query parameter arrives as an array; keep the first value.
+  const params = Object.fromEntries(
+    Object.entries(raw).map(([k, v]) => [k, Array.isArray(v) ? v[0] : v])
+  ) as Awaited<typeof searchParams>;
     const employee = await getCurrentEmployee();
   if (!employee) redirect('/login');
   if (employee.role !== 'finance' && employee.role !== 'admin') redirect('/dashboard');
@@ -147,7 +151,7 @@ export default async function CaseTrackingPage({
                 <th className="p-3">案號</th>
                 <th className="p-3">部門</th>
                 <th className="p-3">申請人</th>
-                {FORM_TYPES.map((formType) => (
+                {PROCUREMENT_FORM_TYPES.map((formType) => (
                   <th key={formType} className="p-3">
                     {FORM_LABELS[formType]}
                   </th>

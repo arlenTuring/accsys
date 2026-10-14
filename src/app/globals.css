@@ -8,6 +8,9 @@
     --td-blue-dark: #0f2d5c;
     --td-apex: #e8a838;
     --td-surface: #f8fafc;
+    /* Self-hosted from @fontsource (imported in layout.tsx): no font download at build or run time. */
+    --font-inter: 'Inter Variable';
+    --font-noto: 'Noto Sans TC';
   }
 
   body {
@@ -61,7 +64,7 @@
   }
 
   .nav-link {
-    @apply rounded-md px-3 py-2 text-sm font-medium text-white/80 hover:bg-white/10 hover:text-white;
+    @apply whitespace-nowrap rounded-md px-2.5 py-2 text-sm font-medium text-white/80 hover:bg-white/10 hover:text-white;
   }
 
   .nav-link-active {

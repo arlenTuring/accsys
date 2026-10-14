@@ -27,6 +27,8 @@ export function StandaloneExpenseRequestForm({
   const [invoiceMonth, setInvoiceMonth] = useState('');
   const [expectedPaymentDate, setExpectedPaymentDate] = useState('');
   const [rows, setRows] = useState<Row[]>([{ ...emptyRow }]);
+  // One key per form instance: a double submit or retry cannot create a second request.
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -50,7 +52,9 @@ export function StandaloneExpenseRequestForm({
       accountName: payeeType === 'employee' ? accountName : null,
       invoiceMonth: invoiceMonth.trim() === '' ? null : invoiceMonth,
       expectedPaymentDate: expectedPaymentDate.trim() === '' ? null : expectedPaymentDate,
-      items: rows.map((r) => ({ description: r.description, amount: Number(r.amount) })),
+      // Decimal strings as typed; the server converts them to exact cents.
+      items: rows.map((r) => ({ description: r.description, amount: r.amount.trim() })),
+      idempotencyKey,
     });
     setSubmitting(false);
     if (result.ok) {

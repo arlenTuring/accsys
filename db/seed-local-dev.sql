@@ -3,7 +3,7 @@
 
 insert into departments (id, code, name)
 values ('00000000-0000-0000-0000-000000000001', 'DEV', '本機開發')
-on conflict (id) do nothing;
+on conflict do nothing;
 
 insert into employees (
   id, employee_code, name, department_id, title, google_email, role, is_general_manager, is_chairman
@@ -41,4 +41,4 @@ insert into budget_codes (
   '115',
   1000000
 )
-on conflict (id) do nothing;
+on conflict do nothing;

@@ -6,6 +6,10 @@ const nextConfig: NextConfig = {
   output: process.env.NEXT_OUTPUT === 'standalone' ? 'standalone' : undefined,
   poweredByHeader: false,
   transpilePackages: ['pdfjs-dist'],
+  // Served by src/app/docs/[file]/route.ts after the session check; read at runtime.
+  outputFileTracingIncludes: {
+    '/docs/[file]': ['./assets/docs/*.pdf'],
+  },
   experimental: {
     serverActions: {
       // Attachments are up to 10 MB (plus multipart overhead); keep the reverse
@@ -15,13 +19,6 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     return [{ source: '/:path*', headers: STATIC_SECURITY_HEADERS }];
-  },
-  webpack: (config) => {
-    config.resolve.alias = {
-      ...config.resolve.alias,
-      canvas: false,
-    };
-    return config;
   },
 };
 

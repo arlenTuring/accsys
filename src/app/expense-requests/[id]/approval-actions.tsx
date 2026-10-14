@@ -7,7 +7,7 @@ import {
   returnExpenseRequestStep,
 } from '@/lib/expense-requests/actions';
 
-export function ApprovalActions({ expenseRequestId }: { expenseRequestId: string }) {
+export function ApprovalActions({ expenseRequestId, version }: { expenseRequestId: string; version: number }) {
   const router = useRouter();
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -16,7 +16,7 @@ export function ApprovalActions({ expenseRequestId }: { expenseRequestId: string
   const onApprove = async () => {
     setBusy(true);
     setError(null);
-    const result = await approveExpenseRequestStep(expenseRequestId);
+    const result = await approveExpenseRequestStep(expenseRequestId, version);
     setBusy(false);
     if (result.ok) router.refresh();
     else setError(result.error);
@@ -29,7 +29,7 @@ export function ApprovalActions({ expenseRequestId }: { expenseRequestId: string
     }
     setBusy(true);
     setError(null);
-    const result = await returnExpenseRequestStep(expenseRequestId, reason);
+    const result = await returnExpenseRequestStep(expenseRequestId, reason, version);
     setBusy(false);
     if (result.ok) router.refresh();
     else setError(result.error);

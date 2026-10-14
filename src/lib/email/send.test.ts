@@ -35,7 +35,12 @@ describe('sendEmail', () => {
       host: 'smtp-relay.gmail.com',
       port: 587,
       secure: false,
+      requireTLS: true,
+      tls: { minVersion: 'TLSv1.2' },
       auth: { user: 'user@turing-drive.com', pass: 'app-password' },
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
     });
     expect(sendMailMock).toHaveBeenCalledWith({
       from: 'noreply@turing-drive.com',

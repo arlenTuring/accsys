@@ -2,7 +2,8 @@ import { eq } from 'drizzle-orm';
 import { NextResponse, type NextRequest } from 'next/server';
 import { recordAudit } from '@/lib/audit/record';
 import { getAuthConfig } from '@/lib/auth/config';
-import { getDevPersonaEmail, isDevLoginAllowed } from '@/lib/auth/dev-personas';
+import { getDevPersonaEmail } from '@/lib/auth/dev-persona-emails';
+import { isDevLoginAllowed, isLoopbackHostHeader } from '@/lib/auth/dev-personas';
 import { loginErrorRedirect, noStore, redirectTo, setSessionCookie } from '@/lib/auth/http';
 import { createSession } from '@/lib/auth/sessions';
 import { getDb } from '@/lib/db';
@@ -12,7 +13,7 @@ export const dynamic = 'force-dynamic';
 
 /** Development-only persona login (404 unless `next dev` + NEXT_PUBLIC_DEV_LOGIN=true). */
 export async function GET(request: NextRequest) {
-  if (!isDevLoginAllowed()) {
+  if (!isDevLoginAllowed() || !isLoopbackHostHeader(request.headers.get('host'))) {
     return NextResponse.json({ error: 'not_found' }, { status: 404 });
   }
   const cfg = getAuthConfig();

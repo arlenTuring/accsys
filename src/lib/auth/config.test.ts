@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AuthConfigError, loadAuthConfig } from './config';
+import { AuthConfigError, loadAuthConfig, sessionCookieNames } from './config';
 
 const base = {
   APP_ORIGIN: 'https://accsys.example.com',
@@ -51,5 +51,15 @@ describe('loadAuthConfig', () => {
     const cfg = loadAuthConfig({ ...base, GOOGLE_CLIENT_ID: '', GOOGLE_CLIENT_SECRET: '' });
     expect(cfg.clientId).toBeNull();
     expect(cfg.clientSecret).toBeNull();
+  });
+});
+
+describe('sessionCookieNames', () => {
+  it('accepts only the __Host- cookie over https (a plain cookie could be planted by a sibling subdomain)', () => {
+    expect(sessionCookieNames({ APP_ORIGIN: 'https://accsys.example.com' })).toEqual(['__Host-accsys_sid']);
+  });
+
+  it('also reads the plain cookie for http://localhost development', () => {
+    expect(sessionCookieNames({ APP_ORIGIN: 'http://localhost:3001' })).toEqual(['__Host-accsys_sid', 'accsys_sid']);
   });
 });

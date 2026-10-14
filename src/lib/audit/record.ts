@@ -13,18 +13,20 @@ export type AuditEvent = {
 };
 
 // Keys whose values must never be stored in the audit trail.
-const FORBIDDEN_KEY = /token|secret|password|verifier|nonce|cookie|bank_?account|authorization/i;
+const FORBIDDEN_KEY = /token|secret|password|verifier|nonce|cookie|bank_?account|remittance|authorization/i;
+
+function redactValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactValue);
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    return redactAuditDetails(value as Record<string, unknown>);
+  }
+  return value;
+}
 
 export function redactAuditDetails(details: Record<string, unknown> = {}): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(details)) {
-    if (FORBIDDEN_KEY.test(key)) {
-      out[key] = '[redacted]';
-    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
-      out[key] = redactAuditDetails(value as Record<string, unknown>);
-    } else {
-      out[key] = value;
-    }
+    out[key] = FORBIDDEN_KEY.test(key) ? '[redacted]' : redactValue(value);
   }
   return out;
 }

@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getEligiblePurchaseOrdersForAcceptance } from '@/lib/acceptances/queries';
+import { SourcePicker } from '@/app/components/source-picker';
 import { AcceptanceForm } from './acceptance-form';
 
 export default async function NewAcceptancePage({
@@ -18,22 +19,14 @@ export default async function NewAcceptancePage({
 
   if (!orderId) {
     return (
-      <main className="mx-auto max-w-2xl p-8">
-        <h1 className="mb-6 text-2xl font-bold">新增驗收單</h1>
-        {eligible.length === 0 ? (
-          <p className="text-gray-500">目前沒有已核准、尚未建立驗收單的採購單。</p>
-        ) : (
-          <ul className="space-y-2">
-            {eligible.map((o) => (
-              <li key={o.id}>
-                <a href={`/acceptances/new?orderId=${o.id}`} className="text-blue-600 underline">
-                  {o.caseNumber}
-                </a>
-              </li>
-            ))}
-          </ul>
-        )}
-      </main>
+      <SourcePicker
+        title="新增驗收單"
+        hint="請選擇要驗收的採購單（需已核准、尚未建立驗收單）。"
+        empty="目前沒有已核准、尚未建立驗收單的採購單。"
+        backHref="/acceptances"
+        backLabel="我的驗收單"
+        options={eligible.map((o) => ({ href: `/acceptances/new?orderId=${o.id}`, label: o.caseNumber }))}
+      />
     );
   }
 

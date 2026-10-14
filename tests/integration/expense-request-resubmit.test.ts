@@ -1,7 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import {
-  createServiceRoleTestClient,
-} from './supabase-test-client';
+import { createServiceRoleTestClient, versionOf } from './supabase-test-client';
 
 const currentEmployee = vi.hoisted(() => ({ value: null as null | { id: string } }));
 vi.mock('@/lib/auth/current-employee', () => ({
@@ -129,6 +127,7 @@ describe('resubmitExpenseRequest', () => {
     currentEmployee.value = { id: applicantId };
     const { resubmitExpenseRequest } = await import('@/lib/expense-requests/actions');
     const result = await resubmitExpenseRequest(expenseRequest!.id, {
+      expectedVersion: await versionOf('expense_requests', expenseRequest!.id),
       payeeType: 'supplier',
       payeeSupplierId: supplierId,
       paymentMethod: '匯款',

@@ -1,6 +1,9 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { recordAudit } from '@/lib/audit/record';
+import { isUuid } from '@/lib/authz/forms';
+import { getDb } from '@/lib/db';
 import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import {
@@ -21,21 +24,48 @@ export type BudgetCodeInput = {
 
 export type UpsertResult = { ok: true; budgetCodeId: string } | { ok: false; error: string };
 
+const MAX_BUDGET_AMOUNT = 999_999_999_999;
+
+function badText(value: unknown, max: number, required: boolean): boolean {
+  if (value === null || value === undefined) return required;
+  if (typeof value !== 'string' || value.length > max) return true;
+  return required && value.trim() === '';
+}
+
+/** Budget-code changes decide who signs as 預算負責人, so every change is audited. */
+async function auditBudget(actorId: string, action: string, entityId: string | null, details: Record<string, unknown>) {
+  await recordAudit(getDb(), { actorEmployeeId: actorId, action, entityType: 'budget_code', entityId, details });
+}
+
 async function upsertOneBudgetCode(
   db: ReturnType<typeof createAppDb>,
-  input: BudgetCodeInput
+  input: BudgetCodeInput,
+  actorId: string
 ): Promise<UpsertResult> {
-  if (!input.code.trim()) return { ok: false, error: '預算編號為必填' };
+  if (!input || typeof input !== 'object') return { ok: false, error: '資料格式不正確' };
+  if (
+    badText(input.code, 50, false) ||
+    badText(input.departmentCode, 50, false) ||
+    badText(input.projectCode, 50, false) ||
+    badText(input.category, 100, false) ||
+    badText(input.fiscalYear, 20, false) ||
+    badText(input.ownerEmployeeCode, 50, false)
+  ) {
+    return { ok: false, error: '欄位格式不正確或過長' };
+  }
+  if (!input.code?.trim()) return { ok: false, error: '預算編號為必填' };
   const hasDept = !!input.departmentCode;
   const hasProject = !!input.projectCode;
   if (hasDept === hasProject) {
     return { ok: false, error: '部門代碼與專案代碼必須恰填一項' };
   }
-  if (!input.category.trim()) return { ok: false, error: '類別為必填' };
-  if (!input.fiscalYear.trim()) return { ok: false, error: '年度為必填' };
-  if (!(input.annualBudgetAmount > 0)) {
+  if (!input.category?.trim()) return { ok: false, error: '類別為必填' };
+  if (!input.fiscalYear?.trim()) return { ok: false, error: '年度為必填' };
+  const amount = input.annualBudgetAmount;
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || !(amount > 0)) {
     return { ok: false, error: '年度預算金額必須為正數' };
   }
+  if (amount > MAX_BUDGET_AMOUNT) return { ok: false, error: '年度預算金額超出上限' };
 
   let departmentId: string | null = null;
   let projectId: string | null = null;
@@ -65,12 +95,19 @@ async function upsertOneBudgetCode(
   if (input.ownerEmployeeCode) {
     const { data: owner } = await db
       .from('employees')
-      .select('id')
+      .select('id, access_enabled')
       .eq('employee_code', input.ownerEmployeeCode)
       .maybeSingle();
     if (!owner) return { ok: false, error: `負責人工號「${input.ownerEmployeeCode}」查無此員工` };
+    if (!owner.access_enabled) return { ok: false, error: `負責人工號「${input.ownerEmployeeCode}」的帳號已停用` };
     ownerEmployeeId = owner.id;
   }
+
+  const { data: previous } = await db
+    .from('budget_codes')
+    .select('id, department_id, project_id, category, fiscal_year, annual_budget_amount, owner_employee_id')
+    .eq('code', input.code)
+    .maybeSingle();
 
   const { data, error } = await db
     .from('budget_codes')
@@ -89,6 +126,18 @@ async function upsertOneBudgetCode(
     .select('id')
     .single();
   if (error || !data) return { ok: false, error: '寫入預算編號失敗' };
+  await auditBudget(actorId, previous ? 'budget_code.updated' : 'budget_code.created', data.id, {
+    code: input.code,
+    before: previous ?? null,
+    after: {
+      department_id: departmentId,
+      project_id: projectId,
+      category: input.category,
+      fiscal_year: input.fiscalYear,
+      annual_budget_amount: input.annualBudgetAmount,
+      owner_employee_id: ownerEmployeeId,
+    },
+  });
   return { ok: true, budgetCodeId: data.id };
 }
 
@@ -100,7 +149,7 @@ export async function upsertBudgetCode(input: BudgetCodeInput): Promise<UpsertRe
   }
 
   const db = createAppDb();
-  const result = await upsertOneBudgetCode(db, input);
+  const result = await upsertOneBudgetCode(db, input, employee.id);
   if (result.ok) revalidatePath('/budget-codes');
   return result;
 }
@@ -114,6 +163,8 @@ export async function deleteBudgetCode(budgetCodeId: string): Promise<DeleteResu
     return { ok: false, error: '只有財會人員可以維護預算編號' };
   }
 
+  if (!isUuid(budgetCodeId)) return { ok: false, error: '找不到這個預算編號' };
+
   const db = createAppDb();
   const { count } = await db
     .from('purchase_request_items')
@@ -123,8 +174,14 @@ export async function deleteBudgetCode(budgetCodeId: string): Promise<DeleteResu
     return { ok: false, error: '此預算編號已被請購單使用，無法刪除' };
   }
 
+  const { data: previous } = await db
+    .from('budget_codes')
+    .select('id, code, department_id, project_id, category, fiscal_year, annual_budget_amount, owner_employee_id')
+    .eq('id', budgetCodeId)
+    .maybeSingle();
   const { error } = await db.from('budget_codes').delete().eq('id', budgetCodeId);
   if (error) return { ok: false, error: '刪除預算編號失敗' };
+  if (previous) await auditBudget(employee.id, 'budget_code.deleted', budgetCodeId, { before: previous });
   revalidatePath('/budget-codes');
   return { ok: true };
 }
@@ -161,15 +218,19 @@ export async function importBudgetCodesFromExcel(formData: FormData): Promise<Im
       errors.push({ row: row.rowNumber, reason: '年度預算金額必須為正數' });
       continue;
     }
-    const result = await upsertOneBudgetCode(db, {
-      code: row.code,
-      departmentCode: row.departmentCode,
-      projectCode: row.projectCode,
-      category: row.category,
-      fiscalYear: row.fiscalYear,
-      annualBudgetAmount: Math.abs(row.annualBudgetAmount),
-      ownerEmployeeCode: row.ownerEmployeeCode,
-    });
+    const result = await upsertOneBudgetCode(
+      db,
+      {
+        code: row.code,
+        departmentCode: row.departmentCode,
+        projectCode: row.projectCode,
+        category: row.category,
+        fiscalYear: row.fiscalYear,
+        annualBudgetAmount: Math.abs(row.annualBudgetAmount),
+        ownerEmployeeCode: row.ownerEmployeeCode,
+      },
+      employee.id
+    );
     if (result.ok) {
       successCount += 1;
     } else {

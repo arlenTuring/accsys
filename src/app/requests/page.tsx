@@ -21,7 +21,7 @@ export default async function RequestsPage() {
     <main className="page-shell">
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="section-title">請購</p>
+          <p className="section-title">採購流程</p>
           <h1 className="page-title">我的請購單</h1>
         </div>
         <Link href="/requests/new" className="btn-primary">

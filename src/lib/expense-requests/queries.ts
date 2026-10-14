@@ -1,4 +1,4 @@
-import { createAppDb } from '@/lib/db/app-client';
+import { createAppDb, rowsOrThrow } from '@/lib/db/app-client';
 import { canReadForm, isFinanceOrAdmin, maskAccount } from '@/lib/authz/forms';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { checkPaymentTermsConsistency } from '@/lib/procurement/payment-terms';
@@ -45,6 +45,8 @@ export type ExpenseRequestDetail = {
   applicantName: string;
   departmentName: string;
   currentStepOrder: number | null;
+  /** Edits and decisions must send this back (stale-edit protection). */
+  version: number;
   purchaseOrderPaymentTerms: string;
   paymentTermsConsistent: boolean;
   items: ExpenseRequestDetailItem[];
@@ -93,7 +95,7 @@ export async function getExpenseRequestDetail(
   const { data: expenseRequest } = await supabase
     .from('expense_requests')
     .select(
-      'id, total_amount, status, payee_type, payee_supplier_id, payment_method, bank_name, bank_account, account_name, invoice_month, expected_payment_date, payment_batch_date, current_step_order, applicant_employee_id, procurement_cases(case_number), applicant:employees!applicant_employee_id(name), departments(name), payee_supplier:suppliers!payee_supplier_id(name), purchase_orders(payment_terms, updated_at)'
+      'id, total_amount, status, payee_type, payee_supplier_id, payment_method, bank_name, bank_account, account_name, invoice_month, expected_payment_date, payment_batch_date, current_step_order, version, applicant_employee_id, procurement_cases(case_number), applicant:employees!applicant_employee_id(name), departments(name), payee_supplier:suppliers!payee_supplier_id(name), purchase_orders(payment_terms, updated_at)'
     )
     .eq('id', expenseRequestId)
     .maybeSingle();
@@ -153,6 +155,7 @@ export async function getExpenseRequestDetail(
     applicantName,
     departmentName: (expenseRequest.departments as unknown as { name: string }).name,
     currentStepOrder: expenseRequest.current_step_order,
+    version: Number(expenseRequest.version),
     purchaseOrderPaymentTerms: order?.payment_terms ?? '（免走採購流程）',
     paymentTermsConsistent: consistency.consistent,
     items: (items ?? []).map((i) => ({
@@ -210,7 +213,8 @@ export async function getEligiblePurchaseOrdersForExpenseRequest(): Promise<
       const { data: items } = await supabase
         .from('acceptance_items')
         .select('id, description, amount')
-        .eq('acceptance_id', acceptance.id);
+        .eq('acceptance_id', acceptance.id)
+        .eq('pass_fail', 'pass');
       sourceItems = (items ?? []).map((i) => ({
         id: i.id,
         description: i.description,
@@ -244,21 +248,25 @@ export async function getMyExpenseRequestApprovalQueue(): Promise<ExpenseRequest
   const supabase = createAppDb();
   const employee = await getCurrentEmployee();
   if (!employee) return [];
-  const { data: steps } = await supabase
-    .from('approval_steps')
-    .select('form_id, step_order')
-    .eq('form_type', 'expense_request')
-    .eq('approver_employee_id', employee.id)
-    .eq('status', 'pending');
+  const steps = rowsOrThrow(
+    await supabase
+      .from('approval_steps')
+      .select('form_id, step_order')
+      .eq('form_type', 'expense_request')
+      .eq('approver_employee_id', employee.id)
+      .eq('status', 'pending')
+  );
   const formIds = (steps ?? []).map((s) => s.form_id);
   if (formIds.length === 0) return [];
-  const { data: expenseRequests } = await supabase
-    .from('expense_requests')
-    .select(
-      'id, total_amount, current_step_order, status, procurement_cases(case_number), applicant:employees!applicant_employee_id(name)'
-    )
-    .in('id', formIds)
-    .eq('status', 'pending_approval');
+  const expenseRequests = rowsOrThrow(
+    await supabase
+      .from('expense_requests')
+      .select(
+        'id, total_amount, current_step_order, status, procurement_cases(case_number), applicant:employees!applicant_employee_id(name)'
+      )
+      .in('id', formIds)
+      .eq('status', 'pending_approval')
+  );
   const stepOrderByForm = new Map((steps ?? []).map((s) => [s.form_id, s.step_order]));
   return (expenseRequests ?? [])
     .filter((e) => e.current_step_order === stepOrderByForm.get(e.id))
@@ -303,7 +311,8 @@ export async function getExpenseRequestSourceItems(
     const { data: items } = await supabase
       .from('acceptance_items')
       .select('id, purchase_order_item_id, description, amount')
-      .eq('acceptance_id', expenseRequest.acceptance_id);
+      .eq('acceptance_id', expenseRequest.acceptance_id)
+      .eq('pass_fail', 'pass');
     return (items ?? []).map((i) => ({
       id: i.id,
       purchaseOrderItemId: i.purchase_order_item_id,

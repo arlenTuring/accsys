@@ -38,7 +38,9 @@ export async function getBudgetCodeList(): Promise<BudgetCodeListItem[]> {
     projectName: (row.project as unknown as { code: string; name: string } | null)?.name ?? null,
     category: row.category,
     fiscalYear: row.fiscal_year,
-    annualBudgetAmount: showAmounts ? row.annual_budget_amount : null,
+    // numeric(14,2) arrives as a decimal string; the DTO exposes a number for display.
+    annualBudgetAmount:
+      showAmounts && row.annual_budget_amount !== null ? Number(row.annual_budget_amount) : null,
     ownerEmployeeCode:
       (row.owner as unknown as { employee_code: string } | null)?.employee_code ?? null,
     ownerName: (row.owner as unknown as { name: string } | null)?.name ?? null,

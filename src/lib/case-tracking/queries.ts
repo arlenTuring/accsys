@@ -1,7 +1,7 @@
 import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { isFinanceOrAdmin } from '@/lib/authz/forms';
-import { FORM_TYPES, FORM_TABLE, type FormType } from '@/lib/procurement/form-registry';
+import { FORM_TABLE, PROCUREMENT_FORM_TYPES, type ProcurementFormType } from '@/lib/procurement/form-registry';
 import { determineCaseBucket, type CaseBucket, type CaseFormState } from './determine-bucket';
 
 export type CaseTrackingFilters = {
@@ -47,6 +47,8 @@ export async function getFinanceCaseTracking(
   let caseQuery = supabase
     .from('procurement_cases')
     .select('id, case_number, case_type')
+    // Travel expenses carry a case number but are not procurement cases.
+    .in('case_type', ['standard', 'standalone_expense'])
     .order('created_at', { ascending: false });
   if (dateRangeIsValid && validFrom) {
     caseQuery = caseQuery.gte('created_at', `${validFrom}T00:00:00+08:00`);
@@ -62,7 +64,7 @@ export async function getFinanceCaseTracking(
   const caseIds = cases.map((c) => c.id);
 
   const formResultsByType = await Promise.all(
-    FORM_TYPES.map(async (formType) => {
+    PROCUREMENT_FORM_TYPES.map(async (formType) => {
       const { data, error } = await supabase
         .from(FORM_TABLE[formType])
         .select(
@@ -74,7 +76,7 @@ export async function getFinanceCaseTracking(
     })
   );
 
-  const formsByCaseId = new Map<string, Partial<Record<FormType, FormQueryRow>>>();
+  const formsByCaseId = new Map<string, Partial<Record<ProcurementFormType, FormQueryRow>>>();
   for (const { formType, rows } of formResultsByType) {
     for (const row of rows) {
       const existing = formsByCaseId.get(row.procurement_case_id) ?? {};
@@ -85,11 +87,11 @@ export async function getFinanceCaseTracking(
 
   const rows: CaseTrackingRow[] = cases.map((c) => {
     const formsForCase = formsByCaseId.get(c.id) ?? {};
-    const forms: CaseFormState[] = FORM_TYPES.map((formType) => {
+    const forms: CaseFormState[] = PROCUREMENT_FORM_TYPES.map((formType) => {
       const row = formsForCase[formType];
       return { formType, exists: !!row, status: row?.status ?? null };
     });
-    const firstExisting = FORM_TYPES.map((t) => formsForCase[t]).find(
+    const firstExisting = PROCUREMENT_FORM_TYPES.map((t) => formsForCase[t]).find(
       (row): row is FormQueryRow => row !== undefined
     );
     return {

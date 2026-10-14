@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { AnnotationLayer } from './annotation-layer';
 import {
   DEFAULT_HIGHLIGHT,
@@ -72,6 +72,20 @@ export function PdfEditorApp() {
     () => annotations.find((a) => a.id === selectedId) ?? null,
     [annotations, selectedId]
   );
+
+  // Toolbar follows the selected annotation; adjusted during render, not in an effect.
+  const [toolbarSyncedTo, setToolbarSyncedTo] = useState<Annotation | null>(null);
+  if (selected !== toolbarSyncedTo) {
+    setToolbarSyncedTo(selected);
+    if (selected?.type === 'text') {
+      setTextColor(selected.color);
+      setFontSize(selected.fontSize);
+      setTextBold(!!selected.bold);
+    } else if (selected?.type === 'stamp') {
+      setStampKind(selected.kind);
+      setStampColor(selected.color);
+    }
+  }
 
   const loadPdf = useCallback(async (file: File) => {
     if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
@@ -322,19 +336,6 @@ export function PdfEditorApp() {
     };
     reader.readAsDataURL(file);
   };
-
-  useEffect(() => {
-    if (!selected || selected.type !== 'text') return;
-    setTextColor(selected.color);
-    setFontSize(selected.fontSize);
-    setTextBold(!!selected.bold);
-  }, [selected]);
-
-  useEffect(() => {
-    if (!selected || selected.type !== 'stamp') return;
-    setStampKind(selected.kind);
-    setStampColor(selected.color);
-  }, [selected]);
 
   const patchSelectedText = (patch: Partial<Pick<TextAnnotation, 'color' | 'fontSize' | 'bold'>>) => {
     setAnnotations((prev) =>

@@ -257,7 +257,7 @@ describe('expense request edit/withdraw', () => {
       .select('id')
       .eq('acceptance_id', createdAcceptanceIds[createdAcceptanceIds.length - 1])
       .single();
-    const result = await createExpenseRequest({
+    const result = await createExpenseRequest({ idempotencyKey: crypto.randomUUID(),
       purchaseOrderId: orderId,
       payeeType: 'supplier',
       payeeSupplierId: supplierId,
@@ -277,7 +277,7 @@ describe('expense request edit/withdraw', () => {
   async function createTestStandaloneExpenseRequest() {
     currentEmployee.value = { id: applicantId, role: 'staff', departmentId };
     const { createStandaloneExpenseRequest } = await import('@/lib/expense-requests/actions');
-    const result = await createStandaloneExpenseRequest({
+    const result = await createStandaloneExpenseRequest({ idempotencyKey: crypto.randomUUID(),
       budgetCodeId,
       payeeType: 'supplier',
       payeeSupplierId: supplierId,
@@ -314,7 +314,7 @@ describe('expense request edit/withdraw', () => {
       .single();
     currentEmployee.value = { id: otherEmployeeId, role: 'staff', departmentId };
     const { updateExpenseRequest } = await import('@/lib/expense-requests/actions');
-    const result = await updateExpenseRequest(expenseRequestId, {
+    const result = await updateExpenseRequest(expenseRequestId, { expectedVersion: await versionOf('expense_requests', expenseRequestId),
       payeeType: 'supplier',
       payeeSupplierId: supplierId,
       paymentMethod: '匯款',
@@ -337,7 +337,7 @@ describe('expense request edit/withdraw', () => {
       .single();
     currentEmployee.value = { id: applicantId, role: 'staff', departmentId };
     const { updateExpenseRequest } = await import('@/lib/expense-requests/actions');
-    const result = await updateExpenseRequest(expenseRequestId, {
+    const result = await updateExpenseRequest(expenseRequestId, { expectedVersion: await versionOf('expense_requests', expenseRequestId),
       payeeType: 'supplier',
       payeeSupplierId: supplierId,
       paymentMethod: '電匯',
@@ -365,7 +365,7 @@ describe('expense request edit/withdraw', () => {
     const expenseRequestId = await createTestExpenseRequest();
     currentEmployee.value = { id: managerId, role: 'staff', departmentId };
     const { approveExpenseRequestStep } = await import('@/lib/expense-requests/actions');
-    await approveExpenseRequestStep(expenseRequestId);
+    await approveExpenseRequestStep(expenseRequestId, await versionOf('expense_requests', expenseRequestId));
 
     const { data: acceptanceItem } = await admin
       .from('acceptance_items')
@@ -374,7 +374,7 @@ describe('expense request edit/withdraw', () => {
       .single();
     currentEmployee.value = { id: applicantId, role: 'staff', departmentId };
     const { updateExpenseRequest } = await import('@/lib/expense-requests/actions');
-    const result = await updateExpenseRequest(expenseRequestId, {
+    const result = await updateExpenseRequest(expenseRequestId, { expectedVersion: await versionOf('expense_requests', expenseRequestId),
       payeeType: 'supplier',
       payeeSupplierId: supplierId,
       paymentMethod: '電匯',
@@ -415,7 +415,7 @@ describe('expense request edit/withdraw', () => {
     const expenseRequestId = await createTestStandaloneExpenseRequest();
     currentEmployee.value = { id: applicantId, role: 'staff', departmentId };
     const { updateExpenseRequest } = await import('@/lib/expense-requests/actions');
-    const result = await updateExpenseRequest(expenseRequestId, {
+    const result = await updateExpenseRequest(expenseRequestId, { expectedVersion: await versionOf('expense_requests', expenseRequestId),
       payeeType: 'supplier',
       payeeSupplierId: supplierId,
       paymentMethod: '匯款',
@@ -426,7 +426,7 @@ describe('expense request edit/withdraw', () => {
       expectedPaymentDate: null,
       includedSourceItemIds: [],
     });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: false,
       error: '免走採購流程的費用申請單目前不支援編輯，請改用撤回後重新建立',
     });

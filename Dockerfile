@@ -1,11 +1,13 @@
-# syntax=docker/dockerfile:1
 # ACCSYS app image: same image for local test hosts and the on-prem server.
+# Uses only the built-in BuildKit frontend (no remote `# syntax=` image).
 # No cloud-provider services are required at build or run time.
 #
-# Build needs outbound HTTPS to the npm registry and, for next/font/google,
-# to fonts.googleapis.com / fonts.gstatic.com (fonts are then self-hosted).
+# Build needs outbound HTTPS to the npm registry only (fonts come from the
+# @fontsource packages in the lockfile).
 
-ARG NODE_IMAGE=node:24.21.0-bookworm-slim
+# Pinned by digest so a rebuilt tag cannot silently change the base image.
+# Refresh deliberately (see README「更新基底映像」) to pick up OS security patches.
+ARG NODE_IMAGE=node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
 
 FROM ${NODE_IMAGE} AS deps
 WORKDIR /app
@@ -20,8 +22,8 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-# One-off migration job (`docker compose ... run --rm migrate`). Never part of
-# web startup. Needs MIGRATION_DATABASE_URL for the accsys_migrator account.
+# One-off jobs, never part of web startup: migrations (MIGRATION_DATABASE_URL,
+# accsys_migrator) and the admin CLI scripts (DATABASE_URL, accsys_app).
 FROM ${NODE_IMAGE} AS migrator
 WORKDIR /app
 ENV NODE_ENV=production
@@ -30,7 +32,9 @@ COPY package.json tsconfig.json ./
 COPY drizzle ./drizzle
 COPY db/baseline-fingerprint.json ./db/
 COPY scripts/db-migrate.ts scripts/db-baseline.ts scripts/db-fingerprint.ts ./scripts/
+COPY scripts/auth-bootstrap.ts scripts/directory-sync.ts ./scripts/
 COPY scripts/lib/migrations.ts ./scripts/lib/
+COPY src/lib ./src/lib
 USER node
 ENTRYPOINT ["node_modules/.bin/tsx"]
 CMD ["scripts/db-migrate.ts"]

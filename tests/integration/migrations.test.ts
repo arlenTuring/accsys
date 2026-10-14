@@ -28,9 +28,9 @@ const PASSWORDS = {
 type LoginRole = keyof typeof PASSWORDS;
 
 const LEGACY_TABLES: Record<string, { key: string; newColumns?: string[] }> = {
-  departments: { key: 'id' },
-  employees: { key: 'id', newColumns: ['access_enabled', 'disabled_at', 'disabled_reason'] },
-  projects: { key: 'id' },
+  departments: { key: 'id', newColumns: ['parent_department_id', 'org_level_id', 'sort_order', 'active'] },
+  employees: { key: 'id', newColumns: ['access_enabled', 'disabled_at', 'disabled_reason', 'phone', 'extension'] },
+  projects: { key: 'id', newColumns: ['kind'] },
   budget_codes: { key: 'id' },
   suppliers: { key: 'id' },
   procurement_cases: { key: 'id' },
@@ -43,7 +43,7 @@ const LEGACY_TABLES: Record<string, { key: string; newColumns?: string[] }> = {
   acceptance_items: { key: 'id' },
   expense_requests: { key: 'id', newColumns: ['version'] },
   expense_request_items: { key: 'id' },
-  approval_steps: { key: 'id' },
+  approval_steps: { key: 'id', newColumns: ['step_label', 'source_kind', 'delegated_from_employee_id', 'system_note'] },
   notifications: { key: 'id', newColumns: ['event_key'] },
   attachments: { key: 'id', newColumns: ['scan_status', 'scanned_at', 'sha256'] },
 };
@@ -226,6 +226,21 @@ describe('adopting a database created by the legacy schema script', () => {
     // Files uploaded before scanning existed are never treated as scanned.
     const scan = await db`select distinct scan_status from attachments`;
     expect(scan.map((r) => r.scan_status)).toEqual(['unscanned']);
+    // Existing projects predate 營收專案 and stay 產品專案.
+    const kinds = await db`select distinct kind from projects`;
+    expect(kinds.map((r) => r.kind).filter((k) => k !== 'product')).toEqual([]);
+    // Existing departments become active top-level departments; the GM / chairman
+    // flags are mirrored as company-wide primary job role bindings.
+    const [{ nested, inactive }] = await db`select count(*) filter (where parent_department_id is not null)::int as nested,
+      count(*) filter (where not active)::int as inactive from departments`;
+    expect({ nested, inactive }).toEqual({ nested: 0, inactive: 0 });
+    const roles = await db`select j.code, r.employee_id, r.is_primary from employee_job_roles r
+      join job_roles j on j.id = r.job_role_id where r.department_id is null order by j.code`;
+    const flagged = await db`select id, is_general_manager, is_chairman from employees where is_general_manager or is_chairman`;
+    expect(roles).toEqual([
+      ...flagged.filter((e) => e.is_chairman).map((e) => ({ code: 'chairman', employee_id: e.id, is_primary: true })),
+      ...flagged.filter((e) => e.is_general_manager).map((e) => ({ code: 'general_manager', employee_id: e.id, is_primary: true })),
+    ]);
 
     // The migrated legacy database is structurally identical to a fresh one.
     const fresh = await createDatabase();
@@ -269,6 +284,19 @@ describe('database role privileges after migration', () => {
     await app`update suppliers set notes = 'ok' where id = '50000000-0000-0000-0000-000000000001'`;
     const [{ case_number }] = await app`select next_case_number() as case_number`;
     expect(case_number).toMatch(/^CP\d{9}$/);
+  });
+
+  it('case numbers keep counting past 9999 in a month instead of colliding', async () => {
+    const ym = (await app`select next_case_number() as n`)[0].n.slice(2, 7);
+    await app`update case_number_counters set last_serial = 9998 where year_month = ${ym}`;
+    const next = async () => (await app`select next_case_number() as n`)[0].n as string;
+    expect(await next()).toBe(`CP${ym}9999`);
+    expect(await next()).toBe(`CP${ym}10000`);
+  });
+
+  it('legacy resubmit procedures are gone', async () => {
+    const rows = await app`select proname from pg_proc where proname like 'resubmit\\_%'`;
+    expect(rows).toEqual([]);
   });
 
   it.each([

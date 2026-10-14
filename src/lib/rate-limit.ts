@@ -7,6 +7,8 @@ export const RATE_LIMITS = {
   loginStartPerIp: { limit: 30, windowSeconds: 600 },
   loginCallbackPerIp: { limit: 30, windowSeconds: 600 },
   adminActionPerEmployee: { limit: 60, windowSeconds: 600 },
+  orgAdminActionPerEmployee: { limit: 300, windowSeconds: 600 },
+  formBuilderActionPerEmployee: { limit: 300, windowSeconds: 600 },
 } satisfies Record<string, RateLimitRule>;
 
 /**

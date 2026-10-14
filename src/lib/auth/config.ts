@@ -115,9 +115,14 @@ export function getAuthConfig(): AuthConfig {
   return cached;
 }
 
-/** Cookie names without the rest of the config (middleware runs on the edge). */
-export function sessionCookieNames(): string[] {
-  return ['__Host-accsys_sid', 'accsys_sid'];
+/**
+ * Cookie names without the rest of the config (src/proxy.ts runs before every
+ * request). Over https only the __Host- cookie counts: a plain `accsys_sid`
+ * can be planted from a sibling subdomain (cookie tossing).
+ */
+export function sessionCookieNames(env: Env = process.env): string[] {
+  const https = env.APP_ORIGIN?.trim().toLowerCase().startsWith('https://') ?? false;
+  return https ? ['__Host-accsys_sid'] : ['__Host-accsys_sid', 'accsys_sid'];
 }
 
 /** Pre-P2 iron-session cookie that carried only an email. Always discarded. */

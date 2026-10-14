@@ -34,6 +34,7 @@ export default async function EditExpenseRequestPage({ params }: { params: Promi
         suppliers={(suppliersResult.data ?? []).map((s) => ({ id: s.id, name: s.name }))}
         mode="edit"
         expenseRequestId={id}
+        expectedVersion={detail.version}
         initialValues={{
           payeeType: detail.payeeType,
           payeeSupplierId: detail.payeeSupplierId ?? '',

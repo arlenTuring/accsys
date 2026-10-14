@@ -33,13 +33,14 @@ describe('getFinanceCaseTracking', () => {
 
     const { data: emp } = await admin
       .from('employees')
-      .select('id, name, department_id, departments!employees_department_id_fkey(code)')
-      .limit(1)
+      .select('id, name, department_id')
+      .eq('id', '20000000-0000-0000-0000-000000000001')
       .single();
     employeeAId = emp!.id;
     employeeAName = emp!.name;
     departmentAId = emp!.department_id;
-    departmentACode = (emp!.departments as unknown as { code: string }).code;
+    const { data: deptA } = await admin.from('departments').select('code').eq('id', departmentAId).single();
+    departmentACode = deptA!.code;
 
     const { data: sup } = await admin.from('suppliers').select('id').limit(1).single();
     supplierId = sup!.id;
@@ -56,7 +57,8 @@ describe('getFinanceCaseTracking', () => {
       .from('employees')
       .insert({
         employee_code: `CTQ-EMP-B-${Date.now()}`,
-        name: '簽核追蹤測試員工B',
+        // Must not contain employee A's name: the keyword filter is a substring match.
+        name: '簽核追蹤乙君',
         department_id: departmentBId,
       })
       .select()

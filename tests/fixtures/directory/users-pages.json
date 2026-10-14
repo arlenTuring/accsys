@@ -1,0 +1,17 @@
+[
+  {
+    "kind": "admin#directory#users",
+    "users": [
+      { "id": "100000000000000000001", "primaryEmail": "staff@example.test", "name": { "fullName": "測試員工" }, "suspended": false, "orgUnitPath": "/" },
+      { "id": "100000000000000000002", "primaryEmail": "manager@example.test", "name": { "fullName": "測試主管" }, "suspended": false, "orgUnitPath": "/" }
+    ],
+    "nextPageToken": "page-2"
+  },
+  {
+    "kind": "admin#directory#users",
+    "users": [
+      { "id": "100000000000000000003", "primaryEmail": "finance@example.test", "name": { "fullName": "測試財會" }, "suspended": true, "orgUnitPath": "/" },
+      { "id": "100000000000000000004", "primaryEmail": "newhire@example.test", "name": { "fullName": "新進同仁" }, "suspended": false, "orgUnitPath": "/" }
+    ]
+  }
+]

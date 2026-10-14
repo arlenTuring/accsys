@@ -24,6 +24,13 @@ describe('safeReturnTo', () => {
     '/login',
     '/auth/logout',
     '/auth/callback?code=x',
+    '/.//evil.com',
+    '/./\\evil.com',
+    '/a/..//evil.com',
+    '/%2e%2e//evil.com',
+    '/%2e//evil.com/x?y=1',
+    '/a/%2E%2E/%2E%2E//evil.com',
+    '/./auth/logout',
     `/${'a'.repeat(600)}`,
   ])('replaces %s with the default page', (input) => {
     expect(safeReturnTo(input, ORIGIN)).toBe('/dashboard');

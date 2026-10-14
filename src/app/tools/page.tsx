@@ -1,7 +1,10 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
+import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { TOOL_CATALOG } from './catalog';
 
-export default function ToolsHubPage() {
+export default async function ToolsHubPage() {
+  if (!(await getCurrentEmployee())) redirect('/login?returnTo=/tools');
   return (
     <main className="page-shell">
       <section className="mb-8">

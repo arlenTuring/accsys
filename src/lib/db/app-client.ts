@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { getSql } from '@/lib/db';
+import { errorSummary } from '@/lib/db/error-summary';
 
 export type DbError = { message: string };
 // Legacy Supabase-compatible layer (removed in P5). Rows stay loosely typed so
@@ -7,6 +8,12 @@ export type DbError = { message: string };
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- legacy compat rows, see above
 export type DbRow = Record<string, any>;
 export type DbResult<T = DbRow[]> = { data: T; error: DbError | null; count?: number | null };
+
+/** For reads where "query failed" must not look like "no rows" (e.g. an approval queue). */
+export function rowsOrThrow<T>(result: DbResult<T>): T {
+  if (result.error) throw new Error(result.error.message);
+  return result.data;
+}
 
 function ident(name: string): string {
   if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
@@ -110,7 +117,7 @@ function parseSelectList(raw: string | undefined): { columns: string[]; embeds: 
 export function toError(err: unknown): DbError {
   const ref = randomUUID().slice(0, 8);
   const pgCode = (err as { code?: unknown } | null)?.code;
-  console.error(`[db] error ref=${ref} code=${typeof pgCode === 'string' ? pgCode : 'unknown'}`, err);
+  console.error(`[db] error ref=${ref} code=${typeof pgCode === 'string' ? pgCode : 'unknown'}`, errorSummary(err));
   return { message: `database_error (ref ${ref})` };
 }
 

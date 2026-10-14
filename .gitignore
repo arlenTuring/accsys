@@ -6,6 +6,8 @@ node_modules/
 .env.*
 !.env.local.example
 data/
+deploy/secrets/
+deploy/tls/
 .worktrees/
 .superpowers/
 supabase/.branches

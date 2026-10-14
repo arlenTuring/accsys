@@ -12,11 +12,16 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      # Runtime dependencies only; dev/build tooling findings are reviewed by hand.
+      - name: No high/critical advisories in production dependencies
+        run: npm audit --omit=dev --audit-level=high
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test:unit
@@ -28,7 +33,7 @@ jobs:
     runs-on: ubuntu-24.04
     services:
       postgres:
-        image: postgres:16.15-alpine3.24
+        image: postgres:16.15-alpine3.24@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
         env:
           POSTGRES_USER: accsys_test
           POSTGRES_PASSWORD: accsys_test
@@ -44,6 +49,8 @@ jobs:
       MIGRATION_DATABASE_URL: postgres://accsys_migrator:accsys_migrator_test@127.0.0.1:5432/accsys_test
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
@@ -71,5 +78,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - run: docker build -t accsys-app:ci .
       - run: docker build --target migrator -t accsys-migrate:ci .

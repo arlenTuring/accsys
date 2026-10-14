@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { and, count, eq, sql } from 'drizzle-orm';
 import { recordAudit } from '@/lib/audit/record';
-import { canReadForm, isFormType, isUuid, type Actor } from '@/lib/authz/forms';
+import { canAttachToForm, canReadForm, isFormType, isUuid, type Actor } from '@/lib/authz/forms';
 import { getDb } from '@/lib/db';
 import { attachments } from '@/lib/db/schema';
+import { customAttachmentLimit } from '@/lib/custom-forms/attachments';
+import { FORM_TABLE } from '@/lib/procurement/form-registry';
 import { scanBytes, scannerConfig, ScannerUnavailable } from '@/lib/attachments/scan';
 import { promote, quarantineKey, readNoFollow, removeKey, writeNew } from '@/lib/attachments/storage';
 import {
@@ -34,8 +36,8 @@ export async function uploadAttachmentFor(
   file: unknown
 ): Promise<UploadResult> {
   if (!actor) return { ok: false, error: '找不到您的員工資料' };
-  if (!isFormType(formType) || !isUuid(formId) || !(await canReadForm(actor, formType, formId))) {
-    return { ok: false, error: '您沒有權限為此表單上傳附件' };
+  if (!isFormType(formType) || !isUuid(formId) || !(await canAttachToForm(actor, formType, formId))) {
+    return { ok: false, error: '只有申請人或經辦人可在尚未有人簽核或退回修改時上傳附件' };
   }
   if (!(file instanceof File)) return { ok: false, error: '請選擇檔案' };
   const size = validateAttachmentFile({ sizeBytes: file.size });
@@ -57,19 +59,22 @@ export async function uploadAttachmentFor(
   const mime = sniffAllowedType(bytes);
   if (!mime) return { ok: false, error: '僅接受 PDF、PNG、JPEG 檔案（以檔案內容判斷）' };
 
-  const db = getDb();
-  const [{ n }] = await db
-    .select({ n: count() })
-    .from(attachments)
-    .where(and(eq(attachments.formType, formType), eq(attachments.formId, formId)));
-  if (n >= MAX_ATTACHMENTS_PER_FORM) return { ok: false, error: `每張表單最多 ${MAX_ATTACHMENTS_PER_FORM} 個附件` };
-
   const id = randomUUID();
   const finalKey = `${formType}/${formId}/${randomUUID()}`;
   const fileName = sanitizeFileName(file.name, mime);
   const sha256 = createHash('sha256').update(bytes).digest('hex');
 
-  await db.transaction(async (tx) => {
+  const outcome = await getDb().transaction(async (tx) => {
+    // Serialises concurrent uploads to the same form so the limit cannot be overshot.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`attachments:${formType}:${formId}`}, 0))`);
+    // Re-checked under the form lock: an approval may have landed since the check above.
+    if (!(await canAttachToForm(actor, formType, formId, tx))) return 'forbidden' as const;
+    const [{ n }] = await tx
+      .select({ n: count() })
+      .from(attachments)
+      .where(and(eq(attachments.formType, formType), eq(attachments.formId, formId)));
+    const limit = formType === 'custom' ? await customAttachmentLimit(tx, formId) : MAX_ATTACHMENTS_PER_FORM;
+    if (n >= limit) return { full: limit };
     await tx.insert(attachments).values({
       id,
       formType,
@@ -89,7 +94,17 @@ export async function uploadAttachmentFor(
       entityId: formId,
       details: { attachmentId: id, mime, size: bytes.length, sha256 },
     });
+    // A new file changes what the next approver signs: approvals made from a page
+    // loaded before the upload fail the version check and must reload.
+    await tx.execute(
+      sql`update ${sql.identifier(FORM_TABLE[formType])} set version = version + 1, updated_at = now() where id = ${formId}`
+    );
+    return 'stored' as const;
   });
+  if (outcome === 'forbidden') return { ok: false, error: '只有申請人或經辦人可在尚未有人簽核或退回修改時上傳附件' };
+  if (typeof outcome === 'object') {
+    return { ok: false, error: outcome.full === 0 ? '這張表單沒有附件欄位' : `這張表單最多 ${outcome.full} 個附件` };
+  }
 
   await writeNew(quarantineKey(id), bytes);
   const verdict = await scanBytes(bytes, scanner);

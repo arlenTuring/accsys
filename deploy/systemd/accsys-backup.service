@@ -1,0 +1,19 @@
+# Install: copy to /etc/systemd/system/, adjust WorkingDirectory, then
+#   systemctl daemon-reload && systemctl enable --now accsys-backup.timer
+# A run that is still active blocks the next trigger, so backups never overlap.
+# Failures show in `systemctl --failed` and the journal; wire OnFailure= to the
+# company's alerting.
+[Unit]
+Description=ACCSYS logical backup (database dump + attachments)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/accsys
+ExecStart=/usr/bin/docker compose -f deploy/compose.prod.yml --env-file /etc/accsys/accsys.env run --rm backup
+# Off-host copy (company NAS / backup host); see docs/operations/backup-restore.md.
+#ExecStartPost=/etc/accsys/offhost-copy.sh
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=idle

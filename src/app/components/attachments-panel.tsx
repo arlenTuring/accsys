@@ -3,6 +3,7 @@
 import { useRef, useState } from 'react';
 import { getAttachmentDownloadUrl, uploadAttachment } from '@/lib/attachments/actions';
 import type { AttachmentRow } from '@/lib/attachments/queries';
+import { fmtFileSize } from './pending-files-field';
 
 const SCAN_LABELS: Record<string, string> = {
   pending: '掃描中',
@@ -16,10 +17,13 @@ export function AttachmentsPanel({
   formType,
   formId,
   attachments,
+  canUpload = true,
 }: {
   formType: string;
   formId: string;
   attachments: AttachmentRow[];
+  /** Display only; uploads are authorized on the server either way. */
+  canUpload?: boolean;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -81,7 +85,7 @@ export function AttachmentsPanel({
                 </button>
               )}
               <span className="text-gray-400">
-                {(a.fileSizeBytes / 1024).toFixed(0)} KB｜{a.uploadedByName}
+                {fmtFileSize(a.fileSizeBytes)}｜{a.uploadedByName}
               </span>
               {SCAN_LABELS[a.scanStatus] && (
                 <span className="rounded bg-amber-50 px-2 py-0.5 text-xs text-amber-700">
@@ -92,17 +96,19 @@ export function AttachmentsPanel({
           ))}
         </ul>
       )}
-      <div className="flex items-center gap-2">
-        <input ref={fileInputRef} type="file" accept=".pdf,.png,.jpg,.jpeg" className="text-sm" />
-        <button
-          type="button"
-          onClick={onUpload}
-          disabled={uploading}
-          className="rounded border px-3 py-1 text-sm disabled:opacity-50"
-        >
-          {uploading ? '上傳中…' : '上傳附件'}
-        </button>
-      </div>
+      {canUpload && (
+        <div className="flex items-center gap-2">
+          <input ref={fileInputRef} type="file" accept=".pdf,.png,.jpg,.jpeg" className="text-sm" />
+          <button
+            type="button"
+            onClick={onUpload}
+            disabled={uploading}
+            className="rounded border px-3 py-1 text-sm disabled:opacity-50"
+          >
+            {uploading ? '上傳中…' : '上傳附件'}
+          </button>
+        </div>
+      )}
     </section>
   );
 }

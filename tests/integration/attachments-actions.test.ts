@@ -94,7 +94,7 @@ describe('attachments actions', () => {
       new File([new TextEncoder().encode('%PDF-1.4\n%%EOF\n')], 'quote.pdf', { type: 'application/pdf' })
     );
     const result = await uploadAttachment('purchase_order', orderId, formData);
-    expect(result).toMatchObject({ ok: false, error: '您沒有權限為此表單上傳附件' });
+    expect(result).toMatchObject({ ok: false, error: '只有申請人或經辦人可在尚未有人簽核或退回修改時上傳附件' });
   });
 
   it('rejects an unsupported file type', async () => {

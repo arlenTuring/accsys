@@ -1,47 +1,40 @@
 import Link from 'next/link';
+import { STATUS_BADGE, STATUS_LABELS } from '@/app/components/form-labels';
 import { getMyExpenseRequests } from '@/lib/expense-requests/queries';
-
-const STATUS_LABELS: Record<string, string> = {
-  pending_approval: '簽核中',
-  approved: '已核准',
-  returned: '已退回（待修改）',
-};
 
 export default async function ExpenseRequestsPage() {
   const expenseRequests = await getMyExpenseRequests();
   return (
-    <main className="mx-auto max-w-4xl p-8">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">我的費用申請單</h1>
-        <Link href="/expense-requests/new" className="rounded bg-blue-600 px-3 py-1 text-sm text-white">
-          + 新增費用申請單
+    <main className="page-shell">
+      <section className="mb-6 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="section-title">採購流程</p>
+          <h1 className="page-title">我的採購付款</h1>
+          <p className="page-subtitle">
+            費用申請單(採購付款)：驗收完成或預付款時，向供應商申請付款。不經採購的一般費用請改用「費用報支」分類下的表單。
+          </p>
+        </div>
+        <Link href="/expense-requests/new" className="btn-primary">
+          + 新增採購付款
         </Link>
-      </div>
+      </section>
       {expenseRequests.length === 0 ? (
-        <p className="text-gray-500">尚無費用申請單。</p>
+        <div className="card text-sm text-td-muted">尚無採購付款申請。</div>
       ) : (
-        <table className="w-full border text-sm">
-          <thead>
-            <tr className="bg-gray-100">
-              <th className="border p-2">案件單號</th>
-              <th className="border p-2">狀態</th>
-              <th className="border p-2">總計</th>
-            </tr>
-          </thead>
-          <tbody>
-            {expenseRequests.map((e) => (
-              <tr key={e.id}>
-                <td className="border p-2">
-                  <Link href={`/expense-requests/${e.id}`} className="text-blue-600 underline">
-                    {e.caseNumber}
-                  </Link>
-                </td>
-                <td className="border p-2">{STATUS_LABELS[e.status] ?? e.status}</td>
-                <td className="border p-2 text-right">{e.totalAmount.toLocaleString()}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <ul className="card divide-y divide-td-border !p-0">
+          {expenseRequests.map((e) => (
+            <li key={e.id}>
+              <Link
+                href={`/expense-requests/${e.id}`}
+                className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 transition hover:bg-td-blue-light/40"
+              >
+                <span className="mono-case">{e.caseNumber}</span>
+                <span className={STATUS_BADGE[e.status] ?? 'badge-withdrawn'}>{STATUS_LABELS[e.status] ?? e.status}</span>
+                <span className="text-sm font-medium text-td-blue-dark">NT$ {e.totalAmount.toLocaleString()}</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
       )}
     </main>
   );

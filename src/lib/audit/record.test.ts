@@ -17,4 +17,17 @@ describe('redactAuditDetails', () => {
       list: [1, 2],
     });
   });
+
+  it('also redacts inside arrays (previous rows snapshotted on edit/resubmit)', () => {
+    const at = new Date('2026-10-13T00:00:00Z');
+    expect(
+      redactAuditDetails({
+        previousItems: [{ id: 'r1', bankAccount: '0123456789', updatedAt: at, items: [{ bank_account: '1', amount: 5 }] }],
+        nestedLists: [[{ password: 'p' }]],
+      })
+    ).toEqual({
+      previousItems: [{ id: 'r1', bankAccount: '[redacted]', updatedAt: at, items: [{ bank_account: '[redacted]', amount: 5 }] }],
+      nestedLists: [[{ password: '[redacted]' }]],
+    });
+  });
 });

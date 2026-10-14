@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { ApprovalTimeline } from '@/app/components/approval-timeline';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getPurchaseRequestDetail } from '@/lib/purchase-requests/queries';
 import { withdrawPurchaseRequest } from '@/lib/purchase-requests/actions';
@@ -11,17 +12,6 @@ const STATUS_LABELS: Record<string, string> = {
   approved: '已核准',
   returned: '已退回（待修改）',
   withdrawn: '已撤回',
-};
-const ROLE_LABELS: Record<string, string> = {
-  department_manager: '申請單位主管',
-  budget_owner: '預算負責人',
-  general_manager: '總經理',
-  chairman: '董事長',
-};
-const STEP_STATUS_LABELS: Record<string, string> = {
-  pending: '待簽核',
-  approved: '已核准',
-  returned: '已退回',
 };
 
 export default async function RequestDetailPage({
@@ -87,30 +77,9 @@ export default async function RequestDetailPage({
         </tbody>
       </table>
 
-      <section className="mb-4">
-        <h2 className="mb-2 font-semibold">簽核流程</h2>
-        <ol className="space-y-1 text-sm">
-          {detail.steps.map((s) => (
-            <li key={s.stepOrder} className="flex gap-2">
-              <span className="text-gray-500">{s.stepOrder}.</span>
-              <span>{ROLE_LABELS[s.approverRole] ?? s.approverRole}</span>
-              <span>{s.approverName}</span>
-              <span
-                className={
-                  s.status === 'approved'
-                    ? 'text-green-600'
-                    : s.status === 'returned'
-                      ? 'text-red-600'
-                      : 'text-gray-500'
-                }
-              >
-                {STEP_STATUS_LABELS[s.status] ?? s.status}
-              </span>
-              {s.comment && <span className="text-gray-500">— {s.comment}</span>}
-            </li>
-          ))}
-        </ol>
-      </section>
+      <div className="mb-4">
+        <ApprovalTimeline formType="purchase_request" formId={detail.id} />
+      </div>
 
       {detail.status === 'approved' && (
         <p>

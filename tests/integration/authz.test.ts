@@ -207,7 +207,7 @@ describe('actions refuse forged or foreign inputs', () => {
     const { approveExpenseRequestStep } = await import('@/lib/expense-requests/actions');
     for (const who of [outsider, admin, finance, applicant]) {
       as(who);
-      const result = await approveExpenseRequestStep(kase.erId);
+      const result = await approveExpenseRequestStep(kase.erId, 1);
       expect(result.ok).toBe(false);
     }
     const [{ status }] = await getSql()`select status from expense_requests where id = ${kase.erId}`;
@@ -249,6 +249,7 @@ function fakeClamd(verdict: 'clean' | 'infected' | 'hang'): Promise<{ port: numb
 }
 
 describe('attachments', () => {
+  const refusedUpload = { ok: false, error: '只有申請人或經辦人可在尚未有人簽核或退回修改時上傳附件' };
   let root: string;
 
   beforeAll(async () => {
@@ -276,11 +277,38 @@ describe('attachments', () => {
     return GET(new Request(`https://accsys.test/api/attachments/${id}`), { params: Promise.resolve({ id }) });
   }
 
-  it('non-participants cannot upload; participants can (dev without scanner = unscanned)', async () => {
+  it('only the applicant (or finance / admin) can upload; approvers only read (dev without scanner = unscanned)', async () => {
     delete process.env.ATTACHMENT_SCAN;
-    expect(await upload(outsider, pdfFile())).toMatchObject({ ok: false, error: '您沒有權限為此表單上傳附件' });
-    const ok = await upload(approver, pdfFile());
+    expect(await upload(outsider, pdfFile())).toMatchObject(refusedUpload);
+    expect(await upload(approver, pdfFile())).toMatchObject(refusedUpload);
+    const ok = await upload(applicant, pdfFile());
     expect(ok).toMatchObject({ ok: true, scanStatus: 'unscanned' });
+  });
+
+  it('an upload bumps the form version so a page loaded before it cannot approve unseen files', async () => {
+    delete process.env.ATTACHMENT_SCAN;
+    const fresh = await makeCase(applicant, approver);
+    const q = getSql();
+    const versionOf = async () => Number((await q`select version from expense_requests where id = ${fresh.erId}`)[0].version);
+    const before = await versionOf();
+    expect((await upload(applicant, pdfFile(), 'expense_request', fresh.erId)).ok).toBe(true);
+    expect(await versionOf()).toBe(before + 1);
+  });
+
+  it('the applicant cannot add files once someone has approved, until the form is returned; finance still can', async () => {
+    delete process.env.ATTACHMENT_SCAN;
+    const midway = await makeCase(applicant, approver);
+    const q = getSql();
+    await q`update approval_steps set status = 'approved', acted_at = now()
+            where form_type = 'expense_request' and form_id = ${midway.erId}`;
+    await q`insert into approval_steps (form_type, form_id, step_order, approver_employee_id, approver_role)
+            values ('expense_request', ${midway.erId}, 2, ${admin.id}, 'general_manager')`;
+    await q`update expense_requests set current_step_order = 2 where id = ${midway.erId}`;
+    expect(await upload(applicant, pdfFile(), 'expense_request', midway.erId)).toMatchObject(refusedUpload);
+    expect((await upload(finance, pdfFile(), 'expense_request', midway.erId)).ok).toBe(true);
+
+    await q`update expense_requests set status = 'returned', current_step_order = null where id = ${midway.erId}`;
+    expect((await upload(applicant, pdfFile(), 'expense_request', midway.erId)).ok).toBe(true);
   });
 
   it('stores a server-generated key; a traversal file name is only a display name', async () => {

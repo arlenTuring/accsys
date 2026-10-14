@@ -6,6 +6,7 @@ import { getEligiblePurchaseOrdersForExpenseRequest } from '@/lib/expense-reques
 import { getBudgetCodeList } from '@/lib/budget-codes/queries';
 import { ExpenseRequestForm } from './expense-request-form';
 import { StandaloneExpenseRequestForm } from './standalone-expense-request-form';
+import { SourcePicker } from '@/app/components/source-picker';
 
 export default async function NewExpenseRequestPage({
   searchParams,
@@ -37,29 +38,19 @@ export default async function NewExpenseRequestPage({
 
   if (!orderId) {
     return (
-      <main className="mx-auto max-w-2xl p-8">
-        <h1 className="mb-6 text-2xl font-bold">新增費用申請單</h1>
-        <p className="mb-4">
-          <Link href="/expense-requests/new?mode=standalone" className="text-blue-600 underline">
-            免走採購流程建立費用申請單（金額低於 1 萬元）
+      <SourcePicker
+        title="新增費用申請單(採購付款)"
+        hint="請選擇要申請付款的採購單（需已完成驗收，或付款條件為預付款）。"
+        empty="目前沒有已核准、尚未建立付款申請的採購單（需已完成驗收，或付款條件為預付款）。"
+        backHref="/expense-requests"
+        backLabel="我的採購付款"
+        options={eligible.map((o) => ({ href: `/expense-requests/new?orderId=${o.id}`, label: `${o.caseNumber}（${o.paymentTerms}）` }))}
+        footer={
+          <Link href="/expense-requests/new?mode=standalone" className="text-sm font-semibold text-td-blue hover:underline">
+            免走採購流程建立費用申請單（金額低於 1 萬元）→
           </Link>
-        </p>
-        {eligible.length === 0 ? (
-          <p className="text-gray-500">
-            目前沒有已核准、尚未建立費用申請單的採購單（需已完成驗收，或付款條件為預付款）。
-          </p>
-        ) : (
-          <ul className="space-y-2">
-            {eligible.map((o) => (
-              <li key={o.id}>
-                <a href={`/expense-requests/new?orderId=${o.id}`} className="text-blue-600 underline">
-                  {o.caseNumber}（{o.paymentTerms}）
-                </a>
-              </li>
-            ))}
-          </ul>
-        )}
-      </main>
+        }
+      />
     );
   }
 

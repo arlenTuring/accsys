@@ -11,6 +11,7 @@ export function ExpenseRequestForm({
   mode = 'create',
   expenseRequestId,
   initialValues,
+  expectedVersion,
 }: {
   purchaseOrderId: string;
   sourceItems: { id: string; description: string; amount: number }[];
@@ -28,8 +29,12 @@ export function ExpenseRequestForm({
     expectedPaymentDate: string;
     included: Record<string, boolean>;
   };
+  /** Version the edit started from; the server refuses stale edits. */
+  expectedVersion?: number;
 }) {
   const router = useRouter();
+  // One key per form instance: a double submit or retry cannot create a second request.
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [payeeType, setPayeeType] = useState<'employee' | 'supplier'>(initialValues?.payeeType ?? 'supplier');
   const [payeeSupplierId, setPayeeSupplierId] = useState(initialValues?.payeeSupplierId ?? suppliers[0]?.id ?? '');
   const [paymentMethod, setPaymentMethod] = useState(initialValues?.paymentMethod ?? '匯款');
@@ -62,8 +67,8 @@ export function ExpenseRequestForm({
     };
     const result =
       mode === 'edit' && expenseRequestId
-        ? await updateExpenseRequest(expenseRequestId, payload)
-        : await createExpenseRequest({ purchaseOrderId, ...payload });
+        ? await updateExpenseRequest(expenseRequestId, { ...payload, expectedVersion: expectedVersion ?? 0 })
+        : await createExpenseRequest({ purchaseOrderId, ...payload, idempotencyKey });
     setSubmitting(false);
     if (result.ok) {
       router.push(

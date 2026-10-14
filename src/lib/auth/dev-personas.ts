@@ -1,8 +1,8 @@
 export type DevPersonaId = 'staff' | 'manager' | 'finance' | 'admin';
 
+/** Display data only; the login emails stay server-side (dev-persona-emails.ts). */
 export type DevPersona = {
   id: DevPersonaId;
-  email: string;
   label: string;
   name: string;
   title: string;
@@ -15,7 +15,6 @@ export type DevPersona = {
 export const DEV_PERSONAS: DevPersona[] = [
   {
     id: 'staff',
-    email: 'staff@turing-drive.com',
     label: '一般員工',
     name: '林小明',
     title: '軟體工程師',
@@ -26,7 +25,6 @@ export const DEV_PERSONAS: DevPersona[] = [
   },
   {
     id: 'manager',
-    email: 'mgr@turing-drive.com',
     label: '部門主管',
     name: '王主管',
     title: '研發部經理',
@@ -37,7 +35,6 @@ export const DEV_PERSONAS: DevPersona[] = [
   },
   {
     id: 'finance',
-    email: 'finance@turing-drive.com',
     label: '財會人員',
     name: '陳財會',
     title: '財務專員',
@@ -48,7 +45,6 @@ export const DEV_PERSONAS: DevPersona[] = [
   },
   {
     id: 'admin',
-    email: 'dev@turing-drive.com',
     label: '系統管理員',
     name: '本機開發者',
     title: '資訊管理',
@@ -59,23 +55,48 @@ export const DEV_PERSONAS: DevPersona[] = [
   },
 ];
 
-export function getDevPersonaEmail(id: string | null | undefined): string | null {
-  if (!id) return null;
-  return DEV_PERSONAS.find((p) => p.id === id)?.email ?? null;
-}
-
 /** UI hint only (inlined into client bundles). Never use this to authorize. */
 export function isDevLoginEnabled(): boolean {
   return process.env.NEXT_PUBLIC_DEV_LOGIN === 'true';
 }
 
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+function isLoopbackOrigin(raw: string | undefined): boolean {
+  if (!raw) return false;
+  try {
+    return LOOPBACK_HOSTS.has(new URL(raw.trim()).hostname);
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Server-side gate for /auth/dev. Requires `next dev` (NODE_ENV=development)
- * AND the explicit opt-in flag, so a test/staging/production build or a dev
- * server without the flag can never hand out sessions without Google login.
+ * The request's Host header names a loopback host. Blocks DNS rebinding and a
+ * dev server opened on a LAN address; a client that forges Host itself is not
+ * stopped by this, only by the server listening on loopback.
+ */
+export function isLoopbackHostHeader(host: string | null): boolean {
+  if (!host) return false;
+  try {
+    return LOOPBACK_HOSTS.has(new URL(`http://${host}`).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Server-side gate for /auth/dev. Requires `next dev` (NODE_ENV=development),
+ * the explicit opt-in flag AND a loopback APP_ORIGIN, so a test/staging/
+ * production build, a dev server without the flag, or a dev server published
+ * under a shared hostname can never hand out sessions without Google login.
  */
 export function isDevLoginAllowed(
-  env: { NODE_ENV?: string; NEXT_PUBLIC_DEV_LOGIN?: string } = process.env
+  env: { NODE_ENV?: string; NEXT_PUBLIC_DEV_LOGIN?: string; APP_ORIGIN?: string } = process.env
 ): boolean {
-  return env.NODE_ENV === 'development' && env.NEXT_PUBLIC_DEV_LOGIN === 'true';
+  return (
+    env.NODE_ENV === 'development' &&
+    env.NEXT_PUBLIC_DEV_LOGIN === 'true' &&
+    isLoopbackOrigin(env.APP_ORIGIN)
+  );
 }

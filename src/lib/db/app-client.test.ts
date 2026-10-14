@@ -15,8 +15,9 @@ describe('toError', () => {
 
     expect(result.message).toMatch(/^database_error \(ref [0-9a-f]{8}\)$/);
     expect(result.message).not.toContain('google_email');
-    // Full detail stays in the server log, correlated by the same reference.
+    // The server log keeps the code and identifiers under the same reference, not row values.
     const ref = result.message.match(/ref ([0-9a-f]{8})/)![1];
-    expect(log).toHaveBeenCalledWith(expect.stringContaining(`ref=${ref} code=23505`), pgError);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining(`ref=${ref} code=23505`), { pg_code: '23505' });
+    expect(JSON.stringify(log.mock.calls)).not.toContain('a@x.test');
   });
 });

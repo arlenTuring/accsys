@@ -91,7 +91,7 @@ describe('expense request queries', () => {
 
     currentEmployee.value = { id: applicantId };
     const actions = await import('@/lib/expense-requests/actions');
-    const created = await actions.createExpenseRequest({
+    const created = await actions.createExpenseRequest({ idempotencyKey: crypto.randomUUID(),
       purchaseOrderId: orderId,
       payeeType: 'supplier',
       payeeSupplierId: supplierId,

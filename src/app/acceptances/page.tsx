@@ -1,47 +1,38 @@
 import Link from 'next/link';
+import { STATUS_BADGE, STATUS_LABELS } from '@/app/components/form-labels';
 import { getMyAcceptances } from '@/lib/acceptances/queries';
-
-const STATUS_LABELS: Record<string, string> = {
-  pending_approval: '簽核中',
-  approved: '已核准',
-  returned: '已退回（待修改）',
-};
 
 export default async function AcceptancesPage() {
   const acceptances = await getMyAcceptances();
   return (
-    <main className="mx-auto max-w-4xl p-8">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">我的驗收單</h1>
-        <Link href="/acceptances/new" className="rounded bg-blue-600 px-3 py-1 text-sm text-white">
+    <main className="page-shell">
+      <section className="mb-6 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="section-title">採購流程</p>
+          <h1 className="page-title">我的驗收單</h1>
+          <p className="page-subtitle">收到貨品或服務後，針對已核准的採購單辦理驗收。</p>
+        </div>
+        <Link href="/acceptances/new" className="btn-primary">
           + 新增驗收單
         </Link>
-      </div>
+      </section>
       {acceptances.length === 0 ? (
-        <p className="text-gray-500">尚無驗收單。</p>
+        <div className="card text-sm text-td-muted">尚無驗收單。</div>
       ) : (
-        <table className="w-full border text-sm">
-          <thead>
-            <tr className="bg-gray-100">
-              <th className="border p-2">案件單號</th>
-              <th className="border p-2">狀態</th>
-              <th className="border p-2">總計</th>
-            </tr>
-          </thead>
-          <tbody>
-            {acceptances.map((a) => (
-              <tr key={a.id}>
-                <td className="border p-2">
-                  <Link href={`/acceptances/${a.id}`} className="text-blue-600 underline">
-                    {a.caseNumber}
-                  </Link>
-                </td>
-                <td className="border p-2">{STATUS_LABELS[a.status] ?? a.status}</td>
-                <td className="border p-2 text-right">{a.totalAmount.toLocaleString()}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <ul className="card divide-y divide-td-border !p-0">
+          {acceptances.map((a) => (
+            <li key={a.id}>
+              <Link
+                href={`/acceptances/${a.id}`}
+                className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 transition hover:bg-td-blue-light/40"
+              >
+                <span className="mono-case">{a.caseNumber}</span>
+                <span className={STATUS_BADGE[a.status] ?? 'badge-withdrawn'}>{STATUS_LABELS[a.status] ?? a.status}</span>
+                <span className="text-sm font-medium text-td-blue-dark">NT$ {a.totalAmount.toLocaleString()}</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
       )}
     </main>
   );

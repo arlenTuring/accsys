@@ -1,0 +1,82 @@
+# Rendered at container start by the nginx image (envsubst, ACCSYS_* only).
+# The app is the only upstream; attachments are streamed by the app after an
+# authorization check, so there is deliberately no `alias`/`root` for files.
+
+server_tokens off;
+
+# Path without the query string: OAuth callbacks carry `code`/`state`.
+# Set per server block so the image's default `main` log is not inherited.
+log_format accsys '$remote_addr - [$time_iso8601] "$request_method $uri $server_protocol" '
+                  '$status $body_bytes_sent $request_time "$http_user_agent"';
+
+limit_req_zone $binary_remote_addr zone=accsys_auth:10m rate=30r/m;
+
+# Docker's DNS; re-resolved so a recreated app container is picked up.
+resolver 127.0.0.11 valid=10s ipv6=off;
+
+upstream accsys_app {
+    zone accsys_app 64k;
+    server app:3000 resolve;
+    keepalive 16;
+}
+
+# IP scans and unknown Host / SNI names get no answer.
+server {
+    listen 8080 default_server;
+    listen 8443 ssl default_server;
+    ssl_reject_handshake on;
+    access_log /dev/stdout accsys;
+    return 444;
+}
+
+server {
+    listen 8080;
+    server_name ${ACCSYS_FQDN};
+    access_log /dev/stdout accsys;
+    return 301 https://${ACCSYS_FQDN}${ACCSYS_HTTPS_SUFFIX}$request_uri;
+}
+
+server {
+    listen 8443 ssl;
+    http2 on;
+    server_name ${ACCSYS_FQDN};
+    access_log /dev/stdout accsys;
+
+    ssl_certificate     /etc/accsys/tls/fullchain.pem;
+    ssl_certificate_key /etc/accsys/tls/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:accsys_tls:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # Server Actions accept up to 11 MB (next.config.ts).
+    client_max_body_size 12m;
+    client_header_timeout 15s;
+    client_body_timeout 30s;
+    send_timeout 60s;
+    keepalive_timeout 30s;
+
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    # Overwrite, never append: whatever the client sent is discarded.
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-Host ${ACCSYS_FQDN}${ACCSYS_HTTPS_SUFFIX};
+    proxy_set_header Forwarded "";
+    proxy_read_timeout 60s;
+    # Downloads stream from the app with back-pressure instead of spilling to /tmp.
+    proxy_max_temp_file_size 0;
+
+    location /auth/ {
+        limit_req zone=accsys_auth burst=20 nodelay;
+        limit_req_status 429;
+        proxy_pass http://accsys_app;
+    }
+
+    location / {
+        proxy_pass http://accsys_app;
+    }
+}

@@ -84,11 +84,10 @@ MIGRATION_DATABASE_URL=... npm run db:migrate      # 套用 0002 以後
 
 資料庫錯誤訊息（可能含 SQL、約束名稱、參數值）不回傳給呼叫端：`src/lib/db/app-client.ts` 只回 `database_error (ref xxxxxxxx)`，完整內容以同一個 ref 記在伺服器 log。
 
-## 備份與還原（暫行，尚未演練）
+## 備份與還原
 
-```bash
-pg_dump "postgres://accsys_backup:***@HOST/accsys" -Fc -f accsys.dump
-createdb -O accsys_owner accsys_restore && pg_restore -d accsys_restore --no-owner --role=accsys_owner accsys.dump
-```
+正式環境以 `deploy/compose.prod.yml` 的 `backup` 工作（`accsys_backup` 唯讀帳號）每日產生 DB dump + 附件 tar + SHA256SUMS，`deploy/backup/restore-drill.sh` 在無網路的拋棄式容器還原並核對權限、audit trigger 與附件 checksum。流程、異機保存與災難還原見 [docs/operations/backup-restore.md](../docs/operations/backup-restore.md)。
 
-完整的備份（WAL／PITR、異機保存、還原演練）屬 P7。
+還原順序：先建立四個角色 → `pg_restore --exit-on-error`（保留擁有者與權限）→ 重新套用 `db/roles.sql`（資料庫層級權限與角色設定不在 dump 裡）。
+
+WAL／PITR 尚未啟用（目前 RPO 約 24 小時）。

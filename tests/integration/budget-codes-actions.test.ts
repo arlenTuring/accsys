@@ -141,7 +141,8 @@ describe('budget-codes actions', () => {
       department_id: departmentId,
       project_id: null,
       owner_employee_id: managerId,
-      annual_budget_amount: 500000,
+      // numeric(14,2) comes back as an exact decimal string, never a float.
+      annual_budget_amount: '500000.00',
     });
   });
 
@@ -287,7 +288,7 @@ describe('budget-codes actions', () => {
       .select('category, annual_budget_amount')
       .eq('code', code)
       .single();
-    expect(row).toEqual({ category: '租金支出', annual_budget_amount: 2000 });
+    expect(row).toEqual({ category: '租金支出', annual_budget_amount: '2000.00' });
   });
 
   it('rejects delete from a non-finance employee', async () => {
@@ -433,5 +434,53 @@ describe('budget-codes actions', () => {
     const formData = new FormData();
     const result = await importBudgetCodesFromExcel(formData);
     expect(result).toEqual({ ok: false, error: '請選擇檔案' });
+  });
+
+  it('refuses a disabled owner and malformed input, and audits every change', async () => {
+    currentEmployee.value = { id: financeEmployeeId, role: 'finance' };
+    const { upsertBudgetCode, deleteBudgetCode } = await import('@/lib/budget-codes/actions');
+    const base = {
+      code: `BCT-AUDIT-${Date.now()}`,
+      departmentCode,
+      projectCode: null,
+      category: '人事費',
+      fiscalYear: '115',
+      annualBudgetAmount: 1000,
+      ownerEmployeeCode: null,
+    };
+
+    await admin
+      .from('employees')
+      .update({ access_enabled: false, disabled_at: new Date().toISOString(), disabled_reason: '測試停用' })
+      .eq('id', customOwnerId);
+    try {
+      const refused = await upsertBudgetCode({ ...base, ownerEmployeeCode: customOwnerCode });
+      expect(refused).toEqual({ ok: false, error: `負責人工號「${customOwnerCode}」的帳號已停用` });
+    } finally {
+      await admin
+        .from('employees')
+        .update({ access_enabled: true, disabled_at: null, disabled_reason: null })
+        .eq('id', customOwnerId);
+    }
+    expect(await upsertBudgetCode({ ...base, code: 123 as never })).toEqual({ ok: false, error: '欄位格式不正確或過長' });
+    expect(await upsertBudgetCode({ ...base, category: 'x'.repeat(101) })).toEqual({ ok: false, error: '欄位格式不正確或過長' });
+    expect(await upsertBudgetCode({ ...base, annualBudgetAmount: Infinity })).toEqual({ ok: false, error: '年度預算金額必須為正數' });
+    expect(await deleteBudgetCode('not-a-uuid')).toEqual({ ok: false, error: '找不到這個預算編號' });
+
+    const created = await upsertBudgetCode(base);
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const updated = await upsertBudgetCode({ ...base, ownerEmployeeCode: customOwnerCode });
+    expect(updated.ok).toBe(true);
+    expect((await deleteBudgetCode(created.budgetCodeId)).ok).toBe(true);
+
+    const { data: events } = await admin
+      .from('audit_events')
+      .select('action, actor_employee_id, details')
+      .eq('entity_id', created.budgetCodeId)
+      .order('id');
+    expect(events!.map((e) => e.action)).toEqual(['budget_code.created', 'budget_code.updated', 'budget_code.deleted']);
+    expect(events!.every((e) => e.actor_employee_id === financeEmployeeId)).toBe(true);
+    expect(events![1].details.after.owner_employee_id).toBe(customOwnerId);
   });
 });

@@ -14,11 +14,19 @@ export async function sendEmail(message: EmailMessage): Promise<void> {
   const pass = getRequiredEnv('SMTP_PASSWORD');
   const from = getRequiredEnv('SMTP_FROM');
 
+  // STARTTLS is mandatory: without it a network attacker could strip TLS and
+  // read SMTP_PASSWORD. Timeouts keep a hanging server from stalling the
+  // request that queued the mail (sent after commit, inside the request).
   const transporter = nodemailer.createTransport({
     host,
     port,
     secure: port === 465,
+    requireTLS: port !== 465,
+    tls: { minVersion: 'TLSv1.2' },
     auth: { user, pass },
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
   });
 
   await transporter.sendMail({

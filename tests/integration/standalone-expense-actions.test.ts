@@ -102,7 +102,7 @@ describe('createStandaloneExpenseRequest', () => {
   it('rejects a total amount at or above the 10000 threshold', async () => {
     currentEmployee.value = { id: applicantId, role: 'staff', departmentId };
     const { createStandaloneExpenseRequest } = await import('@/lib/expense-requests/actions');
-    const result = await createStandaloneExpenseRequest({
+    const result = await createStandaloneExpenseRequest({ idempotencyKey: crypto.randomUUID(),
       budgetCodeId,
       payeeType: 'employee',
       payeeSupplierId: null,
@@ -114,7 +114,7 @@ describe('createStandaloneExpenseRequest', () => {
       expectedPaymentDate: '2026-08-01',
       items: [{ description: '測試項目', amount: 10000 }],
     });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: false,
       error: '免走採購流程的費用申請單總金額須低於 NT$ 10,000，請改用一般採購流程建立',
     });
@@ -123,7 +123,7 @@ describe('createStandaloneExpenseRequest', () => {
   it('creates a standalone expense request under the threshold with its own new case', async () => {
     currentEmployee.value = { id: applicantId, role: 'staff', departmentId };
     const { createStandaloneExpenseRequest } = await import('@/lib/expense-requests/actions');
-    const result = await createStandaloneExpenseRequest({
+    const result = await createStandaloneExpenseRequest({ idempotencyKey: crypto.randomUUID(),
       budgetCodeId,
       payeeType: 'employee',
       payeeSupplierId: null,

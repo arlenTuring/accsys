@@ -1,12 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import { recordAudit } from '@/lib/audit/record';
 import { CHAIRMAN_THRESHOLD, generateApprovalChain, type ApprovalChainStep } from '@/lib/approval/chain';
+import type { ResolvedStep } from '@/lib/approval/flow/types';
 import { getDb, type Db } from '@/lib/db';
-import { approvalSteps, departments, employees, idempotencyKeys, notifications } from '@/lib/db/schema';
+import { errorSummary } from '@/lib/db/error-summary';
+import { approvalSteps, departments, employeeIdentities, employees, idempotencyKeys, notifications } from '@/lib/db/schema';
 import { sendEmail } from '@/lib/email/send';
 import { centsToNumber, type Cents } from '@/lib/money';
-import { FORM_LABELS, FORM_TABLE, type FormType } from '@/lib/procurement/form-registry';
+import { FORM_LABELS, FORM_TABLE, type FormType, type SealFormType } from '@/lib/procurement/form-registry';
 
 /**
  * Transaction building blocks shared by the four form modules. Each module's
@@ -63,7 +65,7 @@ export async function runInTransaction<T extends { ok: true }>(
   } catch (err) {
     if (err instanceof Abort) return err.failure;
     const ref = randomUUID().slice(0, 8);
-    console.error(`[workflow] ${label} failed ref=${ref}`, err);
+    console.error(`[workflow] ${label} failed ref=${ref}`, errorSummary(err));
     return fail('unavailable', `系統暫時無法處理，請稍後再試（參考碼 ${ref}）`);
   }
   await deliverOutbox(outbox);
@@ -73,11 +75,15 @@ export async function runInTransaction<T extends { ok: true }>(
 async function deliverOutbox(outbox: Outbox): Promise<void> {
   if (outbox.length === 0 || !process.env.SMTP_HOST) return;
   const ids = [...new Set(outbox.map((m) => m.recipientEmployeeId))];
+  // The bound Google identity's address follows Workspace renames (login and
+  // directory sync update it); employees.google_email is only the original
+  // registration value. Disabled accounts get no mail.
   const rows = await getDb()
-    .select({ id: employees.id, email: employees.googleEmail })
+    .select({ id: employees.id, current: employeeIdentities.email, registered: employees.googleEmail })
     .from(employees)
-    .where(inArray(employees.id, ids));
-  const emailOf = new Map(rows.map((r) => [r.id, r.email]));
+    .leftJoin(employeeIdentities, and(eq(employeeIdentities.employeeId, employees.id), isNull(employeeIdentities.revokedAt)))
+    .where(and(inArray(employees.id, ids), eq(employees.accessEnabled, true)));
+  const emailOf = new Map(rows.map((r) => [r.id, r.current ?? r.registered]));
   for (const m of outbox) {
     const to = emailOf.get(m.recipientEmployeeId);
     if (!to) continue;
@@ -98,10 +104,26 @@ export type LockedForm = {
   procurementCaseId: string;
   caseNumber: string;
   departmentId: string;
-  budgetOwnerEmployeeId: string;
+  budgetOwnerEmployeeId: string | null;
+  /** First step a person signs (steps before it were signed or skipped by the system); null without steps. */
+  firstHumanStepOrder: number | null;
+  /** Designer forms: the definition's name (messages use it instead of the generic label). */
+  formLabel: string | null;
 };
 
+const labelOf = (formType: FormType, form: LockedForm) => form.formLabel ?? FORM_LABELS[formType];
+
+/** Forms without a budget source; every other form header has budget_owner_employee_id. */
+type UnbudgetedFormType = SealFormType | 'asset_transfer';
+export type BudgetedLockedForm = LockedForm & { budgetOwnerEmployeeId: string };
+
 /** SELECT ... FOR UPDATE of one form header (table name from a fixed allowlist). */
+export async function lockForm(
+  tx: Tx,
+  formType: Exclude<FormType, UnbudgetedFormType>,
+  formId: string
+): Promise<BudgetedLockedForm | null>;
+export async function lockForm(tx: Tx, formType: FormType, formId: string): Promise<LockedForm | null>;
 export async function lockForm(tx: Tx, formType: FormType, formId: string): Promise<LockedForm | null> {
   const table = FORM_TABLE[formType];
   const rows = await tx.execute<{
@@ -113,10 +135,18 @@ export async function lockForm(tx: Tx, formType: FormType, formId: string): Prom
     procurement_case_id: string;
     case_number: string;
     department_id: string;
-    budget_owner_employee_id: string;
+    budget_owner_employee_id: string | null;
+    first_human_step_order: number | null;
+    form_label: string | null;
   }>(sql`
     select f.id, f.applicant_employee_id, f.status, f.current_step_order, f.version, f.procurement_case_id,
-           c.case_number, f.department_id, f.budget_owner_employee_id
+           -- designer forms are known by their own form number
+           coalesce(to_jsonb(f) ->> 'form_number', c.case_number) as case_number, f.department_id,
+           to_jsonb(f) ->> 'budget_owner_employee_id' as budget_owner_employee_id, -- not every form has one
+           (select min(s.step_order) from approval_steps s
+             where s.form_type = ${formType} and s.form_id = f.id
+               and s.status not in ('auto_approved', 'skipped')) as first_human_step_order,
+           (select d.name from form_definitions d where d.id = (to_jsonb(f) ->> 'definition_id')::uuid) as form_label
       from ${sql.identifier(table)} f
       join procurement_cases c on c.id = f.procurement_case_id
      where f.id = ${formId}
@@ -124,6 +154,7 @@ export async function lockForm(tx: Tx, formType: FormType, formId: string): Prom
   const r = rows[0];
   if (!r) return null;
   return {
+    firstHumanStepOrder: r.first_human_step_order === null ? null : Number(r.first_human_step_order),
     id: r.id,
     applicantEmployeeId: r.applicant_employee_id,
     status: r.status,
@@ -133,6 +164,7 @@ export async function lockForm(tx: Tx, formType: FormType, formId: string): Prom
     caseNumber: r.case_number,
     departmentId: r.department_id,
     budgetOwnerEmployeeId: r.budget_owner_employee_id,
+    formLabel: r.form_label,
   };
 }
 
@@ -155,7 +187,7 @@ export async function bumpForm(
 /** Approval chain from current master data, read inside the transaction. */
 export async function buildChain(
   tx: Tx,
-  input: { applicantEmployeeId: string; departmentId: string; budgetOwnerEmployeeId: string; total: Cents }
+  input: { applicantEmployeeId: string; departmentId: string; budgetOwnerEmployeeId: string | null; total: Cents }
 ): Promise<ApprovalChainStep[]> {
   const [dept] = await tx
     .select({ managerId: departments.managerEmployeeId })
@@ -163,16 +195,26 @@ export async function buildChain(
     .where(eq(departments.id, input.departmentId));
   if (!dept) abort('validation', '找不到申請單位資料，請聯絡系統管理員');
   if (!dept.managerId) abort('validation', '申請單位尚未設定主管，無法送出簽核，請聯絡系統管理員');
-  const [gm] = await tx.select({ id: employees.id }).from(employees).where(eq(employees.isGeneralManager, true)).limit(1);
+  const [gm] = await tx
+    .select({ id: employees.id })
+    .from(employees)
+    .where(eq(employees.isGeneralManager, true))
+    .orderBy(asc(employees.createdAt), asc(employees.id))
+    .limit(1);
   if (!gm) abort('validation', '系統尚未設定總經理，請聯絡系統管理員');
   const totalAmount = centsToNumber(input.total);
   let chairmanId = input.applicantEmployeeId;
   if (totalAmount > CHAIRMAN_THRESHOLD) {
-    const [chairman] = await tx.select({ id: employees.id }).from(employees).where(eq(employees.isChairman, true)).limit(1);
+    const [chairman] = await tx
+      .select({ id: employees.id })
+      .from(employees)
+      .where(eq(employees.isChairman, true))
+      .orderBy(asc(employees.createdAt), asc(employees.id))
+      .limit(1);
     if (!chairman) abort('validation', '系統尚未設定董事長，無法送出逾 10 萬元的表單，請聯絡系統管理員');
     chairmanId = chairman.id;
   }
-  return generateApprovalChain({
+  const chain = generateApprovalChain({
     applicantEmployeeId: input.applicantEmployeeId,
     departmentManagerEmployeeId: dept.managerId!,
     budgetOwnerEmployeeId: input.budgetOwnerEmployeeId,
@@ -180,6 +222,18 @@ export async function buildChain(
     chairmanEmployeeId: chairmanId,
     totalAmount,
   });
+  await assertApproversActive(tx, chain);
+  return chain;
+}
+
+/** A disabled account can never sign, so the form would be stuck at that step. */
+export async function assertApproversActive(tx: Tx, chain: ApprovalChainStep[]) {
+  if (chain.length === 0) return;
+  const disabled = await tx
+    .select({ id: employees.id })
+    .from(employees)
+    .where(and(inArray(employees.id, chain.map((s) => s.approverEmployeeId)), eq(employees.accessEnabled, false)));
+  if (disabled.length > 0) abort('validation', '簽核流程中有帳號已停用的簽核人，請聯絡系統管理員更新主管或預算負責人設定');
 }
 
 export async function insertSteps(tx: Tx, formType: FormType, formId: string, chain: ApprovalChainStep[]) {
@@ -195,6 +249,37 @@ export async function insertSteps(tx: Tx, formType: FormType, formId: string, ch
   );
 }
 
+/**
+ * Writes steps produced by the flow resolver. System-signed and skipped steps
+ * are stamped as acted now. Returns the first step a person must sign, or
+ * null when nobody has to (the caller then approves the form directly).
+ */
+export async function insertResolvedSteps(
+  tx: Tx,
+  formType: FormType,
+  formId: string,
+  steps: ResolvedStep[]
+): Promise<{ stepOrder: number; approverEmployeeId: string } | null> {
+  if (steps.length === 0) return null;
+  await tx.insert(approvalSteps).values(
+    steps.map((s, idx) => ({
+      formType,
+      formId,
+      stepOrder: idx + 1,
+      approverEmployeeId: s.approverEmployeeId,
+      approverRole: `step:${s.blockId}`,
+      status: s.status,
+      stepLabel: s.label,
+      sourceKind: s.sourceKind,
+      delegatedFromEmployeeId: s.delegatedFromEmployeeId,
+      systemNote: s.systemNote,
+      actedAt: s.status === 'pending' ? null : sql`now()`,
+    }))
+  );
+  const idx = steps.findIndex((s) => s.status === 'pending');
+  return idx === -1 ? null : { stepOrder: idx + 1, approverEmployeeId: steps[idx].approverEmployeeId! };
+}
+
 export async function readSteps(tx: Tx, formType: FormType, formId: string) {
   return tx
     .select({
@@ -204,6 +289,9 @@ export async function readSteps(tx: Tx, formType: FormType, formId: string) {
       status: approvalSteps.status,
       comment: approvalSteps.comment,
       actedAt: approvalSteps.actedAt,
+      stepLabel: approvalSteps.stepLabel,
+      delegatedFromEmployeeId: approvalSteps.delegatedFromEmployeeId,
+      systemNote: approvalSteps.systemNote,
     })
     .from(approvalSteps)
     .where(and(eq(approvalSteps.formType, formType), eq(approvalSteps.formId, formId)))
@@ -287,7 +375,7 @@ export async function decideCurrentStep(
   input: { formType: FormType; form: LockedForm; actorId: string; decision: 'approve' | 'return'; reason?: string; requestId?: string }
 ): Promise<void> {
   const { formType, form, actorId } = input;
-  const label = FORM_LABELS[formType];
+  const label = labelOf(formType, form);
   if (form.status !== 'pending_approval' || form.currentStepOrder === null) {
     abort('conflict', `這張${label}目前不在簽核中`);
   }
@@ -334,6 +422,7 @@ export async function decideCurrentStep(
     return;
   }
 
+  // Steps the system signed or skipped when the flow was resolved are passed over.
   const [next] = await tx
     .select()
     .from(approvalSteps)
@@ -341,10 +430,13 @@ export async function decideCurrentStep(
       and(
         eq(approvalSteps.formType, formType),
         eq(approvalSteps.formId, form.id),
-        eq(approvalSteps.stepOrder, step.stepOrder + 1)
+        gt(approvalSteps.stepOrder, step.stepOrder),
+        eq(approvalSteps.status, 'pending')
       )
-    );
-  if (next) {
+    )
+    .orderBy(asc(approvalSteps.stepOrder))
+    .limit(1);
+  if (next?.approverEmployeeId) {
     const version = await bumpForm(tx, formType, form.id, { currentStepOrder: next.stepOrder });
     await notify(tx, outbox, {
       recipientEmployeeId: next.approverEmployeeId,
@@ -377,13 +469,16 @@ export async function decideCurrentStep(
   });
 }
 
+/** Still waiting on the first person in the chain (system-signed steps before it do not count). */
+export function beforeFirstDecision(form: LockedForm): boolean {
+  return form.status === 'pending_approval' && form.currentStepOrder !== null && form.currentStepOrder === form.firstHumanStepOrder;
+}
+
 /** Edit/withdraw window: pending, nobody has acted yet, requested by the applicant. */
 export function assertApplicantBeforeFirstDecision(form: LockedForm, actorId: string, verb: string, formType: FormType) {
-  const label = FORM_LABELS[formType];
+  const label = labelOf(formType, form);
   if (form.applicantEmployeeId !== actorId) abort('forbidden', `只有申請人可以${verb}這張${label}`);
-  if (form.status !== 'pending_approval' || form.currentStepOrder !== 1) {
-    abort('conflict', `只有尚未有人簽核的${label}可以${verb}`);
-  }
+  if (!beforeFirstDecision(form)) abort('conflict', `只有尚未有人簽核的${label}可以${verb}`);
 }
 
 export function assertVersion(form: LockedForm, expectedVersion: unknown) {
@@ -399,7 +494,8 @@ export async function replaceSteps(
   input: {
     formType: FormType;
     form: LockedForm;
-    chain: ApprovalChainStep[];
+    /** Hard-coded chain (non-empty), or steps from the flow resolver. */
+    chain: ApprovalChainStep[] | { resolved: ResolvedStep[] };
     actorId: string;
     action: string;
     previousItems: unknown[];
@@ -419,7 +515,13 @@ export async function replaceSteps(
     details: { previousVersion: form.version, previousStatus: form.status, previousSteps, previousItems: input.previousItems },
   });
   await deleteSteps(tx, formType, form.id);
-  await insertSteps(tx, formType, form.id, input.chain);
+  let first: { stepOrder: number; approverEmployeeId: string } | null;
+  if (Array.isArray(input.chain)) {
+    await insertSteps(tx, formType, form.id, input.chain);
+    first = { stepOrder: 1, approverEmployeeId: input.chain[0].approverEmployeeId };
+  } else {
+    first = await insertResolvedSteps(tx, formType, form.id, input.chain.resolved);
+  }
   // Requests from the previous round are obsolete.
   await tx
     .update(notifications)
@@ -432,9 +534,22 @@ export async function replaceSteps(
         eq(notifications.isRead, false)
       )
     );
-  const version = await bumpForm(tx, formType, form.id, { status: 'pending_approval', currentStepOrder: 1 });
+  if (!first) {
+    const version = await bumpForm(tx, formType, form.id, { status: 'approved', currentStepOrder: null });
+    await notify(tx, outbox, {
+      recipientEmployeeId: form.applicantEmployeeId,
+      type: 'request_approved',
+      formType,
+      formId: form.id,
+      caseNumber: form.caseNumber,
+      version,
+      message: `${labelOf(formType, form)} ${form.caseNumber} 已完成簽核`,
+    });
+    return version;
+  }
+  const version = await bumpForm(tx, formType, form.id, { status: 'pending_approval', currentStepOrder: first.stepOrder });
   await notify(tx, outbox, {
-    recipientEmployeeId: input.chain[0].approverEmployeeId,
+    recipientEmployeeId: first.approverEmployeeId,
     type: 'approval_requested',
     formType,
     formId: form.id,

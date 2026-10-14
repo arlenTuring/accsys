@@ -20,8 +20,10 @@ import {
   verifyAppliedMigrations,
   withMigrationLock,
 } from './lib/migrations';
+import { loadSecretFiles } from '../src/lib/secret-files';
 
 async function main() {
+  loadSecretFiles();
   const sql = postgres(requireMigrationUrl(), {
     max: 1,
     onnotice: () => {},

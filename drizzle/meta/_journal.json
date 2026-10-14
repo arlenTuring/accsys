@@ -50,6 +50,97 @@
       "when": 1790387530556,
       "tag": "0006_form_versions_notification_keys_idempotency",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791851718879,
+      "tag": "0007_travel_expenses",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791853228650,
+      "tag": "0008_contract_seal_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791860229119,
+      "tag": "0009_general_seal_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791861479543,
+      "tag": "0010_invoice_seal_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791861976654,
+      "tag": "0011_department_expenses",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1791862847737,
+      "tag": "0012_project_expenses",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791863446009,
+      "tag": "0013_revenue_expenses",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791867243953,
+      "tag": "0014_minor_expenses",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1791867659404,
+      "tag": "0015_asset_transfers",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1791886093980,
+      "tag": "0016_applicant_confirmation_step",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1791894921106,
+      "tag": "0017_db_hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791902102704,
+      "tag": "0018_approval_flow_engine",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1791903336817,
+      "tag": "0019_form_runtime",
+      "breakpoints": true
     }
   ]
 }

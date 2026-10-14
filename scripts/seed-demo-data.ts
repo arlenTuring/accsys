@@ -14,6 +14,19 @@ if (!DATABASE_URL) {
   console.error('DATABASE_URL is required');
   process.exit(1);
 }
+// Demo rows include a fake finance employee and approval steps without audit
+// records: never on a shared or production database.
+const dbHost = (() => {
+  try {
+    return new URL(DATABASE_URL).hostname;
+  } catch {
+    return '';
+  }
+})();
+if (process.env.NODE_ENV === 'production' || !['localhost', '127.0.0.1', '[::1]', '::1'].includes(dbHost)) {
+  console.error('seed:demo only runs against a database on this machine (localhost / 127.0.0.1)');
+  process.exit(1);
+}
 
 const sql = postgres(DATABASE_URL, { max: 1 });
 
@@ -28,6 +41,10 @@ const IDS = {
   supplier: '10000000-0000-0000-0000-000000000020',
   budgetRd: '10000000-0000-0000-0000-000000000030',
   budgetFin: '10000000-0000-0000-0000-000000000031',
+  projectT09: '10000000-0000-0000-0000-000000000040',
+  budgetT09: '10000000-0000-0000-0000-000000000032',
+  projectYW20: '10000000-0000-0000-0000-000000000041',
+  budgetYW20: '10000000-0000-0000-0000-000000000033',
   cases: [
     '20000000-0000-0000-0000-000000000001',
     '20000000-0000-0000-0000-000000000002',
@@ -164,6 +181,45 @@ async function main() {
         category = excluded.category,
         owner_employee_id = excluded.owner_employee_id,
         annual_budget_amount = excluded.annual_budget_amount
+    `;
+
+    await tx`
+      insert into projects (id, code, name, kind)
+      values
+        (${IDS.projectT09}::uuid, 'T09', 'T0.9內部自研案', 'product'),
+        (${IDS.projectYW20}::uuid, 'YW20', '亞灣2.0：5G AIoT規模化加值體感育樂服務', 'revenue')
+      on conflict (id) do update set code = excluded.code, name = excluded.name, kind = excluded.kind
+    `;
+    await tx`
+      insert into budget_codes (
+        id, code, project_id, category, owner_employee_id, fiscal_year, annual_budget_amount
+      ) values
+        (
+          ${IDS.budgetT09}::uuid, '115T09001', ${IDS.projectT09}::uuid,
+          '專案研發費用', ${IDS.empFinance}::uuid, '115', 3000000
+        ),
+        (
+          ${IDS.budgetYW20}::uuid, '115YW20001', ${IDS.projectYW20}::uuid,
+          '專案執行費用', ${IDS.empFinance}::uuid, '115', 5000000
+        )
+      on conflict (id) do update set
+        code = excluded.code,
+        category = excluded.category,
+        owner_employee_id = excluded.owner_employee_id,
+        annual_budget_amount = excluded.annual_budget_amount
+    `;
+
+    // Asset register (kept as-is on re-run so approved 資產異動 results survive)
+    await tx`
+      insert into assets (tag, name, quantity, custodian_employee_id, location, status)
+      values
+        ('10003', '電腦主機/ASUS', 1, ${IDS.empMgr}::uuid, '7F 研發區', 'in_custody'),
+        ('10004', '筆記型電腦/Lenovo ThinkPad', 1, ${IDS.empStaff}::uuid, '7F 研發區', 'in_custody'),
+        ('10005', '超音波雷達', 1, ${IDS.empStaff}::uuid, '實驗室', 'in_custody'),
+        ('10006', 'IMU 慣性測量單元', 1, ${IDS.empStaff}::uuid, '實驗室', 'in_custody'),
+        ('10007', '螢幕/Dell 27吋', 2, ${IDS.empFinance}::uuid, '6F 財務部', 'in_custody'),
+        ('10008', '投影機/Epson', 1, ${IDS.empFinance}::uuid, '6F 會議室', 'in_custody')
+      on conflict (tag) do nothing
     `;
 
     // --- Case 1: PR pending at department manager ---

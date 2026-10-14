@@ -1,22 +1,14 @@
 import type { Metadata } from 'next';
-import { Inter, Noto_Sans_TC } from 'next/font/google';
+import '@fontsource-variable/inter';
+import '@fontsource/noto-sans-tc/400.css';
+import '@fontsource/noto-sans-tc/500.css';
+import '@fontsource/noto-sans-tc/700.css';
 import './globals.css';
 import { getPendingApprovalCount } from '@/lib/approvals/pending-count';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { getFormCatalog } from '@/lib/forms/catalog-server';
 import { TopNav } from '@/app/components/top-nav';
-
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-  display: 'swap',
-});
-
-const notoSansTc = Noto_Sans_TC({
-  subsets: ['latin'],
-  weight: ['400', '500', '700'],
-  variable: '--font-noto',
-  display: 'swap',
-});
+import type { MenuEmployee } from '@/app/components/user-menu';
 
 export const metadata: Metadata = {
   title: 'ACCSYS · 台灣智慧駕駛 電子採購與簽核',
@@ -25,12 +17,24 @@ export const metadata: Metadata = {
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const employee = await getCurrentEmployee();
-  const pendingApprovalCount = employee ? await getPendingApprovalCount() : 0;
+  const [pendingApprovalCount, categories] = employee ? await Promise.all([getPendingApprovalCount(), getFormCatalog()]) : [0, []];
+  // Only what the menu shows is serialized to the browser (no session id or login time).
+  const menuEmployee: MenuEmployee | null = employee && {
+    name: employee.name,
+    email: employee.email,
+    employeeCode: employee.employeeCode,
+    title: employee.title,
+    departmentName: employee.departmentName,
+    departmentCode: employee.departmentCode,
+    role: employee.role,
+    isGeneralManager: employee.isGeneralManager,
+    isChairman: employee.isChairman,
+  };
 
   return (
     <html lang="zh-Hant" suppressHydrationWarning>
-      <body className={`${inter.variable} ${notoSansTc.variable} font-sans`} suppressHydrationWarning>
-        {employee && <TopNav employee={employee} pendingApprovalCount={pendingApprovalCount} />}
+      <body className="font-sans" suppressHydrationWarning>
+        {menuEmployee && <TopNav employee={menuEmployee} pendingApprovalCount={pendingApprovalCount} categories={categories} />}
         {children}
       </body>
     </html>

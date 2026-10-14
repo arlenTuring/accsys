@@ -53,8 +53,8 @@ if [[ ! -f .env.local ]]; then
   cp .env.local.example .env.local
   # Sensible local defaults for demo login
   if grep -q '^SESSION_SECRET=replace-with' .env.local; then
-    # portable sed (macOS)
-    SECRET="local-dev-session-secret-key-32chars"
+    # portable sed (macOS); random per checkout, never a shared well-known value
+    SECRET="$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('base64url'))")"
     sed -i.bak "s|^SESSION_SECRET=.*|SESSION_SECRET=${SECRET}|" .env.local
     sed -i.bak "s|^DEV_LOGIN_EMAIL=.*|DEV_LOGIN_EMAIL=dev@turing-drive.com|" .env.local
     sed -i.bak "s|^NEXT_PUBLIC_DEV_LOGIN=.*|NEXT_PUBLIC_DEV_LOGIN=true|" .env.local
@@ -74,8 +74,8 @@ if ! grep -q '^AUTH_MODE=' .env.local; then
 fi
 
 if [[ ! -d node_modules ]]; then
-  echo "📦 安裝 npm 依賴…"
-  npm install
+  echo "📦 依 package-lock.json 安裝 npm 依賴…"
+  npm ci
 fi
 
 echo "🐘 啟動 Postgres (accsys-db, host port 15432)…"
@@ -118,6 +118,12 @@ fi
 echo "🧱 套用資料庫 migrations…"
 MIGRATION_DATABASE_URL="$MIGRATOR_URL" npm run -s db:migrate
 "${PSQL[@]}" -f /accsys/seed-local-dev.sql
+echo "🧩 發布範例表單（已存在則略過）…"
+npm run -s seed:forms || echo "⚠️  範例表單未發布（不影響其他功能），可稍後執行 npm run seed:forms"
+echo "🧩 建立轉換表單草稿（第 1 批用印申請、第 2 批出差報支、第 3 批費用申請；已存在則略過，發佈前不影響舊表單）…"
+for batch in 1 2 3; do
+  npm run -s forms:migrate -- --batch "$batch" || echo "⚠️  第 $batch 批轉換表單草稿未建立（不影響其他功能），可稍後執行 npm run forms:migrate -- --batch $batch"
+done
 
 if grep -q '^DATABASE_URL=postgres://accsys:' .env.local 2>/dev/null; then
   echo "⚠️  .env.local 的 DATABASE_URL 仍使用 DB 超級使用者 accsys。建議改為最小權限帳號："
@@ -129,10 +135,37 @@ if [[ "$DO_SEED" -eq 1 ]]; then
   npm run seed:demo
 fi
 
-# Free port if a stale Next process is stuck (optional soft check)
+# Free the port if a stale Next process from this repo still holds it.
+# Processes from other projects / apps are never killed.
+free_stale_next() {
+  local pids pid cwd cmd killed=""
+  pids="$(lsof -nP -t -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)"
+  [[ -z "$pids" ]] && return 0
+  for pid in $pids; do
+    cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n1)"
+    cmd="$(ps -o command= -p "$pid" 2>/dev/null || true)"
+    if [[ "$cwd" == "$ROOT"* && "$cmd" == *next* ]]; then
+      echo "🧹 關閉本專案殘留的 Next 程序 (PID $pid)…"
+      kill "$pid" 2>/dev/null || true
+      killed="$killed $pid"
+    fi
+  done
+  [[ -z "$killed" ]] && return 0
+  for i in $(seq 1 10); do
+    lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1 || return 0
+    sleep 0.5
+  done
+  for pid in $killed; do
+    kill -9 "$pid" 2>/dev/null || true
+  done
+  sleep 0.5
+}
+
+free_stale_next
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-  echo "⚠️  Port $PORT 已被占用。請先關掉舊的 Next，或改用: $0 --port 3002"
-  echo "   查占用: lsof -nP -iTCP:$PORT -sTCP:LISTEN"
+  echo "⚠️  Port $PORT 被其他程式占用（不是本專案的 Next，未自動關閉）。"
+  lsof -nP -iTCP:"$PORT" -sTCP:LISTEN | sed 's/^/   /'
+  echo "   請關掉該程式，或改用: $0 --port 3002"
   exit 1
 fi
 

@@ -16,7 +16,7 @@ import {
 import { createSession, resolveSession } from '@/lib/auth/sessions';
 import { getDb } from '@/lib/db';
 import { appSessions, auditEvents, employeeIdentities, employees, identityLinkRequests } from '@/lib/db/schema';
-import { middleware } from '@/middleware';
+import { proxy } from '@/proxy';
 
 // Server actions read the session cookie through next/headers; point it at a
 // per-test token so real actions run against a real session.
@@ -168,17 +168,25 @@ describe('unauthenticated and unknown users', () => {
     jar.token = undefined;
   });
 
-  it('middleware sends visitors without a session cookie to /login and drops the legacy email cookie', () => {
-    const res = middleware(new NextRequest(`${APP}/requests/123`, { headers: { cookie: 'accsys_session=legacy' } }));
+  it('proxy sends visitors without a session cookie to /login and drops the legacy email cookie', () => {
+    const res = proxy(new NextRequest(`${APP}/requests/123`, { headers: { cookie: 'accsys_session=legacy' } }));
     expect(res.status).toBe(307);
     expect(new URL(res.headers.get('location')!).pathname).toBe('/login');
     expect(new URL(res.headers.get('location')!).searchParams.get('returnTo')).toBe('/requests/123');
     expect(res.cookies.get('accsys_session')?.value).toBe('');
   });
 
-  it('middleware redirects to APP_ORIGIN even when the Host header is forged', () => {
-    const res = middleware(new NextRequest('https://evil.test/dashboard', { headers: { host: 'evil.test' } }));
+  it('proxy redirects to APP_ORIGIN even when the Host header is forged', () => {
+    const res = proxy(new NextRequest('https://evil.test/dashboard', { headers: { host: 'evil.test' } }));
     expect(new URL(res.headers.get('location')!).origin).toBe(APP);
+  });
+
+  it('proxy keeps the sandbox CSP on attachment downloads and the page CSP elsewhere', () => {
+    const cookie = { cookie: '__Host-accsys_sid=x' };
+    const download = proxy(new NextRequest(`${APP}/api/attachments/${randomUUID()}`, { headers: cookie }));
+    expect(download.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox");
+    const page = proxy(new NextRequest(`${APP}/dashboard`, { headers: cookie }));
+    expect(page.headers.get('content-security-policy')).toContain("'nonce-");
   });
 
   it('development login is unavailable outside `next dev`', async () => {
@@ -292,6 +300,35 @@ describe('admin account management', () => {
       .from(auditEvents)
       .where(sql`${auditEvents.entityId} = ${target.id} and ${auditEvents.action} = 'employee.role_changed'`);
     expect(event.details).toEqual({ from: 'staff', to: 'finance' });
+  });
+
+  it('two admins demoting each other at the same moment cannot both succeed', async () => {
+    const a = await newEmployee('admin');
+    const b = await newEmployee('admin');
+    const results = await Promise.all([
+      setEmployeeRole(actorOf(a), { employeeId: b.id, role: 'staff' }),
+      setEmployeeRole(actorOf(b), { employeeId: a.id, role: 'staff' }),
+    ]);
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(results.filter((r) => !r.ok)).toEqual([{ ok: false, error: 'forbidden' }]);
+    const roles = await getDb()
+      .select({ role: employees.role })
+      .from(employees)
+      .where(sql`${employees.id} in (${a.id}, ${b.id})`);
+    expect(roles.filter((r) => r.role === 'admin')).toHaveLength(1);
+  });
+
+  it('malformed ids are refused as invalid input, not database errors', async () => {
+    const admin = await newEmployee('admin');
+    expect(await setEmployeeRole(actorOf(admin), { employeeId: 'x', role: 'staff' })).toEqual({ ok: false, error: 'invalid_input' });
+    expect(await setEmployeeAccess(actorOf(admin), { employeeId: "1' or 1=1", enabled: false, reason: 'r' })).toEqual({
+      ok: false,
+      error: 'invalid_input',
+    });
+    expect(await approveLinkRequest(actorOf(admin), { requestId: 'nope', employeeId: randomUUID() })).toEqual({
+      ok: false,
+      error: 'invalid_input',
+    });
   });
 
   it('rejected requests stay rejected', async () => {

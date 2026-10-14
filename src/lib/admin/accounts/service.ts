@@ -1,6 +1,7 @@
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { recordAudit } from '@/lib/audit/record';
 import { revokeEmployeeSessions } from '@/lib/auth/sessions';
+import { isUuid } from '@/lib/authz/forms';
 import { getDb } from '@/lib/db';
 import { employeeIdentities, employees, identityLinkRequests } from '@/lib/db/schema';
 import { hitRateLimit, RATE_LIMITS } from '@/lib/rate-limit';
@@ -32,6 +33,22 @@ async function guard(actor: AdminActor | null, now = Date.now()): Promise<Accoun
 
 const fail = (error: AccountActionError): AccountActionResult => ({ ok: false, error });
 
+type Tx = Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0];
+
+/**
+ * Account changes run one at a time, and the actor must still be an enabled
+ * admin inside the transaction: otherwise two admins demoting or disabling
+ * each other at the same moment would both succeed and leave none.
+ */
+async function lockAsAdmin(tx: Tx, actorId: string): Promise<boolean> {
+  await tx.execute(sql`select pg_advisory_xact_lock(4242002503)`);
+  const [me] = await tx
+    .select({ role: employees.role, accessEnabled: employees.accessEnabled })
+    .from(employees)
+    .where(eq(employees.id, actorId));
+  return me?.role === 'admin' && me.accessEnabled;
+}
+
 /** Binds a pending (or previously rejected) Google account to an employee. */
 export async function approveLinkRequest(
   actor: AdminActor | null,
@@ -39,9 +56,11 @@ export async function approveLinkRequest(
 ): Promise<AccountActionResult> {
   const denied = await guard(actor);
   if (denied) return fail(denied);
+  if (!isUuid(input?.requestId) || !isUuid(input.employeeId)) return fail('invalid_input');
   if (input.employeeId === actor!.id) return fail('self_action');
 
   return getDb().transaction(async (tx) => {
+    if (!(await lockAsAdmin(tx, actor!.id))) return fail('forbidden');
     const [request] = await tx
       .select()
       .from(identityLinkRequests)
@@ -122,7 +141,9 @@ export async function rejectLinkRequest(
 ): Promise<AccountActionResult> {
   const denied = await guard(actor);
   if (denied) return fail(denied);
+  if (!isUuid(input?.requestId)) return fail('invalid_input');
   return getDb().transaction(async (tx) => {
+    if (!(await lockAsAdmin(tx, actor!.id))) return fail('forbidden');
     const rows = await tx
       .update(identityLinkRequests)
       .set({ status: 'rejected', decidedAt: sql`now()`, decidedByEmployeeId: actor!.id })
@@ -145,8 +166,10 @@ export async function revokeIdentity(
 ): Promise<AccountActionResult> {
   const denied = await guard(actor);
   if (denied) return fail(denied);
+  if (!isUuid(input?.employeeId)) return fail('invalid_input');
   if (input.employeeId === actor!.id) return fail('self_action');
   return getDb().transaction(async (tx) => {
+    if (!(await lockAsAdmin(tx, actor!.id))) return fail('forbidden');
     const rows = await tx
       .update(employeeIdentities)
       .set({ revokedAt: sql`now()` })
@@ -171,11 +194,13 @@ export async function setEmployeeAccess(
 ): Promise<AccountActionResult> {
   const denied = await guard(actor);
   if (denied) return fail(denied);
+  if (!isUuid(input?.employeeId) || typeof input.enabled !== 'boolean') return fail('invalid_input');
   if (input.employeeId === actor!.id) return fail('self_action');
-  const reason = input.reason?.trim() ?? '';
+  const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
   if (!input.enabled && (reason === '' || reason.length > 200)) return fail('invalid_input');
 
   return getDb().transaction(async (tx) => {
+    if (!(await lockAsAdmin(tx, actor!.id))) return fail('forbidden');
     const rows = await tx
       .update(employees)
       .set(
@@ -204,10 +229,12 @@ export async function setEmployeeRole(
 ): Promise<AccountActionResult> {
   const denied = await guard(actor);
   if (denied) return fail(denied);
+  if (!isUuid(input?.employeeId)) return fail('invalid_input');
   if (input.employeeId === actor!.id) return fail('self_action');
   if (!(ROLES as readonly string[]).includes(input.role)) return fail('invalid_input');
 
   return getDb().transaction(async (tx) => {
+    if (!(await lockAsAdmin(tx, actor!.id))) return fail('forbidden');
     const [before] = await tx
       .select({ role: employees.role })
       .from(employees)

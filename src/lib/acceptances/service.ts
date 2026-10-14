@@ -4,6 +4,7 @@ import { recordAudit } from '@/lib/audit/record';
 import { isFinanceOrAdmin, isUuid } from '@/lib/authz/forms';
 import { acceptanceItems, acceptances, purchaseOrderItems, purchaseOrders, suppliers } from '@/lib/db/schema';
 import { centsToDecimal, toCents } from '@/lib/money';
+import { isIsoDate } from '@/lib/travel-expenses/validate';
 import {
   abort,
   assertApplicantBeforeFirstDecision,
@@ -49,10 +50,7 @@ async function checkHeader(tx: Tx, input: { contractorSupplierId: string; accept
   if (!input || !isUuid(input.contractorSupplierId)) abort('validation', '請選擇驗收廠商');
   const [supplier] = await tx.select({ id: suppliers.id }).from(suppliers).where(eq(suppliers.id, input.contractorSupplierId));
   if (!supplier) abort('validation', '請選擇驗收廠商');
-  const date = input.acceptanceDate;
-  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) {
-    abort('validation', '驗收日期格式不正確');
-  }
+  if (!isIsoDate(input.acceptanceDate)) abort('validation', '驗收日期格式不正確');
 }
 
 /** Each existing line must get exactly one pass/fail result. */

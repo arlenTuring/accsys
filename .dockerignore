@@ -5,6 +5,14 @@
 data/
 *.dump
 *.sql.gz
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
+.cursor/
+.vscode/
+.idea/
 node_modules/
 .next/
 *.tsbuildinfo
@@ -16,6 +24,7 @@ node_modules/
 .DS_Store
 coverage/
 docs/
+deploy/
 reference/
 supabase/
 tests/

@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
@@ -23,11 +24,21 @@ export default async function NewRequestPage() {
   }));
 
   return (
-    <main className="mx-auto max-w-4xl p-8">
-      <h1 className="mb-6 text-2xl font-bold">新增請購申請單</h1>
-      <p className="mb-4 text-sm text-gray-600">
-        申請單位：{employee.name}｜提醒：一張請購單的所有預算編號必須屬於同一位預算負責人。
-      </p>
+    <main className="page-shell">
+      <nav className="mb-4 text-sm text-td-muted">
+        <Link href="/requests" className="hover:text-td-blue">
+          我的請購單
+        </Link>
+        <span className="mx-2">/</span>
+        <span className="text-td-blue-dark">新增</span>
+      </nav>
+      <section className="mb-6">
+        <p className="section-title">採購流程</p>
+        <h1 className="page-title">新增請購單</h1>
+        <p className="page-subtitle">
+          申請人：{employee.name}｜提醒：一張請購單的所有預算編號必須屬於同一位預算負責人。
+        </p>
+      </section>
       <PurchaseRequestForm budgetCodes={budgetCodes} />
     </main>
   );

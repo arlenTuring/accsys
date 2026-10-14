@@ -4,6 +4,7 @@ import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getExpenseRequestDetail } from '@/lib/expense-requests/queries';
 import { withdrawExpenseRequest } from '@/lib/expense-requests/actions';
 import { getAttachments } from '@/lib/attachments/queries';
+import { ApprovalTimeline } from '@/app/components/approval-timeline';
 import { AttachmentsPanel } from '@/app/components/attachments-panel';
 import { ApprovalActions } from './approval-actions';
 import { WithdrawButton } from '@/app/requests/[id]/withdraw-button';
@@ -13,17 +14,6 @@ const STATUS_LABELS: Record<string, string> = {
   approved: '已核准',
   returned: '已退回（待修改）',
   withdrawn: '已撤回',
-};
-const ROLE_LABELS: Record<string, string> = {
-  department_manager: '申請單位主管',
-  budget_owner: '預算負責人',
-  general_manager: '總經理',
-  chairman: '董事長',
-};
-const STEP_STATUS_LABELS: Record<string, string> = {
-  pending: '待簽核',
-  approved: '已核准',
-  returned: '已退回',
 };
 
 export default async function ExpenseRequestDetailPage({
@@ -105,30 +95,7 @@ export default async function ExpenseRequestDetailPage({
         </tbody>
       </table>
 
-      <section>
-        <h2 className="mb-2 font-semibold">簽核流程</h2>
-        <ol className="space-y-1 text-sm">
-          {detail.steps.map((s) => (
-            <li key={s.stepOrder} className="flex gap-2">
-              <span className="text-gray-500">{s.stepOrder}.</span>
-              <span>{ROLE_LABELS[s.approverRole] ?? s.approverRole}</span>
-              <span>{s.approverName}</span>
-              <span
-                className={
-                  s.status === 'approved'
-                    ? 'text-green-600'
-                    : s.status === 'returned'
-                      ? 'text-red-600'
-                      : 'text-gray-500'
-                }
-              >
-                {STEP_STATUS_LABELS[s.status] ?? s.status}
-              </span>
-              {s.comment && <span className="text-gray-500">— {s.comment}</span>}
-            </li>
-          ))}
-        </ol>
-      </section>
+      <ApprovalTimeline formType="expense_request" formId={detail.id} />
 
       <AttachmentsPanel formType="expense_request" formId={id} attachments={attachments} />
 
@@ -143,7 +110,7 @@ export default async function ExpenseRequestDetailPage({
         </section>
       )}
 
-      {isCurrentApprover && <ApprovalActions expenseRequestId={detail.id} />}
+      {isCurrentApprover && <ApprovalActions expenseRequestId={detail.id} version={detail.version} />}
     </main>
   );
 }

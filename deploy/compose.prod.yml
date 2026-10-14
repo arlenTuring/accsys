@@ -1,0 +1,255 @@
+# ACCSYS on-prem production stack: reverse proxy -> app -> PostgreSQL, plus
+# one-off migrate / backup jobs. Same file for a test VM and the company host;
+# only deploy/accsys.env, the secret files and the data directories differ.
+#
+#   docker compose -f deploy/compose.prod.yml --env-file /etc/accsys/accsys.env up -d
+#   docker compose -f deploy/compose.prod.yml --env-file /etc/accsys/accsys.env run --rm migrate
+#   docker compose -f deploy/compose.prod.yml --env-file /etc/accsys/accsys.env run --rm backup
+#
+# Images are built once and referenced by digest; this host never builds or
+# runs `npm install`. See docs/operations/deployment.md.
+name: accsys-prod
+
+x-logging: &logging
+  driver: local
+  options:
+    max-size: 20m
+    max-file: "5"
+
+x-hardening: &hardening
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+
+# Runtime account for app / migrate / admin-cli / backup. A dedicated id that is
+# not a login user on the host (Ubuntu gives uid 1000 to the first account);
+# it owns the attachments, backups and the secrets those services read.
+x-runtime-user: &runtime-user "${ACCSYS_UID:-10001}:${ACCSYS_GID:-10001}"
+
+services:
+  proxy:
+    image: nginxinc/nginx-unprivileged:stable-alpine@sha256:56b8272e43a0525f67aed68d1e0794a712d10e3e45a563e118e9a77c817e6f86
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    networks: [edge]
+    ports:
+      - "${ACCSYS_BIND_ADDRESS:-0.0.0.0}:${ACCSYS_HTTPS_PORT:-443}:8443"
+      - "${ACCSYS_BIND_ADDRESS:-0.0.0.0}:${ACCSYS_HTTP_PORT:-80}:8080"
+    environment:
+      ACCSYS_FQDN: ${ACCSYS_FQDN:?set ACCSYS_FQDN (e.g. accsys.example.com)}
+      # ":<port>" only when users reach HTTPS on a port other than 443.
+      ACCSYS_HTTPS_SUFFIX: ${ACCSYS_HTTPS_SUFFIX:-}
+      NGINX_ENVSUBST_FILTER: ^ACCSYS_
+    volumes:
+      - ./nginx/templates:/etc/nginx/templates:ro
+      # fullchain.pem + privkey.pem, readable by uid 101.
+      - ${ACCSYS_TLS_DIR:-/etc/accsys/tls}:/etc/accsys/tls:ro
+    read_only: true
+    tmpfs:
+      # Request bodies over 16 KB are buffered here (client_temp): room for ~15
+      # concurrent 12 MB uploads. Counts against mem_limit when used.
+      - /tmp:size=192m,uid=101,gid=101
+      - /etc/nginx/conf.d:size=1m,uid=101,gid=101
+    <<: *hardening
+    pids_limit: 128
+    mem_limit: 448m
+    logging: *logging
+
+  app:
+    image: ${ACCSYS_APP_IMAGE:?set ACCSYS_APP_IMAGE (accsys-app@sha256:...)}
+    restart: unless-stopped
+    user: *runtime-user
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [edge, backend, scan]
+    environment:
+      APP_ORIGIN: ${APP_ORIGIN:?set APP_ORIGIN (https://FQDN)}
+      AUTH_MODE: manual
+      ALLOWED_GOOGLE_DOMAINS: ${ALLOWED_GOOGLE_DOMAINS:?set ALLOWED_GOOGLE_DOMAINS}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-8}
+      # Set by the proxy from the TCP peer; anything the client sends is overwritten.
+      TRUSTED_CLIENT_IP_HEADER: x-real-ip
+      ENABLE_HSTS: ${ENABLE_HSTS:-true}
+      ATTACHMENT_SCAN: clamav
+      CLAMAV_HOST: clamav
+      STORAGE_LOCAL_PATH: /data/attachments
+      DATABASE_URL_FILE: /run/secrets/app_database_url
+      SESSION_SECRET_FILE: /run/secrets/session_secret
+      GOOGLE_CLIENT_SECRET_FILE: /run/secrets/google_client_secret
+    secrets: [app_database_url, session_secret, google_client_secret]
+    volumes:
+      - type: bind
+        source: ${ACCSYS_DATA_DIR:-/srv/accsys}/attachments
+        target: /data/attachments
+        bind: { create_host_path: false }
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+      - /app/.next/cache:size=64m,uid=${ACCSYS_UID:-10001},gid=${ACCSYS_GID:-10001},mode=0700
+    <<: *hardening
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 2
+    stop_grace_period: 30s
+    logging: *logging
+
+  db:
+    image: postgres:16.15-alpine3.24@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    restart: unless-stopped
+    # No published port: only services on the internal `backend` network reach it.
+    networks: [backend]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: accsys
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_superuser_password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    # Connection budget: app pool 10 + migrate 1 + backup 2 + admin, far below 50.
+    command:
+      - postgres
+      - -c
+      - max_connections=50
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - log_lock_waits=on
+      - -c
+      - log_min_duration_statement=2000
+      # Slow-query and error log lines must not carry bound values (emails, bank data).
+      - -c
+      - log_parameter_max_length=0
+      - -c
+      - log_parameter_max_length_on_error=0
+    secrets: [postgres_superuser_password]
+    volumes:
+      - type: bind
+        source: ${ACCSYS_DATA_DIR:-/srv/accsys}/pgdata
+        target: /var/lib/postgresql/data
+        bind: { create_host_path: false }
+      - ../db/roles.sql:/accsys/roles.sql:ro
+    shm_size: 256m
+    cap_drop: ["ALL"]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d accsys"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *logging
+
+  # clamd for upload scanning; production refuses uploads without it.
+  # Signature updates (freshclam) need outbound HTTPS or a company mirror, so
+  # it has egress; it shares only the `scan` network with the app, never the
+  # database network.
+  clamav:
+    image: ${ACCSYS_CLAMAV_IMAGE:?set ACCSYS_CLAMAV_IMAGE (clamav/clamav-debian:<version>@sha256:...)}
+    restart: unless-stopped
+    networks: [scan, clamav_egress]
+    volumes:
+      - clamav_db:/var/lib/clamav
+    # The entrypoint starts as root, fixes ownership, then runs as `clamav`.
+    cap_drop: ["ALL"]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 3g
+    logging: *logging
+
+  migrate:
+    profiles: ["tools"]
+    image: ${ACCSYS_MIGRATE_IMAGE:?set ACCSYS_MIGRATE_IMAGE (accsys-migrate@sha256:...)}
+    user: *runtime-user
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [backend]
+    environment:
+      MIGRATION_DATABASE_URL_FILE: /run/secrets/migrator_database_url
+    secrets: [migrator_database_url]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    <<: *hardening
+    logging: *logging
+
+  # Admin scripts as the runtime account, e.g.
+  #   ... run --rm admin-cli scripts/auth-bootstrap.ts --list
+  admin-cli:
+    profiles: ["tools"]
+    image: ${ACCSYS_MIGRATE_IMAGE:?set ACCSYS_MIGRATE_IMAGE (accsys-migrate@sha256:...)}
+    user: *runtime-user
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [backend, scan]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/app_database_url
+      ALLOWED_GOOGLE_DOMAINS: ${ALLOWED_GOOGLE_DOMAINS:?set ALLOWED_GOOGLE_DOMAINS}
+    secrets: [app_database_url]
+    command: ["scripts/auth-bootstrap.ts", "--list"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    <<: *hardening
+    logging: *logging
+
+  backup:
+    profiles: ["tools"]
+    image: postgres:16.15-alpine3.24@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    # Same uid as the app so it can read the 0600 attachment files.
+    user: *runtime-user
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [backend]
+    entrypoint: ["/bin/sh", "/accsys/backup.sh"]
+    environment:
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    secrets: [backup_db_password]
+    volumes:
+      - ./backup/backup.sh:/accsys/backup.sh:ro
+      - type: bind
+        source: ${ACCSYS_DATA_DIR:-/srv/accsys}/attachments
+        target: /data/attachments
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${ACCSYS_BACKUP_DIR:-/srv/accsys/backup}
+        target: /backup
+        bind: { create_host_path: false }
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    <<: *hardening
+    logging: *logging
+
+networks:
+  edge: {}
+  backend:
+    internal: true
+  scan:
+    internal: true
+  clamav_egress: {}
+
+volumes:
+  clamav_db: {}
+
+# Files are bind-mounted as-is (Compose does not change their owner or mode):
+# keep them 0400, owned by the uid that reads them (see deployment.md).
+secrets:
+  postgres_superuser_password:
+    file: ${ACCSYS_SECRETS_DIR:-/etc/accsys/secrets}/postgres_superuser_password
+  app_database_url:
+    file: ${ACCSYS_SECRETS_DIR:-/etc/accsys/secrets}/app_database_url
+  session_secret:
+    file: ${ACCSYS_SECRETS_DIR:-/etc/accsys/secrets}/session_secret
+  google_client_secret:
+    file: ${ACCSYS_SECRETS_DIR:-/etc/accsys/secrets}/google_client_secret
+  migrator_database_url:
+    file: ${ACCSYS_SECRETS_DIR:-/etc/accsys/secrets}/migrator_database_url
+  backup_db_password:
+    file: ${ACCSYS_SECRETS_DIR:-/etc/accsys/secrets}/backup_db_password

@@ -18,5 +18,9 @@ export function safeReturnTo(value: string | null | undefined, appOrigin: string
   }
   if (url.origin !== appOrigin) return DEFAULT_AFTER_LOGIN;
   if (url.pathname === '/login' || url.pathname.startsWith('/auth/')) return DEFAULT_AFTER_LOGIN;
-  return `${url.pathname}${url.search}`;
+  // Dot segments normalise away (`/.//evil` -> `//evil`); check what is actually returned.
+  const path = `${url.pathname}${url.search}`;
+  if (path.startsWith('//') || path.includes('\\')) return DEFAULT_AFTER_LOGIN;
+  if (new URL(path, appOrigin).origin !== appOrigin) return DEFAULT_AFTER_LOGIN;
+  return path;
 }

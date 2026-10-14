@@ -117,7 +117,7 @@ describe('createExpenseRequest', () => {
     const { orderId, itemId } = await makeApprovedOrder('貨到付款');
     currentEmployee.value = { id: applicantId };
     const { createExpenseRequest } = await import('@/lib/expense-requests/actions');
-    const result = await createExpenseRequest({
+    const result = await createExpenseRequest({ idempotencyKey: crypto.randomUUID(),
       purchaseOrderId: orderId,
       payeeType: 'supplier',
       payeeSupplierId: supplierId,
@@ -129,7 +129,7 @@ describe('createExpenseRequest', () => {
       expectedPaymentDate: null,
       includedSourceItemIds: [itemId],
     });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: false,
       error: '此採購單尚未完成驗收，且付款條件非預付款，無法建立費用申請單',
     });
@@ -139,7 +139,7 @@ describe('createExpenseRequest', () => {
     const { orderId, itemId } = await makeApprovedOrder('預付款');
     currentEmployee.value = { id: applicantId };
     const { createExpenseRequest } = await import('@/lib/expense-requests/actions');
-    const result = await createExpenseRequest({
+    const result = await createExpenseRequest({ idempotencyKey: crypto.randomUUID(),
       purchaseOrderId: orderId,
       payeeType: 'supplier',
       payeeSupplierId: supplierId,
@@ -223,10 +223,25 @@ describe('createExpenseRequest', () => {
       ])
       .select();
     const passItem = acceptanceItems!.find((i) => i.pass_fail === 'pass')!;
+    const failItem = acceptanceItems!.find((i) => i.pass_fail === 'fail')!;
 
     currentEmployee.value = { id: applicantId };
     const { createExpenseRequest } = await import('@/lib/expense-requests/actions');
-    const result = await createExpenseRequest({
+    const withFailedLine = await createExpenseRequest({ idempotencyKey: crypto.randomUUID(),
+      purchaseOrderId: orderId,
+      payeeType: 'supplier',
+      payeeSupplierId: supplierId,
+      paymentMethod: '匯款',
+      bankName: null,
+      bankAccount: null,
+      accountName: null,
+      invoiceMonth: null,
+      expectedPaymentDate: '2026-07-25',
+      includedSourceItemIds: [passItem.id, failItem.id],
+    });
+    expect(withFailedLine.ok).toBe(false);
+
+    const result = await createExpenseRequest({ idempotencyKey: crypto.randomUUID(),
       purchaseOrderId: orderId,
       payeeType: 'supplier',
       payeeSupplierId: supplierId,
@@ -254,7 +269,8 @@ describe('createExpenseRequest', () => {
       .from('expense_request_items')
       .select('description, amount')
       .eq('expense_request_id', result.expenseRequestId);
-    expect(items).toEqual([{ description: '材料A', amount: 65000 }]);
+    // Raw rows: numeric(14,2) comes back as an exact decimal string.
+    expect(items).toEqual([{ description: '材料A', amount: '65000.00' }]);
 
     await admin.from('acceptance_items').delete().eq('acceptance_id', acceptance!.id);
     await admin.from('acceptances').delete().eq('id', acceptance!.id);

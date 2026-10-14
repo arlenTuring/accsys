@@ -1,0 +1,2 @@
+ALTER TABLE "approval_steps" DROP CONSTRAINT "approval_steps_approver_role_check";--> statement-breakpoint
+ALTER TABLE "approval_steps" ADD CONSTRAINT "approval_steps_approver_role_check" CHECK (approver_role in ('department_manager', 'budget_owner', 'general_manager', 'chairman', 'original_custodian', 'new_custodian', 'other_custodian', 'original_custodian_manager', 'new_custodian_manager', 'other_custodian_manager', 'applicant_confirmation'));

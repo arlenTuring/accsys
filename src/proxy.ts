@@ -21,10 +21,16 @@ function appOrigin(request: NextRequest): string {
  *    route resolves the session against the database itself.
  * 2. Per-request CSP nonce and HSTS (runtime settings).
  */
-export function middleware(request: NextRequest) {
+// Attachment downloads keep their own sandbox policy; the page CSP set here
+// would otherwise replace it on the final response.
+const ATTACHMENT_CSP = "default-src 'none'; sandbox";
+
+export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
   const nonce = btoa(crypto.randomUUID());
-  const csp = buildCsp(nonce, process.env.NODE_ENV === 'development');
+  const csp = pathname.startsWith('/api/attachments/')
+    ? ATTACHMENT_CSP
+    : buildCsp(nonce, process.env.NODE_ENV === 'development');
 
   let res: NextResponse;
   const hasSession = sessionCookieNames().some((name) => request.cookies.has(name));

@@ -1,24 +1,9 @@
 import Link from 'next/link';
-import { getMyApprovalQueue } from '@/lib/purchase-requests/queries';
-import { getMyPurchaseOrderApprovalQueue } from '@/lib/purchase-orders/queries';
-import { getMyAcceptanceApprovalQueue } from '@/lib/acceptances/queries';
-import { getMyExpenseRequestApprovalQueue } from '@/lib/expense-requests/queries';
-import { FORM_LABELS, FORM_ROUTE_PREFIX } from '@/lib/procurement/form-registry';
+import { getMyApprovalQueueAll } from '@/lib/approvals/queue';
+import { sealAmountLabel } from '@/lib/seal-requests/constants';
 
 export default async function ApprovalsPage() {
-  const [requests, orders, acceptances, expenseRequests] = await Promise.all([
-    getMyApprovalQueue(),
-    getMyPurchaseOrderApprovalQueue(),
-    getMyAcceptanceApprovalQueue(),
-    getMyExpenseRequestApprovalQueue(),
-  ]);
-
-  const queue = [
-    ...requests.map((q) => ({ ...q, formType: 'purchase_request' as const })),
-    ...orders.map((q) => ({ ...q, formType: 'purchase_order' as const })),
-    ...acceptances.map((q) => ({ ...q, formType: 'acceptance' as const })),
-    ...expenseRequests.map((q) => ({ ...q, formType: 'expense_request' as const })),
-  ];
+  const queue = await getMyApprovalQueueAll();
 
   return (
     <main className="page-shell">
@@ -37,18 +22,14 @@ export default async function ApprovalsPage() {
           {queue.map((q) => (
             <li key={`${q.formType}-${q.id}`}>
               <Link
-                href={`${FORM_ROUTE_PREFIX[q.formType]}/${q.id}`}
+                href={q.href}
                 className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 transition hover:bg-td-blue-light/40"
               >
-                <span className="w-24 text-xs font-semibold uppercase tracking-wide text-td-muted">
-                  {FORM_LABELS[q.formType]}
-                </span>
+                <span className="w-36 text-xs font-semibold uppercase tracking-wide text-td-muted">{q.label}</span>
                 <span className="mono-case">{q.caseNumber}</span>
                 <span className="text-sm text-td-blue-dark">{q.applicantName}</span>
                 <span className="badge-pending">待簽核</span>
-                <span className="text-sm font-medium text-td-blue-dark">
-                  NT$ {q.totalAmount.toLocaleString()}
-                </span>
+                <span className="text-sm font-medium text-td-blue-dark">{sealAmountLabel(q.totalAmount, q.currency)}</span>
               </Link>
             </li>
           ))}

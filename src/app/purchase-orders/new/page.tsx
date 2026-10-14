@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { createAppDb } from '@/lib/db/app-client';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getEligiblePurchaseRequestsForOrder } from '@/lib/purchase-orders/queries';
+import { SourcePicker } from '@/app/components/source-picker';
 import { PurchaseOrderForm } from './purchase-order-form';
 
 export default async function NewPurchaseOrderPage({
@@ -18,22 +19,14 @@ export default async function NewPurchaseOrderPage({
 
   if (!requestId) {
     return (
-      <main className="mx-auto max-w-2xl p-8">
-        <h1 className="mb-6 text-2xl font-bold">新增採購單</h1>
-        {eligible.length === 0 ? (
-          <p className="text-gray-500">目前沒有已核准、尚未建立採購單的請購單。</p>
-        ) : (
-          <ul className="space-y-2">
-            {eligible.map((r) => (
-              <li key={r.id}>
-                <a href={`/purchase-orders/new?requestId=${r.id}`} className="text-blue-600 underline">
-                  {r.caseNumber}
-                </a>
-              </li>
-            ))}
-          </ul>
-        )}
-      </main>
+      <SourcePicker
+        title="新增採購單"
+        hint="請選擇要建立採購單的請購單（需已核准、尚未建立採購單）。"
+        empty="目前沒有已核准、尚未建立採購單的請購單。"
+        backHref="/purchase-orders"
+        backLabel="我的採購單"
+        options={eligible.map((r) => ({ href: `/purchase-orders/new?requestId=${r.id}`, label: r.caseNumber }))}
+      />
     );
   }
 
