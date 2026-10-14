@@ -174,4 +174,40 @@ describe('directory review: create employees, apply changes, leavers (disposable
     expect(data.newHires.some((h) => h.directoryUserId === dirId(9))).toBe(false);
     expect(data.newHires.find((h) => h.directoryUserId === dirId(2))).toMatchObject({ match: null });
   });
+
+  it('the page shows the sync mode, Workspace authorization from the latest Workspace run, and the manager as a hint', async () => {
+    const { getDirectoryPageData } = await import('@/lib/admin/directory/queries');
+    await addDirectory(10, { department: '目錄部門', manager_email: email('boss') });
+    await sql`insert into directory_sync_runs (source, status) values ('fixture', 'succeeded')`;
+    await sql`insert into directory_sync_runs (source, status, error, finished_at) values ('directory', 'failed', ${`token expired ${tag}`}, now())`;
+    await sql`insert into directory_sync_runs (source, status, finished_at) values ('fixture', 'succeeded', now() + interval '1 second')`;
+
+    const data = await getDirectoryPageData();
+    expect(data.syncMode).toBe(process.env.AUTH_MODE?.trim() || 'manual');
+    expect(data.lastDirectoryRun).toMatchObject({ source: 'directory', status: 'failed', error: `token expired ${tag}` });
+    expect(data.newHires.find((h) => h.directoryUserId === dirId(10))).toMatchObject({ department: '目錄部門', managerEmail: email('boss') });
+    expect(data.jobRoles.length).toBeGreaterThan(0);
+    expect(data.jobRoles.every((r) => typeof r.isSystem === 'boolean')).toBe(true);
+  });
+
+  it('a new hire can be given a job role right after being created (org service, audited)', async () => {
+    const { createEmployeeFromDirectory } = await import('@/lib/admin/employees/service');
+    const { addRoleHolder } = await import('@/lib/admin/org/service');
+    const { getEmployeeAdminData } = await import('@/lib/admin/employees/queries');
+    await addDirectory(11);
+    const [role] = await sql`insert into job_roles (code, name) values (${`dr_${num}`}, ${`測試職務 ${tag}`}) returning id`;
+
+    const created = await createEmployeeFromDirectory(admin, { directoryUserId: dirId(11), employeeCode: `${tag}-n11`, departmentId: deptId });
+    expect(created).toMatchObject({ ok: true });
+    if (!created.ok) return;
+    employeeIds.push(created.employeeId!);
+    expect(await addRoleHolder(admin, { jobRoleId: role.id, employeeId: created.employeeId, departmentId: deptId })).toEqual({ ok: true });
+
+    const row = (await getEmployeeAdminData()).employees.find((e) => e.id === created.employeeId);
+    expect(row?.jobRoles).toEqual([
+      expect.objectContaining({ jobRoleId: role.id, departmentId: deptId, isPrimary: true }),
+    ]);
+    const [audit] = await sql`select details from audit_events where action = 'org.job_role.holder_added' and entity_id = ${role.id}`;
+    expect(audit.details).toMatchObject({ employeeId: created.employeeId, departmentId: deptId });
+  });
 });

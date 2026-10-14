@@ -1,17 +1,20 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { ACCOUNT_ERRORS } from '@/app/admin/accounts/messages';
 import { setEmployeeAccessAction } from '@/lib/admin/accounts/actions';
-import type { DirectoryPageData, LeaverWithHandover } from '@/lib/admin/directory/queries';
+import type { DirectoryPageData, LeaverWithHandover, SyncRunRow } from '@/lib/admin/directory/queries';
 import { applyDirectoryChangesAction, createEmployeeFromDirectoryAction } from '@/lib/admin/employees/actions';
+import { addRoleHolderAction } from '@/lib/admin/org/actions';
 import type { ChangeField, NewHire, ProfileChange } from '@/lib/directory/review';
 import { FORM_LABELS, FORM_ROUTE_PREFIX, type FormType } from '@/lib/procurement/form-registry';
 import { ActionMessage, dangerBtn, Section, smallBtn, smallInput, useOrgAction } from '../org-ui';
 
 type ServiceResult = { ok: true } | { ok: false; error: string; detail?: string };
 type Departments = DirectoryPageData['departments'];
+type JobRoles = DirectoryPageData['jobRoles'];
 
 /** Account / employee services answer with an error code; the org helpers expect a message. */
 async function adapt(promise: Promise<ServiceResult>) {
@@ -29,6 +32,15 @@ const LEAVER_REASONS: Record<LeaverWithHandover['reason'], string> = {
   missing: '目錄中找不到綁定的帳號',
 };
 const STATUS_LABELS = { succeeded: '成功', blocked: '已阻擋', failed: '失敗' } as const;
+const SYNC_MODES: Record<string, string> = { manual: '手動確認（同步後由管理員在本頁套用）' };
+
+function authorization(run: SyncRunRow | null): { text: string; tone: string } {
+  if (!run) return { text: '尚未授權或尚未執行 Workspace 同步', tone: 'text-amber-700' };
+  const at = stamp(run.finishedAt);
+  if (run.status === 'succeeded') return { text: `已授權，${at} 同步成功`, tone: 'text-emerald-700' };
+  if (run.status === 'blocked') return { text: `${at} 的同步被安全檢查阻擋，請查看下方說明`, tone: 'text-red-700' };
+  return { text: `${at} 的同步失敗，授權可能已失效，請檢查伺服器日誌`, tone: 'text-red-700' };
+}
 /** Taipei time (UTC+8, no DST), formatted by hand: Intl output differs between Node and browsers and breaks hydration. */
 function stamp(iso: string): string {
   const d = new Date(Date.parse(iso) + 8 * 3600_000);
@@ -45,7 +57,7 @@ export function DirectoryReview({ data, currentEmployeeId }: { data: DirectoryPa
     <div className="space-y-5">
       <ActionMessage msg={msg} />
       <SyncStatus data={data} idMismatch={idMismatch} />
-      <NewHires items={data.newHires} departments={data.departments} pending={pending} run={run} />
+      <NewHires items={data.newHires} departments={data.departments} jobRoles={data.jobRoles} pending={pending} run={run} />
       <Changes items={data.changes} pending={pending} run={run} />
       <Leavers items={data.leavers} currentEmployeeId={currentEmployeeId} pending={pending} run={run} />
     </div>
@@ -61,6 +73,14 @@ function SyncStatus({ data, idMismatch }: { data: DirectoryPageData; idMismatch:
       description="由伺服器排程（systemd timer）從 Google Workspace 讀取人員清單，網站本身不持有 Workspace 憑證。同步只會撤銷停權帳號的登入綁定並更新目錄快照；建立員工、更新資料與停用帳號都要在本頁由管理員確認（需 15 分鐘內登入過，並記錄稽核）。"
     >
       <dl className="grid gap-2 text-sm sm:grid-cols-3">
+        <div>
+          <dt className="text-xs text-td-muted">同步模式</dt>
+          <dd className="font-semibold">{SYNC_MODES[data.syncMode] ?? data.syncMode}</dd>
+        </div>
+        <div className="sm:col-span-2">
+          <dt className="text-xs text-td-muted">Workspace 授權（依最近一次 Workspace 同步結果判斷）</dt>
+          <dd className={`font-semibold ${authorization(data.lastDirectoryRun).tone}`}>{authorization(data.lastDirectoryRun).text}</dd>
+        </div>
         <div>
           <dt className="text-xs text-td-muted">最近一次成功同步</dt>
           <dd className="font-semibold">{data.lastSuccessAt ? stamp(data.lastSuccessAt) : '尚未同步'}</dd>
@@ -114,11 +134,11 @@ function SyncStatus({ data, idMismatch }: { data: DirectoryPageData; idMismatch:
   );
 }
 
-function NewHires({ items, departments, pending, run }: { items: NewHire[]; departments: Departments; pending: boolean; run: Run }) {
+function NewHires({ items, departments, jobRoles, pending, run }: { items: NewHire[]; departments: Departments; jobRoles: JobRoles; pending: boolean; run: Run }) {
   return (
     <Section
       title={`新進人員（${items.length}）`}
-      description="Workspace 中啟用、但尚未綁定任何員工的帳號。建立員工時姓名、Email、電話、職稱取自目錄；目錄的部門與職稱只供參考，部門請自行選擇。建立後不會自動綁定登入：本人首次以 Google 登入後，請到「帳號與登入綁定」核准。"
+      description="Workspace 中啟用、但尚未綁定任何員工的帳號。建立員工時姓名、Email、電話、職稱取自目錄；目錄的部門與主管只供參考：名稱相同的部門會預先選好，請確認後再建立，職務可一併指定（之後也可在「員工」或「職務類別」頁調整）。建立後不會自動綁定登入：本人首次以 Google 登入後，請到「帳號與登入綁定」核准。"
     >
       {items.length === 0 ? (
         <p className="text-sm text-td-muted">沒有待處理的新進人員。</p>
@@ -133,7 +153,7 @@ function NewHires({ items, departments, pending, run }: { items: NewHire[]; depa
           </thead>
           <tbody>
             {items.map((h) => (
-              <NewHireRow key={h.directoryUserId} hire={h} departments={departments} pending={pending} run={run} />
+              <NewHireRow key={h.directoryUserId} hire={h} departments={departments} jobRoles={jobRoles} pending={pending} run={run} />
             ))}
           </tbody>
         </table>
@@ -142,11 +162,28 @@ function NewHires({ items, departments, pending, run }: { items: NewHire[]; depa
   );
 }
 
-function NewHireRow({ hire, departments, pending, run }: { hire: NewHire; departments: Departments; pending: boolean; run: Run }) {
+function NewHireRow({ hire, departments, jobRoles, pending, run }: { hire: NewHire; departments: Departments; jobRoles: JobRoles; pending: boolean; run: Run }) {
+  const router = useRouter();
+  const directoryDepartment = hire.department?.trim();
+  const suggested = directoryDepartment ? departments.find((d) => d.name === directoryDepartment) : undefined;
   const [code, setCode] = useState(hire.employeeCode ?? '');
-  const [departmentId, setDepartmentId] = useState('');
+  const [departmentId, setDepartmentId] = useState(suggested?.id ?? '');
   const [role, setRole] = useState('staff');
+  const [jobRoleId, setJobRoleId] = useState('');
+  const [jobScope, setJobScope] = useState<'department' | 'company'>('department');
+  const jobRole = jobRoles.find((r) => r.id === jobRoleId);
+  const companyWide = jobRole?.isSystem || jobScope === 'company';
   const m = hire.match;
+
+  const create = async () => {
+    const employeeCode = code.trim();
+    const created = await createEmployeeFromDirectoryAction({ directoryUserId: hire.directoryUserId, employeeCode, departmentId, role });
+    if (!created.ok || !jobRole || !created.employeeId) return adapt(Promise.resolve(created));
+    const bound = await addRoleHolderAction({ jobRoleId: jobRole.id, employeeId: created.employeeId, departmentId: companyWide ? null : departmentId });
+    if (bound.ok) return bound;
+    router.refresh();
+    return { ...bound, error: `員工 ${employeeCode} 已建立，但職務未設定：${bound.error}（請到「員工」頁補設）` };
+  };
   return (
     <tr className="border-t border-td-border">
       <td className={td}>
@@ -155,6 +192,7 @@ function NewHireRow({ hire, departments, pending, run }: { hire: NewHire; depart
       </td>
       <td className={`${td} text-xs text-td-muted`}>
         {[hire.employeeCode && `員工編號 ${hire.employeeCode}`, hire.department, hire.title, hire.phone].filter(Boolean).join('・') || '—'}
+        {hire.managerEmail && <div>目錄主管：{hire.managerEmail}</div>}
       </td>
       <td className={`${td} space-y-1.5`}>
         {m ? (
@@ -214,19 +252,29 @@ function NewHireRow({ hire, departments, pending, run }: { hire: NewHire; depart
               <option value="staff">一般員工</option>
               <option value="finance">財會</option>
             </select>
+            <select className={smallInput} aria-label={`${hire.email} 職務`} value={jobRoleId} onChange={(e) => setJobRoleId(e.target.value)}>
+              <option value="">不指定職務</option>
+              {jobRoles.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+            {jobRole && !jobRole.isSystem && (
+              <select className={smallInput} aria-label={`${hire.email} 職務範圍`} value={jobScope} onChange={(e) => setJobScope(e.target.value as 'department' | 'company')}>
+                <option value="department">所選部門</option>
+                <option value="company">全公司</option>
+              </select>
+            )}
             <button
               type="button"
               className={smallBtn}
               disabled={pending || !code.trim() || !departmentId}
-              onClick={() =>
-                run(
-                  () => adapt(createEmployeeFromDirectoryAction({ directoryUserId: hire.directoryUserId, employeeCode: code.trim(), departmentId, role })),
-                  `已建立員工 ${code.trim()}`
-                )
-              }
+              onClick={() => run(create, `已建立員工 ${code.trim()}${jobRole ? `，並指定職務「${jobRole.name}」` : ''}`)}
             >
               建立員工
             </button>
+            {suggested && departmentId === suggested.id && <span className="w-full text-xs text-td-muted">部門依目錄「{hire.department}」預選，請確認</span>}
           </div>
         )}
       </td>

@@ -10,10 +10,14 @@ import {
   previewEmployeeImportAction,
   updateEmployeeAction,
 } from '@/lib/admin/employees/actions';
-import type { EmployeeAdminRow } from '@/lib/admin/employees/queries';
-import { ActionMessage, Section, smallBtn, smallInput, useOrgAction } from '../org-ui';
+import { setEmployeeRoleAction } from '@/lib/admin/accounts/actions';
+import type { EmployeeAdminRow, JobRoleOption } from '@/lib/admin/employees/queries';
+import { addRoleHolderAction, removeRoleHolderAction } from '@/lib/admin/org/actions';
+import { ActionMessage, dangerBtn, Section, smallBtn, smallInput, useOrgAction } from '../org-ui';
 
-type Data = { employees: EmployeeAdminRow[]; departments: { id: string; code: string; name: string }[] };
+type Data = { employees: EmployeeAdminRow[]; departments: { id: string; code: string; name: string }[]; jobRoles: JobRoleOption[] };
+type Run = ReturnType<typeof useOrgAction>['run'];
+type StatusFilter = '' | 'enabled' | 'unbound' | 'disabled';
 type ServiceResult = { ok: true } | { ok: false; error: string; detail?: string };
 
 const errorText = (r: { error: string; detail?: string }) => {
@@ -43,22 +47,32 @@ const valuesOf = (e: EmployeeAdminRow): FormValues => ({
   role: e.role,
 });
 
-export function EmployeesManager({ data }: { data: Data }) {
+export function EmployeesManager({ data, currentEmployeeId }: { data: Data; currentEmployeeId: string }) {
   const { pending, msg, run } = useOrgAction();
   const [filter, setFilter] = useState('');
+  const [departmentFilter, setDepartmentFilter] = useState('');
+  const [jobRoleFilter, setJobRoleFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('');
   const [editing, setEditing] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const q = filter.trim().toLowerCase();
-  const rows = q
-    ? data.employees.filter((e) => [e.employeeCode, e.name, e.departmentName, e.googleEmail ?? '', e.title ?? ''].some((v) => v.toLowerCase().includes(q)))
-    : data.employees;
+  const rows = data.employees.filter(
+    (e) =>
+      (!q || [e.employeeCode, e.name, e.departmentName, e.googleEmail ?? '', e.title ?? ''].some((v) => v.toLowerCase().includes(q))) &&
+      (!departmentFilter || e.departmentId === departmentFilter) &&
+      (!jobRoleFilter || e.jobRoles.some((b) => b.jobRoleId === jobRoleFilter)) &&
+      (statusFilter === '' ||
+        (statusFilter === 'enabled' && e.accessEnabled) ||
+        (statusFilter === 'unbound' && e.accessEnabled && !e.bound) ||
+        (statusFilter === 'disabled' && !e.accessEnabled))
+  );
 
   return (
     <div className="space-y-5">
       <ActionMessage msg={msg} />
       <Section
         title={`員工資料（${data.employees.length}）`}
-        description="Workspace 同步授權前，用這裡手動新增、修改員工，或匯入 Excel。系統角色、停用與登入綁定請到「帳號與登入綁定」頁處理；修改 Email 不會變更已綁定的 Google 帳號。操作需 15 分鐘內登入過，並記錄稽核。"
+        description="Workspace 同步授權前，用這裡手動新增、修改員工，或匯入 Excel。編輯時可調整系統角色與職務類別；停用與登入綁定請到「帳號與登入綁定」頁處理，修改 Email 不會變更已綁定的 Google 帳號。基本資料與系統角色需 15 分鐘內登入過，職務需 1 小時內登入過，全部記錄稽核。"
         actions={
           <button type="button" className={smallBtn} onClick={() => setAdding((v) => !v)}>
             {adding ? '取消新增' : '新增員工'}
@@ -75,7 +89,32 @@ export function EmployeesManager({ data }: { data: Data }) {
             onSubmit={(v) => run(() => adapt(createEmployeeAction(v)), `已建立員工 ${v.employeeCode.trim()}`, () => setAdding(false))}
           />
         )}
-        <input className={`${smallInput} w-64`} aria-label="搜尋員工" placeholder="搜尋編號、姓名、部門、Email" value={filter} onChange={(e) => setFilter(e.target.value)} />
+        <div className="flex flex-wrap items-center gap-2">
+          <input className={`${smallInput} w-64`} aria-label="搜尋員工" placeholder="搜尋編號、姓名、部門、Email" value={filter} onChange={(e) => setFilter(e.target.value)} />
+          <select className={smallInput} aria-label="依部門篩選" value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)}>
+            <option value="">全部部門</option>
+            {data.departments.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.code} {d.name}
+              </option>
+            ))}
+          </select>
+          <select className={smallInput} aria-label="依職務篩選" value={jobRoleFilter} onChange={(e) => setJobRoleFilter(e.target.value)}>
+            <option value="">全部職務</option>
+            {data.jobRoles.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}
+              </option>
+            ))}
+          </select>
+          <select className={smallInput} aria-label="依狀態篩選" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}>
+            <option value="">全部狀態</option>
+            <option value="enabled">啟用中</option>
+            <option value="unbound">未綁定登入</option>
+            <option value="disabled">已停用</option>
+          </select>
+          <span className="text-xs text-td-muted">顯示 {rows.length} 位</span>
+        </div>
         <table className="w-full text-sm">
           <thead>
             <tr>
@@ -83,6 +122,7 @@ export function EmployeesManager({ data }: { data: Data }) {
               <th className={th}>姓名</th>
               <th className={th}>部門</th>
               <th className={th}>職稱</th>
+              <th className={th}>職務</th>
               <th className={th}>Email</th>
               <th className={th}>電話／分機</th>
               <th className={th}>狀態</th>
@@ -93,15 +133,17 @@ export function EmployeesManager({ data }: { data: Data }) {
             {rows.map((e) =>
               editing === e.id ? (
                 <tr key={e.id} className="border-t border-td-border">
-                  <td className={td} colSpan={8}>
+                  <td className={`${td} space-y-3`} colSpan={9}>
                     <EmployeeForm
                       initial={valuesOf(e)}
                       departments={data.departments}
                       pending={pending}
-                      submitLabel="儲存"
+                      submitLabel="儲存基本資料"
                       onCancel={() => setEditing(null)}
                       onSubmit={(v) => run(() => adapt(updateEmployeeAction({ employeeId: e.id, ...v })), `已更新 ${v.employeeCode.trim()}`, () => setEditing(null))}
                     />
+                    <RoleEditor employee={e} self={e.id === currentEmployeeId} pending={pending} run={run} />
+                    <JobRoleEditor employee={e} departments={data.departments} jobRoles={data.jobRoles} pending={pending} run={run} />
                   </td>
                 </tr>
               ) : (
@@ -110,6 +152,7 @@ export function EmployeesManager({ data }: { data: Data }) {
                   <td className={td}>{e.name}</td>
                   <td className={td}>{e.departmentName}</td>
                   <td className={td}>{e.title ?? ''}</td>
+                  <td className={`${td} text-xs`}>{e.jobRoles.map((b) => bindingLabel(b)).join('、')}</td>
                   <td className={`${td} text-xs`}>{e.googleEmail ?? ''}</td>
                   <td className={`${td} text-xs`}>{[e.phone, e.extension && `#${e.extension}`].filter(Boolean).join(' ')}</td>
                   <td className={`${td} text-xs`}>
@@ -201,6 +244,118 @@ function EmployeeForm({
         )}
       </div>
     </form>
+  );
+}
+
+const bindingLabel = (b: EmployeeAdminRow['jobRoles'][number]) => `${b.jobRoleName}（${b.departmentName ?? '全公司'}${b.isPrimary ? '・主要' : ''}）`;
+
+function RoleEditor({ employee, self, pending, run }: { employee: EmployeeAdminRow; self: boolean; pending: boolean; run: Run }) {
+  const [role, setRole] = useState(employee.role);
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded border border-td-border p-3 text-xs">
+      <span className="font-semibold text-td-muted">系統角色</span>
+      {self ? (
+        <span className="text-td-muted">{ROLE_LABELS[employee.role] ?? employee.role}（不能變更自己的角色）</span>
+      ) : (
+        <>
+          <select className={smallInput} aria-label={`${employee.employeeCode} 系統角色`} value={role} onChange={(e) => setRole(e.target.value)}>
+            {Object.entries(ROLE_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className={smallBtn}
+            disabled={pending || role === employee.role}
+            onClick={() => {
+              if (role === 'admin' && !window.confirm(`將 ${employee.employeeCode} ${employee.name} 設為系統管理員？`)) return;
+              run(() => adapt(setEmployeeRoleAction(employee.id, role)), `已將 ${employee.employeeCode} 設為${ROLE_LABELS[role]}`);
+            }}
+          >
+            套用角色
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function JobRoleEditor({
+  employee,
+  departments,
+  jobRoles,
+  pending,
+  run,
+}: {
+  employee: EmployeeAdminRow;
+  departments: Data['departments'];
+  jobRoles: JobRoleOption[];
+  pending: boolean;
+  run: Run;
+}) {
+  const [jobRoleId, setJobRoleId] = useState('');
+  const [scope, setScope] = useState(employee.departmentId);
+  const jobRole = jobRoles.find((r) => r.id === jobRoleId);
+  const departmentId = jobRole?.isSystem || scope === '' ? null : scope;
+  return (
+    <div className="space-y-2 rounded border border-td-border p-3 text-xs">
+      <div className="font-semibold text-td-muted">職務類別</div>
+      {employee.jobRoles.length === 0 ? (
+        <p className="text-td-muted">尚未擔任任何職務。</p>
+      ) : (
+        <ul className="space-y-1">
+          {employee.jobRoles.map((b) => (
+            <li key={b.bindingId} className="flex items-center gap-2">
+              <span>{bindingLabel(b)}</span>
+              <button
+                type="button"
+                className={dangerBtn}
+                disabled={pending}
+                onClick={() => {
+                  if (!window.confirm(`移除 ${employee.name} 的職務「${b.jobRoleName}」？`)) return;
+                  run(() => removeRoleHolderAction(b.bindingId), `已移除職務「${b.jobRoleName}」`);
+                }}
+              >
+                移除
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <select className={smallInput} aria-label={`${employee.employeeCode} 新增職務`} value={jobRoleId} onChange={(e) => setJobRoleId(e.target.value)}>
+          <option value="">選擇職務…</option>
+          {jobRoles.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.name}
+            </option>
+          ))}
+        </select>
+        {jobRole && !jobRole.isSystem && (
+          <select className={smallInput} aria-label={`${employee.employeeCode} 職務範圍`} value={scope} onChange={(e) => setScope(e.target.value)}>
+            <option value="">全公司</option>
+            {departments.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.code} {d.name}
+              </option>
+            ))}
+          </select>
+        )}
+        <button
+          type="button"
+          className={smallBtn}
+          disabled={pending || !jobRole}
+          onClick={() => {
+            if (!jobRole) return;
+            run(() => addRoleHolderAction({ jobRoleId: jobRole.id, employeeId: employee.id, departmentId }), `已指定職務「${jobRole.name}」`, () => setJobRoleId(''));
+          }}
+        >
+          新增職務
+        </button>
+      </div>
+    </div>
   );
 }
 

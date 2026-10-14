@@ -20,6 +20,7 @@ export type SnapshotRow = {
   title: string | null;
   department: string | null;
   employeeCode: string | null;
+  managerEmail: string | null;
 };
 
 export type EmployeeRow = {
@@ -48,6 +49,7 @@ export type NewHire = {
   title: string | null;
   department: string | null;
   employeeCode: string | null;
+  managerEmail: string | null;
   /** An employee that looks like this person; `changes` would align its record with the directory. */
   match: { by: 'email' | 'code'; employeeId: string; employeeCode: string; name: string; changes: FieldChange[] } | null;
   linkRequestId: string | null;
@@ -185,6 +187,7 @@ export function buildDirectoryReview(input: {
       title: dir.title,
       department: dir.department,
       employeeCode: dir.employeeCode,
+      managerEmail: dir.managerEmail,
       match,
       linkRequestId: requests.get(dir.directoryUserId)?.id ?? null,
     });

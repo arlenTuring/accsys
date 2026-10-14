@@ -8,5 +8,5 @@ export const dynamic = 'force-dynamic';
 export default async function OrgEmployeesPage() {
   const employee = await getCurrentEmployee();
   if (!employee || employee.role !== 'admin') redirect('/dashboard');
-  return <EmployeesManager data={await getEmployeeAdminData()} />;
+  return <EmployeesManager data={await getEmployeeAdminData()} currentEmployeeId={employee.id} />;
 }

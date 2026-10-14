@@ -12,6 +12,7 @@ const dir = (id: string, over: Partial<SnapshotRow> = {}): SnapshotRow => ({
   title: null,
   department: null,
   employeeCode: null,
+  managerEmail: null,
   ...over,
 });
 
