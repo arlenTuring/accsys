@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getAssetOptions, getEmployeeOptions, getUsageBudgetOptions } from '@/lib/asset-transfers/queries';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { replacementFor } from '@/lib/custom-forms/legacy';
 import { getDepartmentOptions } from '@/lib/expense-claims/queries';
 import { taipeiToday } from '@/lib/taipei-date';
 import { AssetTransferForm } from '../asset-transfer-form';
@@ -9,6 +10,8 @@ import { AssetTransferForm } from '../asset-transfer-form';
 export default async function NewAssetTransferPage() {
   const employee = await getCurrentEmployee();
   if (!employee) redirect('/login');
+  const replacement = await replacementFor('asset_transfer');
+  if (replacement) redirect(`/f/${replacement}/new`);
   const [departments, budgetOptions, employees, assets] = await Promise.all([
     getDepartmentOptions(),
     getUsageBudgetOptions(),

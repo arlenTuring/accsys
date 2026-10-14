@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseDefinition } from './definition';
+import { ASSET_TRANSFER_FORM } from './migrated/asset-transfer';
 import { PURCHASE_ADMIN_SAMPLE } from './samples';
 import { parseFormSchema, SCHEMA_LIMITS } from './schema';
 
@@ -74,6 +75,55 @@ describe('parseFormSchema', () => {
     const errors = errorsOf(raw);
     expect(errors.length).toBeGreaterThan(0);
     expect(errors.join('\n')).toContain(message);
+  });
+
+  describe('table column options and the asset register link', () => {
+    const pick = (column: Record<string, unknown>, ticked: unknown = { id: 'kinds', type: 'checkboxes', label: '種類', options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }] }) =>
+      section([ticked, { id: 't', type: 'table', label: 'T', columns: [{ id: 'c', label: 'C', type: 'select', options: [{ value: 'a', label: 'A' }], ...column }] }]);
+
+    it('accepts unique asset / employee columns and a select limited to ticked choices', () => {
+      const r = parseFormSchema(pick({ pickFrom: { field: 'kinds', coverAll: true } }));
+      expect(r.ok).toBe(true);
+      const ok = parseFormSchema(section([{ id: 't', type: 'table', label: 'T', columns: [{ id: 'a', label: 'A', type: 'asset', unique: true }, { id: 'e', label: 'E', type: 'employee', unique: true }] }]));
+      expect(ok.ok).toBe(true);
+    });
+
+    it.each([
+      ['unique on a money column', section([{ id: 't', type: 'table', label: 'T', columns: [{ id: 'm', label: 'M', type: 'money', unique: true }] }]), '不可重複'],
+      ['pickFrom on a text column', pick({ type: 'text', options: undefined, pickFrom: { field: 'kinds', coverAll: false } }), '只有下拉選單欄'],
+      ['pickFrom pointing at a non-checkboxes field', pick({ pickFrom: { field: 'kinds', coverAll: false } }, { id: 'kinds', type: 'text', label: '種類' }), '核取方塊'],
+      ['pickFrom with an option the checkboxes lack', pick({ options: [{ value: 'z', label: 'Z' }], pickFrom: { field: 'kinds', coverAll: false } }), '選項需都在「種類」'],
+    ])('rejects %s', (_name, raw, message) => {
+      expect(errorsOf(raw).join('\n')).toContain(message);
+    });
+
+    const withRegister = (edit: (s: { sections: { fields: Record<string, unknown>[] }[]; assetRegister: Record<string, unknown> }) => void) => {
+      const s = clone<{ sections: { fields: Record<string, unknown>[] }[]; assetRegister: Record<string, unknown> }>(ASSET_TRANSFER_FORM.schema);
+      edit(s);
+      return s;
+    };
+    const fieldOf = (s: { sections: { fields: Record<string, unknown>[] }[] }, id: string) => s.sections.flatMap((x) => x.fields).find((f) => f.id === id)!;
+    const columnOf = (s: { sections: { fields: Record<string, unknown>[] }[] }, id: string) =>
+      (fieldOf(s, 'items').columns as Record<string, unknown>[]).find((c) => c.id === id)!;
+
+    it('accepts the asset transfer form', () => {
+      expect(errorsOf(ASSET_TRANSFER_FORM.schema)).toEqual([]);
+    });
+
+    it.each([
+      ['missing table', withRegister((s) => (s.assetRegister.table = 'nope')), '請選擇財產明細表'],
+      ['asset column not unique', withRegister((s) => delete columnOf(s, 'assetId').unique), '不可重複'],
+      ['asset column optional', withRegister((s) => (columnOf(s, 'assetId').required = false)), '需設為必填'],
+      ['reason option outside the register types', withRegister((s) => {
+        columnOf(s, 'reason').options = [{ value: 'burn', label: '燒毀' }];
+        delete columnOf(s, 'reason').pickFrom;
+      }), '選項代碼'],
+      ['custodian pointing at a text field', withRegister((s) => (s.assetRegister.custodians = { ...(s.assetRegister.custodians as object), original: 'remark' })), '需為員工欄位'],
+      ['original custodian optional', withRegister((s) => (fieldOf(s, 'originalCustodianEmployeeId').required = false)), '需設為必填'],
+      ['conditional custodian field', withRegister((s) => (fieldOf(s, 'newCustodianEmployeeId').visibleWhen = { field: 'remark', op: 'filled' })), '不能設定顯示條件'],
+    ])('rejects the asset register link with %s', (_name, raw, message) => {
+      expect(errorsOf(raw).join('\n')).toContain(message);
+    });
   });
 
   it('caps the number of fields', () => {

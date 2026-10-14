@@ -1,4 +1,5 @@
 import { CONDITION_OPS, type Condition, type ConditionOp } from '@/lib/approval/flow/types';
+import { ASSET_TRANSFER_TYPES } from '@/lib/asset-transfers/constants';
 
 /**
  * Field layout of a designer form ("schema" of a definition version). Stored
@@ -9,13 +10,21 @@ import { CONDITION_OPS, type Condition, type ConditionOp } from '@/lib/approval/
 
 export type FieldOption = { value: string; label: string };
 
-export type ColumnType = 'text' | 'number' | 'money' | 'date' | 'select';
+export type ColumnType = 'text' | 'number' | 'money' | 'date' | 'select' | 'employee' | 'asset';
 
 export type TableColumn = {
   id: string;
   label: string;
   type: ColumnType;
   required: boolean;
+  /** text / select / employee / asset columns: no two rows may hold the same value. */
+  unique?: boolean;
+  /**
+   * select columns: only the options ticked in this earlier checkboxes field
+   * (whose options include every option of the column); with coverAll, every
+   * ticked option must be used by at least one row.
+   */
+  pickFrom?: { field: string; coverAll: boolean };
   /** number columns */
   decimals?: number;
   /** select columns */
@@ -111,6 +120,7 @@ export type FieldDef = FieldBase &
     | { type: 'budget_code'; budgetScope?: BudgetScope }
     | { type: 'project' }
     | { type: 'supplier' }
+    | { type: 'asset' }
     | { type: 'table'; columns: TableColumn[]; minRows: number; maxRows: number; totalColumn: string | null }
     | { type: 'attachments'; maxFiles: number | null }
     | { type: 'notice'; text: string }
@@ -119,11 +129,25 @@ export type FieldDef = FieldBase &
 export type FieldType = FieldDef['type'];
 
 export type FormSection = { id: string; title: string; description: string; fields: FieldDef[] };
+
+/**
+ * 財產清冊串接: each row of `table` moves one asset. On submit the assets are
+ * locked and checked (still in the register, not on another pending form,
+ * custodians cover every row); once approved the rows are written into the
+ * register. Reason options are asset transfer types (register status after).
+ */
+export type AssetRegisterLink = {
+  table: string;
+  columns: { asset: string; reason: string; newCustodian: string; newLocation: string };
+  custodians: { original: string; new: string; other: string | null };
+};
+
 export type FormSchema = {
   version: 1;
   sections: FormSection[];
   /** 代為申請: the filer may name another employee as applicant, who confirms first. */
   onBehalf?: boolean;
+  assetRegister?: AssetRegisterLink;
 };
 
 export const FIELD_TYPES: readonly FieldType[] = [
@@ -141,6 +165,7 @@ export const FIELD_TYPES: readonly FieldType[] = [
   'budget_code',
   'project',
   'supplier',
+  'asset',
   'table',
   'attachments',
   'notice',
@@ -166,7 +191,8 @@ export const SCHEMA_LIMITS = {
 } as const;
 
 const ID = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
-const COLUMN_TYPES: readonly ColumnType[] = ['text', 'number', 'money', 'date', 'select'];
+const COLUMN_TYPES: readonly ColumnType[] = ['text', 'number', 'money', 'date', 'select', 'employee', 'asset'];
+const UNIQUE_COLUMN_TYPES: readonly ColumnType[] = ['text', 'select', 'employee', 'asset'];
 const SEMANTIC_TYPES: Record<FieldSemantic, readonly FieldType[]> = {
   amount: ['money', 'table'],
   budget_code: ['budget_code'],
@@ -186,6 +212,7 @@ const CONDITION_FIELD_TYPES: readonly FieldType[] = [
   'department',
   'budget_code',
   'project',
+  'asset',
   'table',
 ];
 
@@ -370,6 +397,19 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
         if (typeof v.default !== 'string' || !col.options.some((o) => o.value === v.default)) errors.push(`${where}：預設選項不在選項中`);
         else col.default = v.default;
       }
+    }
+    if (v.unique === true) {
+      if (!UNIQUE_COLUMN_TYPES.includes(type)) errors.push(`${where}：此欄位類型不能設定「不可重複」`);
+      else col.unique = true;
+    }
+    if (v.pickFrom !== undefined && v.pickFrom !== null) {
+      const p = v.pickFrom;
+      const src = isObj(p) && typeof p.field === 'string' ? earlierDefs.get(p.field) : undefined;
+      if (type !== 'select') errors.push(`${where}：只有下拉選單欄可以限定為已勾選的選項`);
+      else if (!src || src.type !== 'checkboxes') errors.push(`${where}：限定選項需對應排在這個明細表前面的核取方塊欄位`);
+      else if ((col.options ?? []).some((o) => !src.options.some((x) => x.value === o.value))) {
+        errors.push(`${where}：選項需都在「${src.label}」的選項中`);
+      } else col.pickFrom = { field: src.id, coverAll: isObj(p) && p.coverAll === true };
     }
     for (const key of ['rateFor', 'currencyColumn'] as const) {
       const ref = v[key];
@@ -654,9 +694,75 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
   });
   if (attachmentFields > 1) errors.push('每張表單最多一個附件欄位');
   if (fieldCount === 0) errors.push('表單至少需要一個欄位');
+  const assetRegister = raw.assetRegister === undefined || raw.assetRegister === null ? undefined : parseAssetRegister(raw.assetRegister, earlierDefs, errors);
   if (errors.length > 0) return { ok: false, errors: [...new Set(errors)] };
-  return { ok: true, schema: { version: 1, sections, ...(raw.onBehalf === true ? { onBehalf: true } : {}) } };
+  return {
+    ok: true,
+    schema: { version: 1, sections, ...(raw.onBehalf === true ? { onBehalf: true } : {}), ...(assetRegister ? { assetRegister } : {}) },
+  };
 }
+
+/** The linked table / columns / custodian fields must exist, have the right type, be required and always shown. */
+function parseAssetRegister(raw: unknown, fields: Map<string, FieldDef>, errors: string[]): AssetRegisterLink | undefined {
+  const where = '財產清冊串接';
+  const r = isObj(raw) ? raw : null;
+  const cols = r && isObj(r.columns) ? r.columns : null;
+  const people = r && isObj(r.custodians) ? r.custodians : null;
+  if (!r || !cols || !people || typeof r.table !== 'string') {
+    errors.push(`${where}：設定格式不正確`);
+    return undefined;
+  }
+  const before = errors.length;
+  const table = fields.get(r.table);
+  if (table?.type !== 'table') {
+    errors.push(`${where}：請選擇財產明細表`);
+    return undefined;
+  }
+  if (table.visibleWhen) errors.push(`${where}：明細表「${table.label}」不能設定顯示條件`);
+  const column = (key: string, name: string, type: ColumnType, extra?: (c: TableColumn) => string | null): string => {
+    const id = cols[key];
+    const c = typeof id === 'string' ? table.columns.find((x) => x.id === id) : undefined;
+    if (!c || c.type !== type || c.formula) errors.push(`${where}：「${name}」需為明細表中的${COLUMN_TYPE_NAMES[type]}欄`);
+    else if (!c.required) errors.push(`${where}：「${name}」欄需設為必填`);
+    else {
+      const problem = extra?.(c);
+      if (problem) errors.push(`${where}：${problem}`);
+    }
+    return typeof id === 'string' ? id : '';
+  };
+  const columns = {
+    asset: column('asset', '財產', 'asset', (c) => (c.unique ? null : '「財產」欄需設為不可重複')),
+    reason: column('reason', '異動原因', 'select', (c) =>
+      (c.options ?? []).every((o) => (ASSET_TRANSFER_TYPES as readonly string[]).includes(o.value))
+        ? null
+        : `「異動原因」欄的選項代碼需為 ${ASSET_TRANSFER_TYPES.join('、')} 其中之一`
+    ),
+    newCustodian: column('newCustodian', '新保管人員', 'employee'),
+    newLocation: column('newLocation', '新保管地點', 'text'),
+  };
+  const person = (key: string, name: string, required: boolean): string | null => {
+    const id = people[key];
+    if (!required && (id === undefined || id === null || id === '')) return null;
+    const f = typeof id === 'string' ? fields.get(id) : undefined;
+    if (f?.type !== 'employee') errors.push(`${where}：「${name}」需為員工欄位`);
+    else if (f.visibleWhen) errors.push(`${where}：「${name}」欄位不能設定顯示條件`);
+    else if (required && !f.required) errors.push(`${where}：「${name}」欄位需設為必填`);
+    return typeof id === 'string' ? id : null;
+  };
+  const custodians = { original: person('original', '原保管人', true) ?? '', new: person('new', '新保管人', true) ?? '', other: person('other', '其他保管人', false) };
+  if (errors.length > before) return undefined;
+  return { table: table.id, columns, custodians };
+}
+
+const COLUMN_TYPE_NAMES: Record<ColumnType, string> = {
+  text: '文字',
+  number: '數字',
+  money: '金額',
+  date: '日期',
+  select: '下拉選單',
+  employee: '員工',
+  asset: '財產',
+};
 
 /** Every field in display order. */
 export function allFields(schema: FormSchema): FieldDef[] {

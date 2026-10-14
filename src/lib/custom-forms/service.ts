@@ -3,7 +3,9 @@ import { resolveFlowInTx } from '@/lib/approval/flow/load';
 import type { FlowContext, FlowDef, ResolvedStep } from '@/lib/approval/flow/types';
 import { recordAudit } from '@/lib/audit/record';
 import { isUuid } from '@/lib/authz/forms';
+import { ACTIVE_ASSET_STATUSES, type AssetStatus } from '@/lib/asset-transfers/constants';
 import {
+  assets,
   attachments,
   budgetCodes,
   departments,
@@ -39,6 +41,7 @@ import {
   type Tx,
   type TxHooks,
 } from '@/lib/workflow/tx';
+import { applyAssetLinesIfApproved, prepareAssetLines, writeAssetLines } from './asset-register';
 import { parseDefinition } from './definition';
 import { withApplicantConfirmation } from './on-behalf';
 import { allFields, BUDGET_SCOPE_LABELS, type FormSchema } from './schema';
@@ -141,7 +144,7 @@ function normalize(schema: FormSchema, data: unknown): NormalizedSubmission {
   return (result as Extract<typeof result, { ok: true }>).value;
 }
 
-/** Referenced employees, departments, budget codes, projects and suppliers must exist (and be active); scoped budget codes must match. */
+/** Referenced employees, departments, budget codes, projects, suppliers and assets must exist (and be active); scoped budget codes must match. */
 async function assertRefs(tx: Tx, refs: NormalizedSubmission['refs']) {
   const check = async (ids: string[], query: (l: string[]) => Promise<{ id: string }[]>, what: string) => {
     const unique = [...new Set(ids)];
@@ -154,6 +157,13 @@ async function assertRefs(tx: Tx, refs: NormalizedSubmission['refs']) {
   await check(refs.budgetCodes, (l) => tx.select({ id: budgetCodes.id }).from(budgetCodes).where(inArray(budgetCodes.id, l)), '預算編號');
   await check(refs.projects, (l) => tx.select({ id: projects.id }).from(projects).where(inArray(projects.id, l)), '專案');
   await check(refs.suppliers, (l) => tx.select({ id: suppliers.id }).from(suppliers).where(inArray(suppliers.id, l)), '廠商');
+  if (refs.assets.length > 0) {
+    const ids = [...new Set(refs.assets)];
+    const rows = await tx.select({ id: assets.id, tag: assets.tag, status: assets.status }).from(assets).where(inArray(assets.id, ids));
+    if (rows.length !== ids.length) abort('validation', '選擇的財產不存在');
+    const gone = rows.find((r) => !ACTIVE_ASSET_STATUSES.includes(r.status as AssetStatus));
+    if (gone) abort('validation', `財產 ${gone.tag} 已不在財產清冊中`);
+  }
   if (refs.budgetScopes.length > 0) {
     const rows = await tx
       .select({ id: budgetCodes.id, departmentId: budgetCodes.departmentId, projectKind: projects.kind })
@@ -285,6 +295,7 @@ export function createSubmission(actor: Actor, key: string, input: CreateInput, 
       const value = normalize(def.schema, rest.data);
       assertAttachments(def.schema, value, typeof fileCount === 'number' ? fileCount : 0);
       await assertRefs(tx, value.refs);
+      const assetLines = def.schema.assetRegister ? await prepareAssetLines(tx, def.schema.assetRegister, value.data) : null;
       const parties = { applicantId, filerId: actor.id, departmentId: applicant.departmentId };
       const steps = confirmed(await resolveFlowInTx(tx, def.flow, flowContext(parties, def.key, value)), { ...parties, editorId: actor.id });
 
@@ -310,6 +321,10 @@ export function createSubmission(actor: Actor, key: string, input: CreateInput, 
         })
         .returning({ id: formSubmissions.id });
       const first = await insertResolvedSteps(tx, FORM, row.id, steps);
+      if (assetLines) {
+        await writeAssetLines(tx, row.id, assetLines);
+        await applyAssetLinesIfApproved(tx, row.id, actor.id);
+      }
       await notify(tx, outbox, {
         recipientEmployeeId: first ? first.approverEmployeeId : applicantId,
         type: first ? 'approval_requested' : 'request_approved',
@@ -356,6 +371,7 @@ export function approveSubmissionStep(actor: Actor, id: string, expectedVersion:
       const form = await lockOrFail(tx, id);
       assertVersion(form, expectedVersion);
       await decideCurrentStep(tx, outbox, { formType: FORM, form, actorId: actor.id, decision: 'approve' });
+      await applyAssetLinesIfApproved(tx, form.id, actor.id);
       await notifyFiler(tx, outbox, form);
       return { ok: true as const };
     },
@@ -404,6 +420,7 @@ export function reviseSubmission(actor: Actor, id: string, mode: 'update' | 'res
         .where(and(eq(attachments.formType, FORM), eq(attachments.formId, id)));
       assertAttachments(def.schema, value, n + (typeof input?.newFileCount === 'number' ? input.newFileCount : 0));
       await assertRefs(tx, value.refs);
+      if (def.schema.assetRegister) await writeAssetLines(tx, id, await prepareAssetLines(tx, def.schema.assetRegister, value.data, id));
       const parties = { applicantId: form.applicantEmployeeId, filerId, departmentId: applicant.departmentId };
       const steps = confirmed(await resolveFlowInTx(tx, def.flow, flowContext(parties, def.key, value)), { ...parties, editorId: actor.id });
 
@@ -424,6 +441,7 @@ export function reviseSubmission(actor: Actor, id: string, mode: 'update' | 'res
         previousItems: [previous],
         message: `${def.name} ${form.caseNumber} 已${mode === 'update' ? '修改' : '重新送出'}，待您簽核`,
       });
+      await applyAssetLinesIfApproved(tx, id, actor.id);
       return { ok: true as const };
     },
     hooks

@@ -120,8 +120,8 @@ MIGRATION_DATABASE_URL="$MIGRATOR_URL" npm run -s db:migrate
 "${PSQL[@]}" -f /accsys/seed-local-dev.sql
 echo "🧩 發布範例表單（已存在則略過）…"
 npm run -s seed:forms || echo "⚠️  範例表單未發布（不影響其他功能），可稍後執行 npm run seed:forms"
-echo "🧩 建立轉換表單草稿（第 1 批用印申請、第 2 批出差報支、第 3 批費用申請；已存在則略過，發佈前不影響舊表單）…"
-for batch in 1 2 3; do
+echo "🧩 建立轉換表單草稿（第 1 批用印申請、第 2 批出差報支、第 3 批費用申請、第 4 批資產異動；已存在則略過，發佈前不影響舊表單）…"
+for batch in 1 2 3 4; do
   npm run -s forms:migrate -- --batch "$batch" || echo "⚠️  第 $batch 批轉換表單草稿未建立（不影響其他功能），可稍後執行 npm run forms:migrate -- --batch $batch"
 done
 

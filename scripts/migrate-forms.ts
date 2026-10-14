@@ -8,7 +8,8 @@
  *
  * Usage:
  *   npm run forms:migrate -- --batch 1                 drafts, local database
- *   npm run forms:migrate -- --batch 1 --publish       publish (switch) at once
+ *   npm run forms:migrate -- --batch 1 --publish       publish (switch) at once; drafts installed
+ *                                                      earlier are published as they stand in the designer
  *   npm run forms:migrate -- --batch 1 --dry-run       only check the definitions
  *   npm run forms:migrate -- --batch 1 --actor a@x.com --allow-remote
  *       a database that is not on this machine (needs an active admin account)
@@ -72,6 +73,7 @@ async function main() {
   const { getSql } = await import('@/lib/db');
   const { runInTransaction } = await import('@/lib/workflow/tx');
   const { installMigratedForm } = await import('@/lib/custom-forms/migrated/install');
+  const { publishDraft } = await import('@/lib/form-builder/service');
   const sql = getSql();
   try {
     const [actor] = actorEmail
@@ -91,8 +93,22 @@ async function main() {
       if (!result.ok) {
         console.error(`  ${form.key}: ${result.error}`);
         process.exitCode = 1;
-      } else {
+        continue;
+      }
+      const [draft] =
+        mode === 'publish' && result.outcome === 'skipped'
+          ? await sql`select id, version from form_definitions where key = ${form.key} and status = 'draft' and legacy_form_type = ${form.legacyFormType}`
+          : [];
+      if (!draft) {
         console.log(`  ${form.key}: ${result.outcome} — ${result.note}`);
+        continue;
+      }
+      const published = await publishDraft({ id: actor.id as string, role: 'admin', authenticatedAt: new Date() }, draft.id, Number(draft.version));
+      if (!published.ok) {
+        console.error(`  ${form.key}: ${published.error}`);
+        process.exitCode = 1;
+      } else {
+        console.log(`  ${form.key}: published — 既有草稿已發佈 v${published.published}（含設計器中的修改）`);
       }
     }
   } finally {

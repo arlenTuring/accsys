@@ -1,16 +1,24 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { STATUS_BADGE, STATUS_LABELS } from '@/app/components/form-labels';
+import { SubmissionList } from '@/app/f/submission-list';
 import { ASSET_STATUS_LABELS } from '@/lib/asset-transfers/constants';
 import { getMyAssetTransfers, getMyCustodyAssets } from '@/lib/asset-transfers/queries';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { replacementFor } from '@/lib/custom-forms/legacy';
+import { getMySubmissions } from '@/lib/custom-forms/queries';
 
 const day = (iso: string) => iso.replaceAll('-', '/');
 
 export default async function AssetTransfersPage() {
   const employee = await getCurrentEmployee();
   if (!employee) redirect('/login');
-  const [transfers, custody] = await Promise.all([getMyAssetTransfers(), getMyCustodyAssets()]);
+  const [transfers, custody, newItems, replacement] = await Promise.all([
+    getMyAssetTransfers(),
+    getMyCustodyAssets(),
+    getMySubmissions({ legacyFormType: 'asset_transfer' }),
+    replacementFor('asset_transfer'),
+  ]);
 
   return (
     <main className="page-shell space-y-6">
@@ -20,13 +28,21 @@ export default async function AssetTransfersPage() {
           <h1 className="page-title">我的資產異動申請</h1>
           <p className="page-subtitle">保管人異動、借出、合併、出售、報廢等，請於異動發生後 7 個工作日內填單；核准後系統自動更新財產清冊。</p>
         </div>
-        <Link href="/asset-transfers/new" className="btn-primary">
+        <Link href={replacement ? `/f/${replacement}/new` : '/asset-transfers/new'} className="btn-primary">
           + 資產異動申請單
         </Link>
       </section>
 
+      {newItems.length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold text-td-blue-dark">新版資產異動申請</h2>
+          <SubmissionList items={newItems} showName />
+        </section>
+      )}
+
+      {newItems.length > 0 && transfers.length > 0 && <h2 className="-mb-4 text-sm font-semibold text-td-blue-dark">舊版資產異動申請</h2>}
       {transfers.length === 0 ? (
-        <div className="card text-sm text-td-muted">目前沒有資產異動申請單。</div>
+        newItems.length === 0 && <div className="card text-sm text-td-muted">目前沒有資產異動申請單。</div>
       ) : (
         <ul className="card divide-y divide-td-border !p-0">
           {transfers.map((t) => (

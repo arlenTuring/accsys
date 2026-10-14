@@ -29,6 +29,7 @@ export const FIELD_TYPE_LABELS: Record<FieldType, string> = {
   budget_code: '預算編號',
   project: '專案',
   supplier: '廠商',
+  asset: '財產',
   table: '明細表',
   attachments: '附件上傳',
   notice: '說明區塊',
@@ -36,7 +37,7 @@ export const FIELD_TYPE_LABELS: Record<FieldType, string> = {
 
 export const FIELD_GROUPS: { title: string; types: FieldType[] }[] = [
   { title: '基本輸入', types: ['text', 'textarea', 'number', 'money', 'date', 'select', 'radio', 'checkboxes', 'boolean'] },
-  { title: '組織與主檔', types: ['employee', 'department', 'budget_code', 'project', 'supplier'] },
+  { title: '組織與主檔', types: ['employee', 'department', 'budget_code', 'project', 'supplier', 'asset'] },
   { title: '組合', types: ['table'] },
   { title: '附件與說明', types: ['attachments', 'notice'] },
 ];

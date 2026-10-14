@@ -3,8 +3,10 @@ import { alias } from 'drizzle-orm/pg-core';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { canAttachToForm, canReadForm, isUuid } from '@/lib/authz/forms';
 import { getDb } from '@/lib/db';
+import { ACTIVE_ASSET_STATUSES, ASSET_STATUS_LABELS, type AssetStatus } from '@/lib/asset-transfers/constants';
 import {
   approvalSteps,
+  assets,
   budgetCodes,
   departments,
   employeeJobRoles,
@@ -12,6 +14,7 @@ import {
   formCategories,
   formDefinitions,
   formDefinitionVersions,
+  formSubmissionAssetLines,
   formSubmissions,
   jobRoles,
   procurementCases,
@@ -120,13 +123,51 @@ export type PickerOptions = {
   projects: { id: string; label: string }[];
   /** Names only; bank details never leave the server through the picker. */
   suppliers: { id: string; label: string }[];
+  /** Assets still in the register; custodian / location pre-fill the register-linked rows. */
+  assets: AssetPickerOption[];
 };
+
+export type AssetPickerOption = { id: string; label: string; custodianId: string; location: string };
+
+/** Field types and table column types the schema uses. */
+function usedTypes(schema: FormSchema): Set<string> {
+  const types = new Set<string>();
+  for (const f of allFields(schema)) {
+    types.add(f.type);
+    if (f.type === 'table') f.columns.forEach((c) => types.add(c.type));
+  }
+  return types;
+}
+
+async function assetOptions(): Promise<AssetPickerOption[]> {
+  const rows = await getDb()
+    .select({
+      id: assets.id,
+      tag: assets.tag,
+      name: assets.name,
+      quantity: assets.quantity,
+      status: assets.status,
+      custodianId: assets.custodianEmployeeId,
+      custodianName: employees.name,
+      location: assets.location,
+    })
+    .from(assets)
+    .innerJoin(employees, eq(employees.id, assets.custodianEmployeeId))
+    .where(inArray(assets.status, [...ACTIVE_ASSET_STATUSES]))
+    .orderBy(asc(assets.tag));
+  return rows.map((a) => ({
+    id: a.id,
+    label: `${a.tag} ${a.name}（${ASSET_STATUS_LABELS[a.status as AssetStatus] ?? a.status}｜數量 ${a.quantity}｜保管人 ${a.custodianName}）`,
+    custodianId: a.custodianId,
+    location: a.location,
+  }));
+}
 
 /** Choices for the reference fields the schema uses (active records only). */
 export async function getPickerOptions(schema: FormSchema): Promise<PickerOptions> {
-  const types = new Set(allFields(schema).map((f) => f.type));
+  const types = usedTypes(schema);
   const db = getDb();
-  const [emps, depts, codes, projs, sups] = await Promise.all([
+  const [emps, depts, codes, projs, sups, assetChoices] = await Promise.all([
     types.has('employee') || schema.onBehalf
       ? db
           .select({ id: employees.id, name: employees.name, dept: departments.name })
@@ -141,6 +182,7 @@ export async function getPickerOptions(schema: FormSchema): Promise<PickerOption
     types.has('budget_code') ? budgetCodeLabels() : [],
     types.has('project') ? db.select({ id: projects.id, code: projects.code, name: projects.name }).from(projects).orderBy(asc(projects.code)) : [],
     types.has('supplier') ? db.select({ id: suppliers.id, label: suppliers.name }).from(suppliers).orderBy(asc(suppliers.name)) : [],
+    types.has('asset') ? assetOptions() : [],
   ]);
   return {
     employees: emps.map((e) => ({ id: e.id, label: `${e.name}（${e.dept}）` })),
@@ -148,6 +190,7 @@ export async function getPickerOptions(schema: FormSchema): Promise<PickerOption
     budgetCodes: codes,
     projects: projs.map((p) => ({ id: p.id, label: `${p.code} ${p.name}` })),
     suppliers: sups,
+    assets: assetChoices,
   };
 }
 
@@ -306,24 +349,41 @@ export type SubmissionDetail = {
   /** Applicant or filer (may withdraw before the first decision). */
   isOwner: boolean;
   canAttach: boolean;
+  /** Register-linked forms only (null otherwise). */
+  assetRegister: { lines: SubmissionAssetLine[]; appliedAt: Date | null } | null;
 };
 
-/** Ids referenced by employee / department / budget code / project fields, resolved to display names. */
+/** Ids referenced by reference fields and employee / asset table columns, resolved to display names. */
 async function referenceLabels(fields: FieldDef[], data: Record<string, unknown>): Promise<Record<string, string>> {
-  const ids = { employee: [] as string[], department: [] as string[], budget_code: [] as string[], project: [] as string[], supplier: [] as string[] };
+  const ids = {
+    employee: [] as string[],
+    department: [] as string[],
+    budget_code: [] as string[],
+    project: [] as string[],
+    supplier: [] as string[],
+    asset: [] as string[],
+  };
   for (const f of fields) {
     const v = data[f.id];
-    if ((f.type === 'employee' || f.type === 'department' || f.type === 'budget_code' || f.type === 'project' || f.type === 'supplier') && isUuid(v)) {
-      ids[f.type].push(v);
+    if (f.type in ids && isUuid(v)) ids[f.type as keyof typeof ids].push(v);
+    if (f.type === 'table') {
+      const rows = (v as TableValue | undefined)?.rows ?? [];
+      for (const c of f.columns) {
+        if (c.type !== 'employee' && c.type !== 'asset') continue;
+        for (const row of rows) if (isUuid(row[c.id])) ids[c.type].push(row[c.id] as string);
+      }
     }
   }
   const db = getDb();
-  const [emps, depts, codes, projs, sups] = await Promise.all([
+  const [emps, depts, codes, projs, sups, assetRows] = await Promise.all([
     ids.employee.length ? db.select({ id: employees.id, label: employees.name }).from(employees).where(inArray(employees.id, ids.employee)) : [],
     ids.department.length ? db.select({ id: departments.id, label: departments.name }).from(departments).where(inArray(departments.id, ids.department)) : [],
     ids.budget_code.length ? budgetCodeLabels(ids.budget_code) : [],
     ids.project.length ? db.select({ id: projects.id, code: projects.code, name: projects.name }).from(projects).where(inArray(projects.id, ids.project)) : [],
     ids.supplier.length ? db.select({ id: suppliers.id, label: suppliers.name }).from(suppliers).where(inArray(suppliers.id, ids.supplier)) : [],
+    ids.asset.length
+      ? db.select({ id: assets.id, tag: assets.tag, name: assets.name }).from(assets).where(inArray(assets.id, [...new Set(ids.asset)]))
+      : [],
   ]);
   return Object.fromEntries([
     ...emps.map((e) => [e.id, e.label]),
@@ -331,7 +391,44 @@ async function referenceLabels(fields: FieldDef[], data: Record<string, unknown>
     ...codes.map((c) => [c.id, c.label]),
     ...projs.map((p) => [p.id, `${p.code} ${p.name}`]),
     ...sups.map((s) => [s.id, s.label]),
+    ...assetRows.map((a) => [a.id, `${a.tag} ${a.name}`]),
   ]);
+}
+
+export type SubmissionAssetLine = {
+  lineNo: number;
+  assetTag: string;
+  assetName: string;
+  quantity: number;
+  originalCustodianName: string;
+  originalLocation: string;
+  reason: string;
+  newCustodianName: string;
+  newLocation: string;
+};
+
+/** Register snapshot of a register-linked submission (what the register says vs. what it will say). */
+async function assetLinesOf(submissionId: string): Promise<SubmissionAssetLine[]> {
+  const original = alias(employees, 'original_custodian');
+  const next = alias(employees, 'new_custodian');
+  const rows = await getDb()
+    .select({ line: formSubmissionAssetLines, originalCustodianName: original.name, newCustodianName: next.name })
+    .from(formSubmissionAssetLines)
+    .innerJoin(original, eq(original.id, formSubmissionAssetLines.originalCustodianEmployeeId))
+    .innerJoin(next, eq(next.id, formSubmissionAssetLines.newCustodianEmployeeId))
+    .where(eq(formSubmissionAssetLines.submissionId, submissionId))
+    .orderBy(asc(formSubmissionAssetLines.lineNo));
+  return rows.map(({ line, originalCustodianName, newCustodianName }) => ({
+    lineNo: line.lineNo,
+    assetTag: line.assetTag,
+    assetName: line.assetName,
+    quantity: line.quantity,
+    originalCustodianName,
+    originalLocation: line.originalLocation,
+    reason: line.reason,
+    newCustodianName,
+    newLocation: line.newLocation,
+  }));
 }
 
 export async function getSubmissionDetail(id: string, opts: { withOptions?: boolean } = {}): Promise<SubmissionDetail | null> {
@@ -409,6 +506,7 @@ export async function getSubmissionDetail(id: string, opts: { withOptions?: bool
     canResubmit,
     isOwner,
     canAttach: await canAttachToForm(actor, FORM, id),
+    assetRegister: parsed.schema.assetRegister ? { lines: await assetLinesOf(s.id), appliedAt: s.registerAppliedAt } : null,
   };
 }
 

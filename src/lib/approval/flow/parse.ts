@@ -2,6 +2,7 @@ import {
   APPROVER_SOURCE_KINDS,
   CONDITION_OPS,
   DEFAULT_FLOW_OPTIONS,
+  type ApproverBlock,
   type ApproverSource,
   type Condition,
   type FlowBlock,
@@ -33,6 +34,8 @@ export type ParseFlowResult = { ok: true; flow: FlowDef } | { ok: false; errors:
 export function parseFlow(raw: unknown): ParseFlowResult {
   const errors: string[] = [];
   const ids = new Set<string>();
+  /** Approver blocks parsed so far (an escalation block may only look back). */
+  const approverIds = new Set<string>();
   let count = 0;
 
   const label = (v: unknown, where: string): string => {
@@ -212,13 +215,23 @@ export function parseFlow(raw: unknown): ParseFlowResult {
       if (b.type === 'approver') {
         const onUnresolved = b.onUnresolved ?? 'block';
         if (onUnresolved !== 'block' && onUnresolved !== 'skip') errors.push(`${at}：找不到人時的處理方式不正確`);
-        out.push({
+        const block: ApproverBlock = {
           id: id(b.id, at),
           type: 'approver',
           label: label(b.label, at),
           source: source(b.source, at),
           onUnresolved: onUnresolved === 'skip' ? 'skip' : 'block',
-        });
+        };
+        if (b.fallbackFor !== undefined && b.fallbackFor !== null) {
+          const list = b.fallbackFor;
+          if (!Array.isArray(list) || list.length === 0 || list.length > 20 || !list.every((x) => typeof x === 'string' && approverIds.has(x))) {
+            errors.push(`${at}：升級關卡只能參考排在前面的簽核關卡`);
+          } else {
+            block.fallbackFor = [...new Set(list as string[])];
+          }
+        }
+        if (block.id) approverIds.add(block.id);
+        out.push(block);
       } else if (b.type === 'condition') {
         const name = label(b.label, at);
         const branchList = Array.isArray(b.branches) ? b.branches : [];

@@ -61,6 +61,60 @@ function initialValues(schema: FormSchema, initial?: Values): Values {
   return out;
 }
 
+const cellText = (row: Values | undefined, col: string) => String(row?.[col] ?? '');
+
+/**
+ * Keeps dependent values in step with the field just changed: cells limited
+ * to ticked options drop unticked ones (a single ticked option fills blank
+ * cells); on a register-linked table, picking an asset pre-fills its location
+ * and the custodians, and rows follow a changed 新保管人.
+ */
+function withFollowUps(schema: FormSchema, prev: Values, id: string, v: unknown, options: PickerOptions): Values {
+  const next: Values = { ...prev, [id]: v };
+  const mapRows = (tableId: string, fn: (row: Values, i: number) => Values) => {
+    const t = next[tableId] as TableValue | undefined;
+    if (t) next[tableId] = { ...t, rows: t.rows.map(fn) };
+  };
+  for (const f of allFields(schema)) {
+    if (f.type !== 'table') continue;
+    const cols = f.columns.filter((c) => c.pickFrom?.field === id);
+    if (cols.length === 0) continue;
+    const ticked = Array.isArray(v) ? (v as string[]) : [];
+    mapRows(f.id, (r) => {
+      const row = { ...r };
+      for (const c of cols) {
+        const allowed = (c.options ?? []).map((o) => o.value).filter((x) => ticked.includes(x));
+        if (cellText(row, c.id) && !allowed.includes(cellText(row, c.id))) row[c.id] = '';
+        if (!cellText(row, c.id) && allowed.length === 1) row[c.id] = allowed[0];
+      }
+      return row;
+    });
+  }
+
+  const link = schema.assetRegister;
+  if (!link) return next;
+  const { asset, newCustodian, newLocation } = link.columns;
+  if (id === link.custodians.new) {
+    const before = String(prev[id] ?? '');
+    mapRows(link.table, (r) => (cellText(r, newCustodian) === '' || cellText(r, newCustodian) === before ? { ...r, [newCustodian]: v } : r));
+  }
+  if (id === link.table) {
+    const before = (prev[id] as TableValue | undefined)?.rows ?? [];
+    const byId = new Map(options.assets.map((a) => [a.id, a]));
+    mapRows(link.table, (r, i) => {
+      const picked = byId.get(cellText(r, asset));
+      if (!picked || picked.id === cellText(before[i], asset)) return r;
+      const row = { ...r };
+      const location = cellText(row, newLocation);
+      if (location === '' || location === byId.get(cellText(before[i], asset))?.location) row[newLocation] = picked.location;
+      if (cellText(row, newCustodian) === '') row[newCustodian] = String(next[link.custodians.new] ?? '');
+      if (!next[link.custodians.original]) next[link.custodians.original] = picked.custodianId;
+      return row;
+    });
+  }
+  return next;
+}
+
 /** Browser-side preview of a formula / total, same arithmetic as the server (which recomputes both). */
 function preview(field: TableField, col: TableColumn, row: Values): string {
   if (!col.formula) return '';
@@ -104,6 +158,8 @@ const COLUMN_MIN_WIDTH: Record<ColumnType, string> = {
   money: 'min-w-[7rem]',
   date: 'min-w-[9rem]',
   select: 'min-w-[6.5rem]',
+  employee: 'min-w-[9rem]',
+  asset: 'min-w-[14rem]',
 };
 
 function TableInput({
@@ -112,6 +168,8 @@ function TableInput({
   onChange,
   errors,
   currency,
+  options,
+  ticked,
 }: {
   field: TableField;
   value: TableValue;
@@ -119,9 +177,24 @@ function TableInput({
   errors: Record<string, string>;
   /** Picked currency code for a table with a currency field. */
   currency: string | null;
+  options: PickerOptions;
+  /** Options currently ticked in a checkboxes field (pickFrom columns). */
+  ticked: (fieldId: string) => string[];
 }) {
   const setCell = (i: number, col: string, v: unknown) =>
     onChange({ ...value, rows: value.rows.map((r, idx) => (idx === i ? { ...r, [col]: v } : r)) });
+  /** Choices of a select / employee / asset cell: ticked options only, values used on other rows left out. */
+  const choices = (c: TableColumn, i: number) => {
+    const all =
+      c.type === 'employee'
+        ? options.employees
+        : c.type === 'asset'
+          ? options.assets
+          : (c.options ?? []).filter((o) => !c.pickFrom || ticked(c.pickFrom.field).includes(o.value)).map((o) => ({ id: o.value, label: o.label }));
+    if (!c.unique) return all;
+    const taken = new Set(value.rows.filter((_, idx) => idx !== i).map((r) => String(r[c.id] ?? '')));
+    return all.filter((o) => !taken.has(o.id));
+  };
   const total = tableTotal(field, value);
   const totalIndex = field.columns.findIndex((c) => c.id === field.totalColumn);
   return (
@@ -151,9 +224,9 @@ function TableInput({
                   <td key={c.id} className="border border-td-border p-1 align-top">
                     {c.formula ? (
                       <span className="block px-2 py-2 text-right tabular-nums text-td-blue-dark">{preview(field, c, row) || '—'}</span>
-                    ) : c.type === 'select' ? (
+                    ) : c.type === 'select' || c.type === 'employee' || c.type === 'asset' ? (
                       <select value={String(row[c.id] ?? '')} onChange={(e) => setCell(i, c.id, e.target.value)} className={white} aria-label={`第 ${i + 1} 列 ${c.label}`}>
-                        <Options list={(c.options ?? []).map((o) => ({ id: o.value, label: o.label }))} />
+                        <Options list={choices(c, i)} />
                       </select>
                     ) : (
                       <div className="flex items-center gap-1">
@@ -218,6 +291,7 @@ function FieldInput({
   currency,
   errors,
   labelId,
+  ticked,
 }: {
   field: FieldDef;
   value: unknown;
@@ -227,6 +301,7 @@ function FieldInput({
   currency: string;
   errors: Record<string, string>;
   labelId: string;
+  ticked: (fieldId: string) => string[];
 }) {
   const str = String(value ?? '');
   const a11y = { 'aria-labelledby': labelId, 'aria-invalid': errors[field.id] ? true : undefined };
@@ -306,11 +381,14 @@ function FieldInput({
     case 'department':
     case 'budget_code':
     case 'project':
-    case 'supplier': {
+    case 'supplier':
+    case 'asset': {
       const list =
         field.type === 'budget_code'
           ? options.budgetCodes.filter((o) => !field.budgetScope || o.scope === field.budgetScope)
-          : { employee: options.employees, department: options.departments, project: options.projects, supplier: options.suppliers }[field.type];
+          : { employee: options.employees, department: options.departments, project: options.projects, supplier: options.suppliers, asset: options.assets }[
+              field.type
+            ];
       return (
         <select value={str} onChange={(e) => onChange(e.target.value)} className={white} {...a11y}>
           <Options list={list} />
@@ -318,7 +396,17 @@ function FieldInput({
       );
     }
     case 'table':
-      return <TableInput field={field} value={value as TableValue} onChange={onChange} errors={errors} currency={field.currencyField ? currency : null} />;
+      return (
+        <TableInput
+          field={field}
+          value={value as TableValue}
+          onChange={onChange}
+          errors={errors}
+          currency={field.currencyField ? currency : null}
+          options={options}
+          ticked={ticked}
+        />
+      );
     default:
       return null;
   }
@@ -376,8 +464,9 @@ export function CustomForm({
   }, [schema, values, today]);
   const currencyOf = (f: FieldDef) => (f.currencyField ? String(values[f.currencyField] ?? '') || '幣別' : 'NT$');
 
+  const ticked = (fieldId: string) => (Array.isArray(values[fieldId]) ? (values[fieldId] as string[]) : []);
   const set = (id: string) => (v: unknown) => {
-    setValues((prev) => ({ ...prev, [id]: v }));
+    setValues((prev) => withFollowUps(schema, prev, id, v, options));
     setErrors((prev) => {
       const stale = Object.keys(prev).filter((k) => k === id || k.startsWith(`${id}.`));
       if (stale.length === 0) return prev;
@@ -488,6 +577,7 @@ export function CustomForm({
                             currency={currencyOf(f)}
                             errors={errors}
                             labelId={`field-${f.id}`}
+                            ticked={ticked}
                           />
                         )}
                       </div>

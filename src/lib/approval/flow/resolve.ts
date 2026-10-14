@@ -37,9 +37,11 @@ function startDepartment(
   departmentId?: string,
   fieldId?: string
 ): { id: string } | { reason: string } {
-  const id = of === 'applicant' ? ctx.departmentId : of === 'department' ? departmentId : fieldIds(ctx.fields[fieldId ?? ''])[0];
-  if (!id) return { reason: of === 'field' ? '表單上的部門欄位沒有填寫' : '沒有設定部門' };
-  if (!org.departments.has(id)) return { reason: '找不到部門資料' };
+  const picked = of === 'applicant' ? ctx.departmentId : of === 'department' ? departmentId : fieldIds(ctx.fields[fieldId ?? ''])[0];
+  if (!picked) return { reason: of === 'field' ? '表單上的部門（或人員）欄位沒有填寫' : '沒有設定部門' };
+  const person = of === 'field' ? org.employees.get(picked) : undefined;
+  const id = person ? person.departmentId : picked;
+  if (!org.departments.has(id)) return { reason: person ? `找不到${person.name}所屬部門的資料` : '找不到部門資料' };
   return { id };
 }
 
@@ -237,7 +239,19 @@ export function resolveFlow(flow: FlowDef, ctx: FlowContext, org: OrgSnapshot): 
         continue;
       }
 
-      const result = lookup(block, ctx, org);
+      const self = (id: string) => id === ctx.applicantEmployeeId || id === ctx.filerEmployeeId;
+      if (block.fallbackFor) {
+        const covered = steps.some(
+          (s) => block.fallbackFor!.includes(s.blockId) && s.approverEmployeeId !== null && !self(s.approverEmployeeId)
+        );
+        path.push(`${block.label}：${covered ? '前面已有申請人以外的人簽核，不需要' : '需要（前面沒有申請人以外的人簽核）'}`);
+        if (covered) continue;
+      }
+      let result = lookup(block, ctx, org);
+      if (block.fallbackFor && result.ok) {
+        const others = result.candidates.filter((c) => !self(delegateFor(c.employeeId, ctx, org) ?? c.employeeId));
+        result = others.length > 0 ? found(others) : missing('只有申請人本人可簽');
+      }
       if (!result.ok) {
         if (block.onUnresolved === 'block') {
           return { error: `「${block.label}」找不到簽核人：${result.reason}，請聯絡系統管理員`, blockId: block.id };

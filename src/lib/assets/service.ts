@@ -1,8 +1,9 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { ASSET_STATUSES, MAX_LOCATION_LENGTH, type AssetStatus } from '@/lib/asset-transfers/constants';
 import { recordAudit } from '@/lib/audit/record';
 import { isUuid } from '@/lib/authz/forms';
-import { assetTransferItems, assetTransfers, assets, employees } from '@/lib/db/schema';
+import { busyAssetTag } from '@/lib/custom-forms/asset-register';
+import { assets, employees } from '@/lib/db/schema';
 import { abort, fail, runInTransaction, type Failure, type Tx } from '@/lib/workflow/tx';
 
 // Finance / admin maintain the register (財產保管清冊) directly; transfers
@@ -59,14 +60,8 @@ async function upsertInTx(tx: Tx, actorId: string, input: AssetInput): Promise<{
   const custodianChanges = !existing || existing.custodianEmployeeId !== value.custodianEmployeeId;
   // A departed custodian may stay on a row that already names them; nothing new is assigned to them.
   if (custodianChanges && !custodian!.accessEnabled) abort('validation', '保管人帳號已停用，無法指派為保管人');
-  if (existing && custodianChanges) {
-    const [pending] = await tx
-      .select({ id: assetTransfers.id })
-      .from(assetTransferItems)
-      .innerJoin(assetTransfers, eq(assetTransfers.id, assetTransferItems.assetTransferId))
-      .where(and(eq(assetTransferItems.assetId, existing.id), eq(assetTransfers.status, 'pending_approval')))
-      .limit(1);
-    if (pending) abort('conflict', `財產 ${value.tag} 有簽核中的資產異動申請單，請等該單完成後再修改保管人`);
+  if (existing && custodianChanges && (await busyAssetTag(tx, [existing.id], {}))) {
+    abort('conflict', `財產 ${value.tag} 有簽核中的資產異動申請單，請等該單完成後再修改保管人`);
   }
   const columns = {
     name: value.name,

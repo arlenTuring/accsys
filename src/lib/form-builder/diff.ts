@@ -53,6 +53,8 @@ export type ChangeSummary = {
   sectionsChanged: boolean;
   /** 允許代為申請 was turned on or off. */
   onBehalfChanged: boolean;
+  /** 財產清冊串接 was added, removed or re-mapped. */
+  assetRegisterChanged: boolean;
   flowChanged: boolean;
 };
 
@@ -61,7 +63,17 @@ const json = (v: unknown) => JSON.stringify(v);
 /** What a publish changes compared with the current version (null = first publish). */
 export function changeSummary(prev: { schema: FormSchema; flow: FlowDef } | null, next: { schema: FormSchema; flow: FlowDef }): ChangeSummary {
   const nextFields = next.schema.sections.flatMap((s) => s.fields);
-  if (!prev) return { added: nextFields.map((f) => f.label), removed: [], modified: [], sectionsChanged: true, onBehalfChanged: false, flowChanged: true };
+  if (!prev) {
+    return {
+      added: nextFields.map((f) => f.label),
+      removed: [],
+      modified: [],
+      sectionsChanged: true,
+      onBehalfChanged: false,
+      assetRegisterChanged: false,
+      flowChanged: true,
+    };
+  }
   const prevFields = prev.schema.sections.flatMap((s) => s.fields);
   const prevById = new Map(prevFields.map((f) => [f.id, f]));
   const nextIds = new Set(nextFields.map((f) => f.id));
@@ -79,10 +91,13 @@ export function changeSummary(prev: { schema: FormSchema; flow: FlowDef } | null
     modified: nextFields.filter((f) => prevById.has(f.id) && json(prevById.get(f.id)) !== json(f)).map((f) => f.label),
     sectionsChanged: json(layout(prev.schema)) !== json(layout(next.schema)),
     onBehalfChanged: (prev.schema.onBehalf === true) !== (next.schema.onBehalf === true),
+    assetRegisterChanged: json(prev.schema.assetRegister ?? null) !== json(next.schema.assetRegister ?? null),
     flowChanged: json(prev.flow) !== json(next.flow),
   };
 }
 
 export function hasChanges(c: ChangeSummary): boolean {
-  return c.added.length + c.removed.length + c.modified.length > 0 || c.sectionsChanged || c.onBehalfChanged || c.flowChanged;
+  return (
+    c.added.length + c.removed.length + c.modified.length > 0 || c.sectionsChanged || c.onBehalfChanged || c.assetRegisterChanged || c.flowChanged
+  );
 }

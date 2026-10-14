@@ -50,7 +50,11 @@ export type FormParty = 'applicant' | 'filer' | 'field_employee' | 'budget_owner
 export type ApproverSource =
   /** 指定員工 */
   | { kind: 'employee'; employeeId: string }
-  /** 部門主管: manager of the applicant's / a fixed / a field's department, optionally N levels up. */
+  /**
+   * 部門主管: manager of the applicant's / a fixed / a field's department,
+   * optionally N levels up. A field may be a department or an employee field
+   * (that employee's department).
+   */
   | {
       kind: 'department_manager';
       of: 'applicant' | 'department' | 'field';
@@ -104,6 +108,12 @@ export type ApproverBlock = {
   source: ApproverSource;
   /** 找不到簽核人時: block = refuse to submit, skip = record a skipped step. */
   onUnresolved: 'block' | 'skip';
+  /**
+   * 升級關卡: needed only when none of these earlier approver blocks got a
+   * signer other than the applicant / filer (e.g. every unit manager is the
+   * applicant → 總經理). Its own signer must be someone else as well.
+   */
+  fallbackFor?: string[];
 };
 
 export type ConditionBranch = { id: string; label: string; when: Condition; blocks: FlowBlock[] };

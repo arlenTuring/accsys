@@ -33,6 +33,8 @@ export function condFieldOf(f: FieldDef, options: PickerOptions): CondField | nu
       return { id: f.id, label: f.label, kind: 'ref', options: toOptions(options.budgetCodes) };
     case 'project':
       return { id: f.id, label: f.label, kind: 'ref', options: toOptions(options.projects) };
+    case 'asset':
+      return { id: f.id, label: f.label, kind: 'ref', options: toOptions(options.assets) };
     default:
       return null;
   }

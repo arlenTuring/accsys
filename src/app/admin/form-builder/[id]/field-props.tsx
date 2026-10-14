@@ -31,7 +31,10 @@ const COLUMN_TYPES: { value: ColumnType; label: string }[] = [
   { value: 'money', label: '金額' },
   { value: 'date', label: '日期' },
   { value: 'select', label: '下拉選單' },
+  { value: 'employee', label: '員工' },
+  { value: 'asset', label: '財產' },
 ];
+const UNIQUE_TYPES: readonly ColumnType[] = ['text', 'select', 'employee', 'asset'];
 
 const numOrNull = (v: string) => (v.trim() === '' ? null : Number(v));
 
@@ -276,6 +279,8 @@ function ColumnsEditor({
                   maxLength: type === 'text' ? c.maxLength : undefined,
                   rateFor: type === 'number' ? c.rateFor : undefined,
                   currencyColumn: type === 'money' ? c.currencyColumn : undefined,
+                  unique: UNIQUE_TYPES.includes(type) ? c.unique : undefined,
+                  pickFrom: type === 'select' ? c.pickFrom : undefined,
                   rules: undefined,
                 });
               }}
@@ -287,6 +292,9 @@ function ColumnsEditor({
               ))}
             </select>
             {!c.formula && <Check label="必填" checked={c.required} onChange={(v) => setCol(i, { required: v })} />}
+            {UNIQUE_TYPES.includes(c.type) && (
+              <Check label="不可重複" checked={c.unique === true} onChange={(v) => setCol(i, { unique: v || undefined })} />
+            )}
             {c.type === 'number' && (
               <label className="flex items-center gap-1 text-xs">
                 小數位
@@ -419,6 +427,30 @@ function ColumnsEditor({
                   ))}
                 </select>
               </label>
+              <label className="flex flex-wrap items-center gap-1 text-xs">
+                只能選已勾選的
+                <select
+                  className={`${smallInput} !w-36`}
+                  value={c.pickFrom?.field ?? ''}
+                  onChange={(e) => setCol(i, { pickFrom: e.target.value ? { field: e.target.value, coverAll: c.pickFrom?.coverAll ?? false } : undefined })}
+                >
+                  <option value="">不限定</option>
+                  {condFields
+                    .filter((f) => f.kind === 'checkboxes')
+                    .map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.label}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              {c.pickFrom && (
+                <Check
+                  label="每個勾選的選項都要至少一列使用"
+                  checked={c.pickFrom.coverAll}
+                  onChange={(v) => setCol(i, { pickFrom: { field: c.pickFrom!.field, coverAll: v } })}
+                />
+              )}
             </>
           )}
           {(c.type === 'date' || c.type === 'number' || c.type === 'money') && (

@@ -1,7 +1,14 @@
 'use client';
 
 import { useState, type DragEvent } from 'react';
-import { APPROVER_SOURCE_KINDS, type ApproverSourceKind, type FlowBlock, type FlowDef, type FlowOptions } from '@/lib/approval/flow/types';
+import {
+  APPROVER_SOURCE_KINDS,
+  type ApproverBlock,
+  type ApproverSourceKind,
+  type FlowBlock,
+  type FlowDef,
+  type FlowOptions,
+} from '@/lib/approval/flow/types';
 import type { PickerOptions } from '@/lib/custom-forms/queries';
 import type { FormSchema } from '@/lib/custom-forms/schema';
 import { newApprover, newCondition, newSource, SOURCE_LABELS, uniqueId } from '@/lib/form-builder/blank';
@@ -190,6 +197,7 @@ export function FlowEditor({
           <span className="font-semibold text-td-blue-dark">{b.label || '（未命名關卡）'}</span>
           <span className="ml-2 text-xs text-td-muted">{SOURCE_LABELS[b.source.kind]}</span>
           <span className="block truncate text-xs text-td-blue-dark">{sourceSummary(b.source, org, schema)}</span>
+          {b.fallbackFor && <span className="badge mr-1 mt-0.5 bg-amber-100 text-amber-800">升級關卡</span>}
           {b.onUnresolved === 'skip' && <span className="badge mt-0.5 bg-slate-100 text-slate-700">找不到人時略過</span>}
         </span>
         {cardTools(b.id)}
@@ -308,6 +316,60 @@ export function FlowEditor({
   );
 }
 
+/** Approver blocks placed before `id`, in the order the flow walks them. */
+function approversBefore(blocks: FlowBlock[], id: string): ApproverBlock[] {
+  const out: ApproverBlock[] = [];
+  const walk = (list: FlowBlock[]): boolean => {
+    for (const b of list) {
+      if (b.id === id) return true;
+      if (b.type === 'approver') out.push(b);
+      else if (walk(b.branches.flatMap((br) => br.blocks)) || walk(b.otherwise.blocks)) return true;
+    }
+    return false;
+  };
+  walk(blocks);
+  return out;
+}
+
+/** 升級關卡: only needed when none of the chosen earlier blocks got someone other than the applicant. */
+function EscalationEditor({ flow, block, setBlocks }: { flow: FlowDef; block: ApproverBlock; setBlocks: (b: FlowBlock[]) => void }) {
+  const earlier = approversBefore(flow.blocks, block.id);
+  const picked = block.fallbackFor ?? [];
+  const set = (fallbackFor: string[] | undefined) =>
+    setBlocks(
+      updateBlock(flow.blocks, block.id, (b) => {
+        if (b.type !== 'approver') return b;
+        const next = { ...b };
+        if (fallbackFor && fallbackFor.length > 0) next.fallbackFor = fallbackFor;
+        else delete next.fallbackFor;
+        return next;
+      })
+    );
+  if (earlier.length === 0) return null;
+  return (
+    <div className="space-y-1 border-t border-dashed border-td-border pt-3">
+      <label className="flex items-start gap-2">
+        <input type="checkbox" className="mt-1" checked={!!block.fallbackFor} onChange={(e) => set(e.target.checked ? [earlier[earlier.length - 1].id] : undefined)} />
+        <span>
+          升級關卡
+          <span className="block text-xs text-td-muted">只在下列關卡都沒有申請人（或代填人）以外的人簽核時才需要這一關，例如各單位主管都是申請人本人時改由總經理簽核；這一關也不會由申請人本人簽。</span>
+        </span>
+      </label>
+      {block.fallbackFor &&
+        earlier.map((b) => (
+          <label key={b.id} className="ml-6 flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={picked.includes(b.id)}
+              onChange={(e) => set(e.target.checked ? [...picked, b.id] : picked.filter((x) => x !== b.id))}
+            />
+            {b.label || b.id}
+          </label>
+        ))}
+    </div>
+  );
+}
+
 function SelectionPanel({
   flow,
   setFlow,
@@ -386,6 +448,7 @@ function SelectionPanel({
             <option value="skip">略過這一關（時間軸顯示「略過」）</option>
           </select>
         </Field>
+        <EscalationEditor flow={flow} block={block} setBlocks={setBlocks} />
       </div>
     );
   }

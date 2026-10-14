@@ -26,6 +26,8 @@ export type NormalizedSubmission = {
     budgetCodes: string[];
     projects: string[];
     suppliers: string[];
+    /** Must still be in the register (保管中 / 出借中). */
+    assets: string[];
     budgetScopes: { id: string; scope: BudgetScope }[];
   };
   /** Whether a visible attachments field requires at least one file. */
@@ -225,7 +227,17 @@ function cell(col: TableColumn, v: unknown): unknown {
       return v;
     case 'select':
       return option(v, col.options ?? []);
+    case 'employee':
+    case 'asset':
+      return uuid(v);
   }
+}
+
+/** pickFrom: the row's option must be one of those ticked in the checkboxes field. */
+function checkPicked(col: TableColumn, v: unknown, values: Record<string, unknown>, schemaField: (id: string) => FieldDef | undefined) {
+  const ticked = values[col.pickFrom!.field];
+  if (Array.isArray(ticked) && ticked.includes(v)) return;
+  bad(`需為已勾選的「${schemaField(col.pickFrom!.field)?.label ?? ''}」之一`);
 }
 
 /** Exchange-rate cell: 1 for NT$, otherwise required, > 0 and plausible for the row's currency. */
@@ -261,7 +273,15 @@ export function isUntouchedRow(columns: TableColumn[], row: Record<string, unkno
   return columns.every((c) => c.formula || c.rateFor !== undefined || blank(row[c.id]) || (c.default !== undefined && row[c.id] === c.default));
 }
 
-function table(field: Extract<FieldDef, { type: 'table' }>, v: unknown, errors: Record<string, string>, values: Record<string, unknown>): TableValue {
+type FieldLookup = (id: string) => FieldDef | undefined;
+
+function table(
+  field: Extract<FieldDef, { type: 'table' }>,
+  v: unknown,
+  errors: Record<string, string>,
+  values: Record<string, unknown>,
+  fieldOf: FieldLookup
+): TableValue {
   const rawRows = v && typeof v === 'object' && Array.isArray((v as TableValue).rows) ? (v as TableValue).rows : Array.isArray(v) ? v : null;
   if (v !== undefined && v !== null && rawRows === null) bad('格式不正確');
   const byId = new Map(field.columns.map((c) => [c.id, c]));
@@ -288,6 +308,12 @@ function table(field: Extract<FieldDef, { type: 'table' }>, v: unknown, errors: 
     for (const col of inputColumns) {
       attempt(col, () => {
         row[col.id] = col.rateFor !== undefined ? rateCell(col, r[col.id], row[col.rateFor]) : cell(col, r[col.id]);
+        if (row[col.id] === null) return;
+        if (col.pickFrom) checkPicked(col, row[col.id], values, fieldOf);
+        if (col.unique) {
+          const twin = rows.findIndex((prev) => prev[col.id] === row[col.id]);
+          if (twin !== -1) bad(`與第 ${twin + 1} 列重複`);
+        }
       });
     }
     for (const col of field.columns.filter((c) => c.formula)) {
@@ -307,6 +333,16 @@ function table(field: Extract<FieldDef, { type: 'table' }>, v: unknown, errors: 
   }
   const minRows = Math.max(field.minRows, field.required ? 1 : 0);
   if (rows.length < minRows) bad(`至少需要 ${minRows} 列`);
+  for (const col of field.columns) {
+    if (!col.pickFrom?.coverAll) continue;
+    const src = fieldOf(col.pickFrom.field);
+    const ticked = values[col.pickFrom.field];
+    for (const code of Array.isArray(ticked) ? ticked : []) {
+      if (rows.some((r) => r[col.id] === code)) continue;
+      const name = src?.type === 'checkboxes' ? (src.options.find((o) => o.value === code)?.label ?? code) : code;
+      bad(`已勾選「${name}」，但沒有任何一列的「${col.label}」是「${name}」`);
+    }
+  }
 
   let total: string | number | null = null;
   if (field.totalColumn) {
@@ -325,8 +361,15 @@ function table(field: Extract<FieldDef, { type: 'table' }>, v: unknown, errors: 
   return { rows, total };
 }
 
-function value(field: FieldDef, v: unknown, today: string, errors: Record<string, string>, earlier: Record<string, unknown>): unknown {
-  if (field.type === 'table') return table(field, v, errors, earlier);
+function value(
+  field: FieldDef,
+  v: unknown,
+  today: string,
+  errors: Record<string, string>,
+  earlier: Record<string, unknown>,
+  fieldOf: FieldLookup
+): unknown {
+  if (field.type === 'table') return table(field, v, errors, earlier, fieldOf);
   if (field.type === 'boolean') {
     if (v === undefined || v === null) return false;
     if (typeof v !== 'boolean') bad('格式不正確');
@@ -370,6 +413,7 @@ function value(field: FieldDef, v: unknown, today: string, errors: Record<string
     case 'budget_code':
     case 'project':
     case 'supplier':
+    case 'asset':
       return uuid(v);
     default:
       return null;
@@ -381,9 +425,19 @@ export function validateSubmission(schema: FormSchema, raw: unknown, today: stri
   const errors: Record<string, string> = {};
   const data: SubmissionData = {};
   const flowFields: Record<string, unknown> = {};
-  const refs: NormalizedSubmission['refs'] = { employees: [], departments: [], budgetCodes: [], projects: [], suppliers: [], budgetScopes: [] };
+  const refs: NormalizedSubmission['refs'] = {
+    employees: [],
+    departments: [],
+    budgetCodes: [],
+    projects: [],
+    suppliers: [],
+    assets: [],
+    budgetScopes: [],
+  };
   const promoted: NormalizedSubmission['promoted'] = { totalAmount: null, budgetCodeId: null, projectId: null };
   let attachmentsRequired = false;
+  const declaredFields = new Map(allFields(schema).map((f) => [f.id, f]));
+  const fieldOf = (id: string) => declaredFields.get(id);
 
   for (const declared of allFields(schema)) {
     if (!isFieldVisible(declared, flowFields)) continue;
@@ -394,7 +448,7 @@ export function validateSubmission(schema: FormSchema, raw: unknown, today: stri
     }
     if (isDisplayOnly(field)) continue;
     try {
-      const v = value(field, input[field.id], today, errors, flowFields);
+      const v = value(field, input[field.id], today, errors, flowFields, fieldOf);
       if (v !== null && v !== '' && field.rules) checkRules(field, v, flowFields, today);
       data[field.id] = v;
       flowFields[field.id] = field.type === 'table' ? (v as TableValue).total : v;
@@ -405,6 +459,17 @@ export function validateSubmission(schema: FormSchema, raw: unknown, today: stri
         if (field.type === 'budget_code' && field.budgetScope) refs.budgetScopes.push({ id: v, scope: field.budgetScope });
         if (field.type === 'project') refs.projects.push(v);
         if (field.type === 'supplier') refs.suppliers.push(v);
+        if (field.type === 'asset') refs.assets.push(v);
+      }
+      if (field.type === 'table') {
+        for (const row of (v as TableValue).rows) {
+          for (const col of field.columns) {
+            const cellValue = row[col.id];
+            if (typeof cellValue !== 'string') continue;
+            if (col.type === 'employee') refs.employees.push(cellValue);
+            if (col.type === 'asset') refs.assets.push(cellValue);
+          }
+        }
       }
       if (field.semantic === 'amount') {
         const amount = field.type === 'table' ? (v as TableValue).total : v;

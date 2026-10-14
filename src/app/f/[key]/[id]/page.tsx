@@ -6,10 +6,11 @@ import { AttachmentsPanel } from '@/app/components/attachments-panel';
 import { STATUS_BADGE, STATUS_LABELS } from '@/app/components/form-labels';
 import { PrintButton } from '@/app/components/print-button';
 import { WithdrawButton } from '@/app/requests/[id]/withdraw-button';
+import { ASSET_TRANSFER_TYPE_LABELS, type AssetTransferType } from '@/lib/asset-transfers/constants';
 import { parseUploadFailed } from '@/lib/attachments/batch';
 import { getAttachments } from '@/lib/attachments/queries';
 import { approveCustomFormStep, returnCustomFormStep, withdrawCustomForm } from '@/lib/custom-forms/actions';
-import { getSubmissionDetail } from '@/lib/custom-forms/queries';
+import { getSubmissionDetail, type SubmissionAssetLine } from '@/lib/custom-forms/queries';
 import { allFields, isDisplayOnly } from '@/lib/custom-forms/schema';
 import { fieldText, SubmissionFields } from '../../submission-fields';
 
@@ -22,6 +23,52 @@ const time = new Intl.DateTimeFormat('zh-TW', {
   minute: '2-digit',
   hour12: false,
 });
+
+/** Register snapshot taken at submit (原保管人／地點) next to what approval will write into the register. */
+function AssetRegisterLines({ lines, appliedAt }: { lines: SubmissionAssetLine[]; appliedAt: Date | null }) {
+  const th = 'border border-td-border px-2 py-1.5 text-left font-semibold';
+  const td = 'border border-td-border px-2 py-1.5';
+  return (
+    <section className="card">
+      <h2 className="font-semibold text-td-blue-dark">財產清冊異動</h2>
+      <p className="mb-3 mt-1 text-xs text-td-muted">
+        {appliedAt ? `已於 ${time.format(appliedAt)} 寫入財產清冊。` : '送出時的財產清冊資料；全部簽核完成後才會寫入財產清冊。'}
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[48rem] border-collapse text-sm">
+          <thead>
+            <tr className="bg-slate-50 text-xs text-td-muted">
+              <th className={`${th} w-10 text-center`}>#</th>
+              <th className={th}>財產編號</th>
+              <th className={th}>財產名稱</th>
+              <th className={th}>數量</th>
+              <th className={th}>原保管人</th>
+              <th className={th}>原保管地點</th>
+              <th className={th}>異動原因</th>
+              <th className={th}>新保管人員</th>
+              <th className={th}>新保管地點</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lines.map((l) => (
+              <tr key={l.lineNo}>
+                <td className={`${td} text-center text-td-muted`}>{l.lineNo}</td>
+                <td className={`${td} mono-case`}>{l.assetTag}</td>
+                <td className={td}>{l.assetName}</td>
+                <td className={`${td} text-right tabular-nums`}>{l.quantity}</td>
+                <td className={td}>{l.originalCustodianName}</td>
+                <td className={td}>{l.originalLocation || '—'}</td>
+                <td className={td}>{ASSET_TRANSFER_TYPE_LABELS[l.reason as AssetTransferType] ?? l.reason}</td>
+                <td className={td}>{l.newCustodianName}</td>
+                <td className={td}>{l.newLocation}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
 
 function Item({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -117,6 +164,10 @@ export default async function DesignerFormDetailPage({
       </section>
 
       <SubmissionFields schema={detail.schema} data={detail.data} labels={detail.labels} />
+
+      {detail.assetRegister && detail.assetRegister.lines.length > 0 && (
+        <AssetRegisterLines lines={detail.assetRegister.lines} appliedAt={detail.assetRegister.appliedAt} />
+      )}
 
       {((hasAttachmentField && detail.canAttach) || attachments.length > 0) && (
         <div className="print:hidden">

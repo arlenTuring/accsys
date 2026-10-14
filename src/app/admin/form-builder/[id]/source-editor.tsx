@@ -14,10 +14,10 @@ const PARTY_LABELS: Record<FormParty, string> = {
   budget_owner: '預算編號的負責人',
   asset_custodian: '資產的保管人',
 };
-/** Parties offered in the designer (asset fields arrive with the asset form migration). */
-const PARTIES: FormParty[] = ['field_employee', 'budget_owner', 'applicant', 'filer'];
+const PARTIES: FormParty[] = ['field_employee', 'budget_owner', 'asset_custodian', 'applicant', 'filer'];
 
-const SCOPE_LABELS = { company: '全公司', applicant_department: '申請人部門（往上找）', field_department: '表單中選的部門（往上找）' } as const;
+const SCOPE_LABELS = { company: '全公司', applicant_department: '申請人部門（往上找）', field_department: '表單中選的部門或人員所屬部門（往上找）' } as const;
+const FIELD_DEPT_LABEL = '表單中選的部門，或選的人員所屬部門';
 
 function Select({
   value,
@@ -50,7 +50,7 @@ const nameOf = (list: { value: string; label: string }[], v: string | undefined 
 export function sourceSummary(s: ApproverSource, org: BuilderOrg, schema: FormSchema): string {
   const emps = org.employees.map((e) => ({ value: e.id, label: e.label }));
   const depts = org.departments.map((d) => ({ value: d.id, label: d.name }));
-  const fieldName = (id?: string) => fieldsOfType(schema, ['employee', 'department', 'budget_code']).find((f) => f.id === id)?.label ?? '（未選擇欄位）';
+  const fieldName = (id?: string) => fieldsOfType(schema, ['employee', 'department', 'budget_code', 'asset']).find((f) => f.id === id)?.label ?? '（未選擇欄位）';
   const levelName = (code: string | null) => org.levels.find((l) => l.code === code)?.name ?? code ?? '';
   switch (s.kind) {
     case 'employee':
@@ -89,9 +89,10 @@ export function SourceEditor({
   const emps = org.employees.map((e) => ({ value: e.id, label: e.label }));
   const depts = org.departments.map((d) => ({ value: d.id, label: d.name }));
   const levels = org.levels.map((l) => ({ value: l.code, label: `${l.name}（${l.code}）` }));
-  const deptFields = fieldsOfType(schema, ['department']).map((f) => ({ value: f.id, label: f.label }));
+  const deptFields = fieldsOfType(schema, ['department', 'employee']).map((f) => ({ value: f.id, label: f.label }));
   const empFields = fieldsOfType(schema, ['employee']).map((f) => ({ value: f.id, label: f.label }));
   const budgetFields = fieldsOfType(schema, ['budget_code']).map((f) => ({ value: f.id, label: f.label }));
+  const assetFields = fieldsOfType(schema, ['asset']).map((f) => ({ value: f.id, label: f.label }));
   const noFields = (what: string) => <p className="text-xs text-amber-700">表單還沒有{what}欄位，請先到「欄位設計」加入。</p>;
 
   switch (source.kind) {
@@ -115,7 +116,7 @@ export function SourceEditor({
             >
               <option value="applicant">申請人所屬部門</option>
               <option value="department">指定部門</option>
-              <option value="field">表單中選的部門</option>
+              <option value="field">{FIELD_DEPT_LABEL}</option>
             </select>
           </Field>
           {source.of === 'department' && (
@@ -123,9 +124,9 @@ export function SourceEditor({
           )}
           {source.of === 'field' &&
             (deptFields.length ? (
-              <Select label="部門欄位" value={source.fieldId ?? ''} onChange={(fieldId) => onChange({ ...source, fieldId })} list={deptFields} placeholder="選擇部門欄位…" />
+              <Select label="部門欄位" value={source.fieldId ?? ''} onChange={(fieldId) => onChange({ ...source, fieldId })} list={deptFields} placeholder="選擇部門或員工欄位…" />
             ) : (
-              noFields('部門選擇')
+              noFields('部門或員工選擇')
             ))}
           <Field label="往上幾層" hint="0 = 該部門主管；1 = 上一層部門的主管">
             <input
@@ -166,14 +167,14 @@ export function SourceEditor({
               }}
             >
               <option value="applicant">申請人所屬部門</option>
-              <option value="field">表單中選的部門</option>
+              <option value="field">{FIELD_DEPT_LABEL}</option>
             </select>
           </Field>
           {source.of === 'field' &&
             (deptFields.length ? (
-              <Select label="部門欄位" value={source.fieldId ?? ''} onChange={(fieldId) => onChange({ ...source, fieldId })} list={deptFields} placeholder="選擇部門欄位…" />
+              <Select label="部門欄位" value={source.fieldId ?? ''} onChange={(fieldId) => onChange({ ...source, fieldId })} list={deptFields} placeholder="選擇部門或員工欄位…" />
             ) : (
-              noFields('部門選擇')
+              noFields('部門或員工選擇')
             ))}
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={source.includeStartDepartment} onChange={(e) => onChange({ ...source, includeStartDepartment: e.target.checked })} />
@@ -221,7 +222,7 @@ export function SourceEditor({
       );
     case 'form_party': {
       const needsField = source.party !== 'applicant' && source.party !== 'filer';
-      const list = source.party === 'budget_owner' ? budgetFields : empFields;
+      const list = source.party === 'budget_owner' ? budgetFields : source.party === 'asset_custodian' ? assetFields : empFields;
       return (
         <div className="space-y-2">
           <Field label="關係人">
@@ -244,7 +245,7 @@ export function SourceEditor({
             (list.length ? (
               <Select label="欄位" value={source.fieldId ?? ''} onChange={(fieldId) => onChange({ ...source, fieldId })} list={list} placeholder="選擇欄位…" />
             ) : (
-              noFields(source.party === 'budget_owner' ? '預算編號' : '員工選擇')
+              noFields(source.party === 'budget_owner' ? '預算編號' : source.party === 'asset_custodian' ? '財產' : '員工選擇')
             ))}
         </div>
       );
@@ -291,9 +292,9 @@ export function SourceEditor({
           </Field>
           {source.scope === 'field_department' &&
             (deptFields.length ? (
-              <Select label="部門欄位" value={source.fieldId ?? ''} onChange={(fieldId) => onChange({ ...source, fieldId })} list={deptFields} placeholder="選擇部門欄位…" />
+              <Select label="部門欄位" value={source.fieldId ?? ''} onChange={(fieldId) => onChange({ ...source, fieldId })} list={deptFields} placeholder="選擇部門或員工欄位…" />
             ) : (
-              noFields('部門選擇')
+              noFields('部門或員工選擇')
             ))}
         </div>
       );

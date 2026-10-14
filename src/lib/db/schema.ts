@@ -1157,6 +1157,8 @@ export const formSubmissions = pgTable(
     budgetCodeId: uuid('budget_code_id'),
     projectId: uuid('project_id'),
     currentStepOrder: integer('current_step_order'),
+    /** Forms linked to the asset register: when the approved lines were written into it. */
+    registerAppliedAt: timestamp('register_applied_at', { withTimezone: true }),
     submittedAt: timestamp('submitted_at', { withTimezone: true }).notNull().defaultNow(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -1180,6 +1182,42 @@ export const formSubmissions = pgTable(
     index('form_submissions_definition_applicant_idx').on(t.definitionId, t.applicantEmployeeId),
     index('form_submissions_applicant_employee_id_idx').on(t.applicantEmployeeId),
     index('form_submissions_status_idx').on(t.status),
+  ]
+);
+
+/**
+ * Register snapshot of each asset on a designer form linked to the asset
+ * register (schema.assetRegister), taken at submit: what the approval is
+ * about, which assets are claimed while it is pending, and what the register
+ * must still say when the approved lines are applied.
+ */
+export const formSubmissionAssetLines = pgTable(
+  'form_submission_asset_lines',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    submissionId: uuid('submission_id').notNull(),
+    lineNo: integer('line_no').notNull(),
+    assetId: uuid('asset_id').notNull(),
+    assetTag: text('asset_tag').notNull(),
+    assetName: text('asset_name').notNull(),
+    quantity: integer('quantity').notNull(),
+    originalCustodianEmployeeId: uuid('original_custodian_employee_id').notNull(),
+    originalLocation: text('original_location').notNull(),
+    reason: text('reason').notNull(),
+    newCustodianEmployeeId: uuid('new_custodian_employee_id').notNull(),
+    newLocation: text('new_location').notNull(),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    fk('form_submission_asset_lines_submission_id_fkey', t.submissionId, formSubmissions.id).onDelete('cascade'),
+    fk('form_submission_asset_lines_asset_id_fkey', t.assetId, assets.id),
+    fk('form_submission_asset_lines_original_custodian_fkey', t.originalCustodianEmployeeId, employees.id),
+    fk('form_submission_asset_lines_new_custodian_fkey', t.newCustodianEmployeeId, employees.id),
+    check('form_submission_asset_lines_quantity_check', sql`quantity > 0`),
+    check('form_submission_asset_lines_reason_check', sql`reason in (${sqlList(ASSET_TRANSFER_TYPES)})`),
+    unique('form_submission_asset_lines_submission_id_line_no_key').on(t.submissionId, t.lineNo),
+    unique('form_submission_asset_lines_submission_id_asset_id_key').on(t.submissionId, t.assetId),
+    index('form_submission_asset_lines_asset_id_idx').on(t.assetId),
   ]
 );
 

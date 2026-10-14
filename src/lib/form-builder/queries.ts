@@ -156,7 +156,7 @@ const ALL_REFERENCE_TYPES: FormSchema = {
       id: 'all',
       title: '',
       description: '',
-      fields: (['employee', 'department', 'budget_code', 'project', 'supplier'] as const).map((type) => ({
+      fields: (['employee', 'department', 'budget_code', 'project', 'supplier', 'asset'] as const).map((type) => ({
         id: type,
         type,
         label: type,

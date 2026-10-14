@@ -18,8 +18,9 @@ const currencyOf = (field: FieldDef, data: Record<string, unknown> | undefined) 
 };
 const day = (v: unknown) => (typeof v === 'string' && v ? v.replaceAll('-', '/') : '—');
 
-function cellText(col: TableColumn, v: unknown, row: Record<string, unknown>): string {
+function cellText(col: TableColumn, v: unknown, row: Record<string, unknown>, labels: Record<string, string>): string {
   if (v === null || v === undefined || v === '') return '—';
+  if (col.type === 'employee' || col.type === 'asset') return labels[String(v)] ?? '（資料已移除）';
   if (col.type === 'money') {
     const code = col.currencyColumn ? row[col.currencyColumn] : undefined;
     return typeof code === 'string' && code ? `${code} ${amountText(v)}` : amountText(v);
@@ -50,6 +51,7 @@ export function fieldText(field: FieldDef, v: unknown, labels: Record<string, st
     case 'budget_code':
     case 'project':
     case 'supplier':
+    case 'asset':
       return typeof v === 'string' && v ? (labels[v] ?? '（資料已移除）') : '—';
     case 'number':
       return v === null || v === undefined ? '—' : Number(v).toLocaleString('en-US', { maximumFractionDigits: 4 });
@@ -58,7 +60,17 @@ export function fieldText(field: FieldDef, v: unknown, labels: Record<string, st
   }
 }
 
-function TableView({ field, value, currency }: { field: Extract<FieldDef, { type: 'table' }>; value: TableValue | undefined; currency: string }) {
+function TableView({
+  field,
+  value,
+  currency,
+  labels,
+}: {
+  field: Extract<FieldDef, { type: 'table' }>;
+  value: TableValue | undefined;
+  currency: string;
+  labels: Record<string, string>;
+}) {
   const rows = value?.rows ?? [];
   if (rows.length === 0) return <p className="text-sm text-td-muted">—</p>;
   const totalIndex = field.totalColumn ? field.columns.findIndex((c) => c.id === field.totalColumn) : -1;
@@ -81,7 +93,7 @@ function TableView({ field, value, currency }: { field: Extract<FieldDef, { type
               <td className="border border-td-border px-2 py-1.5 text-center text-td-muted">{i + 1}</td>
               {field.columns.map((c) => (
                 <td key={c.id} className={`border border-td-border px-2 py-1.5 ${c.type === 'money' || c.type === 'number' ? 'text-right tabular-nums' : ''}`}>
-                  {cellText(c, r[c.id], r)}
+                  {cellText(c, r[c.id], r, labels)}
                 </td>
               ))}
             </tr>
@@ -119,7 +131,7 @@ export function SubmissionFields({ schema, data, labels }: { schema: FormSchema;
                   <dt className="text-xs font-semibold text-td-muted">{f.label}</dt>
                   <dd className="mt-1 whitespace-pre-wrap text-sm text-td-blue-dark">
                     {f.type === 'table' ? (
-                      <TableView field={f} value={data[f.id] as TableValue | undefined} currency={currencyOf(f, data)} />
+                      <TableView field={f} value={data[f.id] as TableValue | undefined} currency={currencyOf(f, data)} labels={labels} />
                     ) : (
                       fieldText(f, data[f.id], labels, data)
                     )}

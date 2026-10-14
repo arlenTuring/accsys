@@ -1,9 +1,11 @@
-import { and, asc, eq, inArray, ne, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, or, sql } from 'drizzle-orm';
 import { escalateIfSelfManaged, generateAssetTransferChain } from '@/lib/asset-transfers/chain';
 import { ACTIVE_ASSET_STATUSES, STATUS_AFTER_TRANSFER, type AssetStatus } from '@/lib/asset-transfers/constants';
 import { checkCustodianCoverage, parseAssetTransferInput, type AssetTransferInput, type NormalizedAssetTransfer } from '@/lib/asset-transfers/validate';
 import { recordAudit } from '@/lib/audit/record';
 import { isUuid } from '@/lib/authz/forms';
+import { busyAssetTag } from '@/lib/custom-forms/asset-register';
+import { assertLegacyOpen } from '@/lib/custom-forms/legacy';
 import { assetTransferItems, assetTransfers, assets, budgetCodes, departments, employees, procurementCases } from '@/lib/db/schema';
 import { FORM_LABELS } from '@/lib/procurement/form-registry';
 import {
@@ -127,19 +129,8 @@ async function resolveRefs(tx: Tx, form: AssetTransferPlan, excludeTransferId?: 
     if (!ACTIVE_ASSET_STATUSES.includes(a!.status as AssetStatus)) abort('validation', `財產 ${a!.tag} 已不在財產清冊中，無法異動`);
   }
 
-  const busy = await tx
-    .select({ tag: assetTransferItems.assetTag })
-    .from(assetTransferItems)
-    .innerJoin(assetTransfers, eq(assetTransfers.id, assetTransferItems.assetTransferId))
-    .where(
-      and(
-        inArray(assetTransferItems.assetId, assetIds),
-        eq(assetTransfers.status, 'pending_approval'),
-        excludeTransferId ? ne(assetTransfers.id, excludeTransferId) : undefined
-      )
-    )
-    .limit(1);
-  if (busy.length > 0) abort('conflict', `財產 ${busy[0].tag} 已在另一張簽核中的${LABEL}，請等該單完成後再申請`);
+  const busy = await busyAssetTag(tx, assetIds, { transferId: excludeTransferId });
+  if (busy) abort('conflict', `財產 ${busy} 已在另一張簽核中的${LABEL}，請等該單完成後再申請`);
 
   const coverage = checkCustodianCoverage(
     form,
@@ -264,6 +255,7 @@ export function createAssetTransfer(actor: Actor, input: CreateAssetTransferInpu
       const { idempotencyKey, ...request } = input ?? ({} as CreateAssetTransferInput);
       const claim = await claimIdempotencyKey<Claimed>(tx, { actorId: actor.id, operation, key: idempotencyKey, request });
       if ('replay' in claim) return { ...claim.replay, replayed: true };
+      await assertLegacyOpen(tx, FORM, LABEL);
 
       const form = await withUnitManagers(tx, { ...normalize(request), departmentId: actor.departmentId });
       const snapshots = await resolveRefs(tx, form);

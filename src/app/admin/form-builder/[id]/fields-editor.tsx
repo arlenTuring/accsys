@@ -20,6 +20,7 @@ import {
 } from '@/lib/form-builder/schema-edit';
 import { dangerBtn, smallBtn, smallInput } from '../../org/org-ui';
 import { Field } from '../builder-ui';
+import { AssetRegisterEditor } from './asset-register-editor';
 import { earlierCondFields } from './designer-model';
 import { FieldProps } from './field-props';
 
@@ -324,6 +325,7 @@ export function FieldsEditor({
                 </span>
               </label>
             </div>
+            <AssetRegisterEditor schema={schema} setSchema={setSchema} />
           </div>
         )}
       </aside>

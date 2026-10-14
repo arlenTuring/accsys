@@ -11,10 +11,11 @@ import { allFields, isDisplayOnly, parseFormSchema, type FieldType, type FormSch
 export type ParsedDefinition = { ok: true; schema: FormSchema; flow: FlowDef } | { ok: false; errors: string[] };
 
 const FIELD_SOURCE_TYPES = {
-  department: ['department'],
+  /** An employee field stands for that employee's department. */
+  department: ['department', 'employee'],
   employee: ['employee'],
   budget_code: ['budget_code'],
-  asset: [],
+  asset: ['asset'],
 } satisfies Record<string, FieldType[]>;
 
 export function parseDefinition(rawSchema: unknown, rawFlow: unknown): ParsedDefinition {

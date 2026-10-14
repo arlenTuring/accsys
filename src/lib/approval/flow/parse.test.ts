@@ -59,8 +59,29 @@ describe('parseFlow', () => {
     ['levels up out of range', { version: 1, blocks: [{ id: 'a', type: 'approver', label: 'x', source: { kind: 'department_manager', of: 'applicant', levelsUp: 99 } }] }],
     ['party field missing', { version: 1, blocks: [{ id: 'a', type: 'approver', label: 'x', source: { kind: 'form_party', party: 'field_employee' } }] }],
     ['bad whenEmpty', { version: 1, blocks: [], options: { whenEmpty: 'maybe' } }],
+    ['escalation referring to a later step', { version: 1, blocks: [
+      { id: 'up', type: 'approver', label: 'x', source: { kind: 'form_party', party: 'applicant' }, fallbackFor: ['m'] },
+      { id: 'm', type: 'approver', label: 'y', source: { kind: 'form_party', party: 'applicant' } },
+    ] }],
+    ['escalation with no steps', { version: 1, blocks: [{ id: 'up', type: 'approver', label: 'x', source: { kind: 'form_party', party: 'applicant' }, fallbackFor: [] }] }],
   ])('rejects %s', (_name, raw) => {
     expect(parseFlow(raw).ok).toBe(false);
+  });
+
+  it('keeps an escalation step that refers to earlier steps, including ones inside a branch', () => {
+    const raw = {
+      version: 1,
+      blocks: [
+        { id: 'm', type: 'approver', label: '主管', source: { kind: 'form_party', party: 'applicant' } },
+        { id: 'c', type: 'condition', label: '條件', branches: [{ id: 'b', label: '有', when: { field: 'f', op: 'filled' }, blocks: [
+          { id: 'm2', type: 'approver', label: '主管 2', source: { kind: 'form_party', party: 'applicant' } },
+        ] }], otherwise: { blocks: [] } },
+        { id: 'up', type: 'approver', label: '升級', source: { kind: 'form_party', party: 'applicant' }, fallbackFor: ['m', 'm2'] },
+      ],
+    };
+    const r = parseFlow(raw);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.flow.blocks[2]).toMatchObject({ fallbackFor: ['m', 'm2'] });
   });
 
   it('limits size and nesting', () => {
