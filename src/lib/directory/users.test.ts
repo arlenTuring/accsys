@@ -31,8 +31,38 @@ describe('parseUsersPage', () => {
     expect(r).toEqual({
       ok: true,
       nextPageToken: null,
-      users: [{ id: '101', primaryEmail: 'alice@example.test', fullName: 'User 101', suspended: false, archived: true, orgUnitPath: null }],
+      users: [
+        {
+          id: '101',
+          primaryEmail: 'alice@example.test',
+          fullName: 'User 101',
+          suspended: false,
+          archived: true,
+          orgUnitPath: null,
+          customerId: 'C0test',
+          profile: { phone: null, title: null, department: null, employeeCode: null, managerEmail: null },
+        },
+      ],
     });
+  });
+
+  it('reads the profile suggestions and drops malformed ones', () => {
+    const r = parseUsersPage(
+      page([
+        user('101', 'a@example.test', {
+          phones: [{ value: '0912', type: 'mobile' }, { value: ' 02-1234 ', type: 'work' }],
+          organizations: [{ title: '工程師', department: '研發部', primary: true }],
+          externalIds: [{ value: 'E001', type: 'organization' }],
+          relations: [{ value: 'Boss@Example.TEST', type: 'manager' }],
+        }),
+        user('102', 'b@example.test', { phones: 'x', organizations: [{ title: 3 }], relations: [{ value: 'not-an-email', type: 'manager' }] }),
+      ]),
+      scope
+    );
+    expect(r.ok && r.users.map((u) => u.profile)).toEqual([
+      { phone: '02-1234', title: '工程師', department: '研發部', employeeCode: 'E001', managerEmail: 'boss@example.test' },
+      { phone: null, title: null, department: null, employeeCode: null, managerEmail: null },
+    ]);
   });
 
   it('accepts an empty page (no users key)', () => {

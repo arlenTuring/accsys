@@ -20,6 +20,8 @@ describe('directory sync (fixture listing, disposable DB)', () => {
     suspended: false,
     archived: false,
     orgUnitPath: null,
+    customerId: null,
+    profile: { phone: null, title: null, department: null, employeeCode: null, managerEmail: null },
     ...flags,
   });
   const sub = (n: number) => `${tag.replace(/\D/g, '')}${n}`;
@@ -79,6 +81,48 @@ describe('directory sync (fixture listing, disposable DB)', () => {
     expect(audit.details).toMatchObject({ activeCount: 3, sessionsRevoked: 1 });
   });
 
+  it('an applied run refreshes the snapshot and records the run', async () => {
+    const { runDirectorySync } = await import('@/lib/directory/service');
+    const profile = { phone: '02-1234', title: '工程師', department: '研發部', employeeCode: 'E9', managerEmail: `boss-${tag}@example.test`.toLowerCase() };
+    const withProfile = listing().map((u) => (u.id === sub(4) ? { ...u, customerId: 'C0test', profile } : u));
+    const outcome = await runDirectorySync(withProfile, { issuer, apply: true, source: 'fixture', pages: 2 });
+    expect(outcome).toMatchObject({ ok: true, applied: true });
+    const rows = await sql`select directory_user_id, suspended, phone, title, department, employee_code, manager_email, customer_id, removed_at
+      from directory_users where directory_user_id = any(${[sub(1), sub(2), sub(3), sub(4)]}) order by directory_user_id`;
+    expect(rows.map((r) => r.directory_user_id)).toEqual([sub(1), sub(2), sub(3), sub(4)]);
+    expect(rows[1].suspended).toBe(true);
+    expect(rows[3]).toMatchObject({ phone: '02-1234', title: '工程師', department: '研發部', employee_code: 'E9', customer_id: 'C0test', removed_at: null });
+    const [run] = await sql`select source, status, pages, directory_count, active_count, error, summary from directory_sync_runs order by finished_at desc, started_at desc limit 1`;
+    expect(run).toMatchObject({ source: 'fixture', status: 'succeeded', pages: 2, directory_count: 4, active_count: 3, error: null });
+    expect(run.summary).toMatchObject({ unbound: 1 });
+  });
+
+  it('an account missing from a later complete listing is marked removed, and cleared when it returns', async () => {
+    const { runDirectorySync } = await import('@/lib/directory/service');
+    const removedAt = async () => (await sql`select removed_at from directory_users where directory_user_id = ${sub(4)}`)[0].removed_at;
+    const outcome = await runDirectorySync(listing().filter((u) => u.id !== sub(4)), { issuer, apply: true, limits: { minActiveRatio: 0.5 } });
+    expect(outcome).toMatchObject({ ok: true, applied: true });
+    expect(await removedAt()).not.toBeNull();
+    await runDirectorySync(listing(), { issuer, apply: true });
+    expect(await removedAt()).toBeNull();
+  });
+
+  it('a dry run leaves the snapshot and the run history alone', async () => {
+    const { runDirectorySync } = await import('@/lib/directory/service');
+    const [before] = await sql`select count(*)::int as n from directory_sync_runs`;
+    await runDirectorySync([dir(sub(9), `dry-${tag}@example.test`.toLowerCase())], { issuer, apply: false });
+    const [after] = await sql`select count(*)::int as n from directory_sync_runs`;
+    expect(after.n).toBe(before.n);
+    expect(await sql`select 1 from directory_users where directory_user_id = ${sub(9)}`).toHaveLength(0);
+  });
+
+  it('a listing that could not be read is recorded as failed', async () => {
+    const { recordFailedRun } = await import('@/lib/directory/service');
+    await recordFailedRun('directory', 'page 2: HTTP 500', new Date());
+    const [run] = await sql`select source, status, error from directory_sync_runs order by finished_at desc, started_at desc limit 1`;
+    expect(run).toEqual({ source: 'directory', status: 'failed', error: 'page 2: HTTP 500' });
+  });
+
   it('a reactivated account is not restored, and a local suspension stays', async () => {
     const { runDirectorySync } = await import('@/lib/directory/service');
     await sql`update employees set access_enabled = false, disabled_at = now(), disabled_reason = '本地停權測試' where id = ${ids.a}`;
@@ -98,6 +142,11 @@ describe('directory sync (fixture listing, disposable DB)', () => {
     expect(await activeIdentity(ids.a)).toBeDefined();
     const [audit] = await sql`select action from audit_events where entity_type = 'directory' order by id desc limit 1`;
     expect(audit.action).toBe('directory.sync_blocked');
+    const [run] = await sql`select status, error from directory_sync_runs order by finished_at desc, started_at desc limit 1`;
+    expect(run.status).toBe('blocked');
+    expect(run.error).toMatch(/active accounts dropped/);
+    const [still] = await sql`select removed_at from directory_users where directory_user_id = ${sub(3)}`;
+    expect(still.removed_at).toBeNull();
   });
 
   it('refuses to run while another sync holds the lock', async () => {

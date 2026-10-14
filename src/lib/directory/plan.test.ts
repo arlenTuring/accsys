@@ -9,6 +9,8 @@ const dir = (id: string, email: string, flags: Partial<DirectoryUser> = {}): Dir
   suspended: false,
   archived: false,
   orgUnitPath: null,
+  customerId: null,
+  profile: { phone: null, title: null, department: null, employeeCode: null, managerEmail: null },
   ...flags,
 });
 const bound = (subject: string, email: string, code = `E${subject}`): LocalIdentity => ({

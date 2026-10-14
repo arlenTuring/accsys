@@ -14,6 +14,20 @@ export type DirectoryUser = {
   suspended: boolean;
   archived: boolean;
   orgUnitPath: string | null;
+  customerId: string | null;
+  profile: DirectoryProfile;
+};
+
+/**
+ * Descriptive attributes shown to an admin as suggestions. Malformed values
+ * are dropped rather than failing the page: they never grant or revoke access.
+ */
+export type DirectoryProfile = {
+  phone: string | null;
+  title: string | null;
+  department: string | null;
+  employeeCode: string | null;
+  managerEmail: string | null;
 };
 
 export type DirectoryScope = {
@@ -61,9 +75,40 @@ export function parseUsersPage(body: unknown, scope: DirectoryScope): PageResult
       suspended: u.suspended === true,
       archived: u.archived === true,
       orgUnitPath: typeof u.orgUnitPath === 'string' ? u.orgUnitPath : null,
+      customerId: typeof u.customerId === 'string' ? u.customerId : null,
+      profile: parseProfile(u),
     });
   }
   return { ok: true, users, nextPageToken: typeof token === 'string' ? token : null };
+}
+
+const PROFILE_MAX = 200;
+
+function text(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const t = value.trim();
+  return t === '' ? null : t.slice(0, PROFILE_MAX);
+}
+
+/** The primary entry of a Directory list attribute, else the first one of `preferredType`, else the first. */
+function pick(list: unknown, preferredType?: string): Record<string, unknown> | null {
+  if (!Array.isArray(list)) return null;
+  const items = list.filter(isObject);
+  return items.find((x) => x.primary === true) ?? items.find((x) => x.type === preferredType) ?? items[0] ?? null;
+}
+
+export function parseProfile(u: Record<string, unknown>): DirectoryProfile {
+  const org = pick(u.organizations, 'work');
+  const externalIds = Array.isArray(u.externalIds) ? u.externalIds.filter(isObject) : [];
+  const manager = Array.isArray(u.relations) ? u.relations.filter(isObject).find((r) => r.type === 'manager') : undefined;
+  const managerEmail = text(manager?.value)?.toLowerCase() ?? null;
+  return {
+    phone: text(pick(u.phones, 'work')?.value),
+    title: text(org?.title),
+    department: text(org?.department),
+    employeeCode: text(externalIds.find((x) => x.type === 'organization')?.value),
+    managerEmail: managerEmail && /^[^@\s]+@[^@\s]+$/.test(managerEmail) ? managerEmail : null,
+  };
 }
 
 export type FetchPage = (pageToken: string | null) => Promise<{ status: number; body: unknown }>;

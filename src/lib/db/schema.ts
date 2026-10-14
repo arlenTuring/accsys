@@ -1499,6 +1499,61 @@ export const identityLinkRequests = pgTable(
   ]
 );
 
+/**
+ * Last complete Google Workspace directory listing (read-only snapshot). Only
+ * an applied sync writes it. Profile columns are suggestions for an admin;
+ * departments, roles and approvers stay managed in ACCSYS.
+ */
+export const directoryUsers = pgTable(
+  'directory_users',
+  {
+    directoryUserId: text('directory_user_id').primaryKey(),
+    customerId: text('customer_id'),
+    primaryEmail: text('primary_email').notNull(),
+    fullName: text('full_name').notNull().default(''),
+    suspended: boolean('suspended').notNull().default(false),
+    archived: boolean('archived').notNull().default(false),
+    orgUnitPath: text('org_unit_path'),
+    phone: text('phone'),
+    title: text('title'),
+    department: text('department'),
+    employeeCode: text('employee_code'),
+    managerEmail: text('manager_email'),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    /** Set when a complete listing no longer contains the account. */
+    removedAt: timestamp('removed_at', { withTimezone: true }),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    check('directory_users_id_check', sql`directory_user_id ~ '^[0-9]{1,32}$'`),
+    check('directory_users_email_check', sql`primary_email = lower(primary_email) and primary_email like '%_@_%'`),
+    index('directory_users_primary_email_idx').on(t.primaryEmail),
+  ]
+);
+
+/** One row per applied (or refused / failed) directory sync. Never holds tokens or raw responses. */
+export const directorySyncRuns = pgTable(
+  'directory_sync_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    source: text('source').notNull(),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }).notNull().defaultNow(),
+    status: text('status').notNull(),
+    pages: integer('pages'),
+    directoryCount: integer('directory_count'),
+    activeCount: integer('active_count'),
+    error: text('error'),
+    summary: jsonb('summary').notNull().default(sql`'{}'::jsonb`),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    check('directory_sync_runs_source_check', sql`source in ('directory', 'fixture')`),
+    check('directory_sync_runs_status_check', sql`status in ('succeeded', 'blocked', 'failed')`),
+    check('directory_sync_runs_error_check', sql`(status = 'succeeded') = (error is null) and char_length(coalesce(error, '')) <= 500`),
+    index('directory_sync_runs_finished_at_idx').on(t.finishedAt),
+  ]
+);
+
 /** Fixed-window counters for login and admin rate limits (shared across processes). */
 export const rateLimitBuckets = pgTable(
   'rate_limit_buckets',
