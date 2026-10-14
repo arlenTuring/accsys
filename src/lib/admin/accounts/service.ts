@@ -17,6 +17,8 @@ export type AccountActionError =
   | 'self_action'
   | 'employee_disabled'
   | 'employee_already_bound'
+  | 'duplicate_code'
+  | 'duplicate_email'
   | 'invalid_input';
 
 export type AccountActionResult = { ok: true } | { ok: false; error: AccountActionError };
@@ -24,7 +26,7 @@ export type AccountActionResult = { ok: true } | { ok: false; error: AccountActi
 export const RECENT_AUTH_MS = 15 * 60_000;
 const ROLES = ['staff', 'finance', 'admin'] as const;
 
-async function guard(actor: AdminActor | null, now = Date.now()): Promise<AccountActionError | null> {
+export async function guard(actor: AdminActor | null, now = Date.now()): Promise<AccountActionError | null> {
   if (!actor || actor.role !== 'admin') return 'forbidden';
   if (now - actor.authenticatedAt.getTime() > RECENT_AUTH_MS) return 'reauth_required';
   const limit = await hitRateLimit(`admin-action:${actor.id}`, RATE_LIMITS.adminActionPerEmployee);
@@ -33,14 +35,14 @@ async function guard(actor: AdminActor | null, now = Date.now()): Promise<Accoun
 
 const fail = (error: AccountActionError): AccountActionResult => ({ ok: false, error });
 
-type Tx = Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0];
+export type Tx = Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0];
 
 /**
  * Account changes run one at a time, and the actor must still be an enabled
  * admin inside the transaction: otherwise two admins demoting or disabling
  * each other at the same moment would both succeed and leave none.
  */
-async function lockAsAdmin(tx: Tx, actorId: string): Promise<boolean> {
+export async function lockAsAdmin(tx: Tx, actorId: string): Promise<boolean> {
   await tx.execute(sql`select pg_advisory_xact_lock(4242002503)`);
   const [me] = await tx
     .select({ role: employees.role, accessEnabled: employees.accessEnabled })

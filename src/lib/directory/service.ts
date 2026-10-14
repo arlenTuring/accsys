@@ -61,6 +61,11 @@ async function writeSnapshot(tx: Tx, users: DirectoryUser[]) {
 }
 
 /** Records a run whose listing could not be read completely (nothing else is written). */
+/** The OIDC issuer login bindings are stored under; directory ids are compared with their subjects. */
+export function directoryIssuer(env: NodeJS.ProcessEnv = process.env): string {
+  return env.OIDC_ISSUER?.trim() || 'https://accounts.google.com';
+}
+
 export async function recordFailedRun(source: SyncSource, error: string, startedAt: Date) {
   await getDb().insert(directorySyncRuns).values({ source, startedAt, finishedAt: sql`clock_timestamp()`, status: 'failed', error: error.slice(0, 500) });
 }

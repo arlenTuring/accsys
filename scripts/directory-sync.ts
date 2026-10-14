@@ -22,7 +22,7 @@
 import { readFileSync } from 'node:fs';
 import { getSql } from '../src/lib/db';
 import { directoryConfig, directoryPageFetcher, refreshAccessToken } from '../src/lib/directory/google';
-import { recordFailedRun, runDirectorySync } from '../src/lib/directory/service';
+import { directoryIssuer, recordFailedRun, runDirectorySync } from '../src/lib/directory/service';
 import { collectDirectory, type DirectoryScope, type FetchPage } from '../src/lib/directory/users';
 import { loadSecretFiles } from '../src/lib/secret-files';
 
@@ -77,7 +77,7 @@ async function main() {
     if (apply) await recordFailedRun('directory', `listing rejected: ${listing.error}`, startedAt);
     throw new Error(`directory listing rejected: ${listing.error}`);
   }
-  const issuer = process.env.OIDC_ISSUER?.trim() || 'https://accounts.google.com';
+  const issuer = directoryIssuer();
   const outcome = await runDirectorySync(listing.users, { issuer, apply, source: live ? 'directory' : 'fixture', pages: listing.pages, startedAt });
   if (!outcome.ok && !outcome.plan) throw new Error(`sync refused: ${outcome.error}`);
   const plan = outcome.plan!;

@@ -10,6 +10,7 @@ const TABS = [
   { href: '/admin/org/groups', label: '員工群組' },
   { href: '/admin/org/delegations', label: '代理人' },
   { href: '/admin/org/simulator', label: '流程模擬' },
+  { href: '/admin/org/directory', label: '人員同步' },
 ];
 
 export function OrgTabs() {

@@ -46,6 +46,9 @@ describe('directory sync (fixture listing, disposable DB)', () => {
     }
     await sql`insert into app_sessions (token_hash, employee_id, identity_id, expires_at)
       values (${randomBytes(32).toString('hex')}, ${ids.b}, ${identity.b}, now() + interval '1 hour')`;
+    // The drop check compares with the last applied run; start from a known one so reruns on the same DB pass.
+    await sql`insert into audit_events (actor_type, action, entity_type, details)
+      values ('system', 'directory.sync_applied', 'directory', ${sql.json({ activeCount: 3 })})`;
   });
 
   afterAll(async () => {
