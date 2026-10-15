@@ -22,7 +22,6 @@ import {
   isFieldVisible,
   minDate,
   validateSubmission,
-  type NormalizedSubmission,
   type TableValue,
 } from '@/lib/custom-forms/validate';
 import { BASE_CURRENCY } from '@/lib/exchange-rates';
@@ -32,8 +31,8 @@ import { amountText } from './submission-fields';
 export type CustomFormMode =
   | { kind: 'create' }
   | { kind: 'update' | 'resubmit'; id: string; version: number; existingAttachmentCount: number }
-  /** Designer preview: runs the same validation, hands the result back and never submits. */
-  | { kind: 'preview'; onValid: (value: NormalizedSubmission) => void };
+  /** Designer preview: can be filled in, has no submit button. */
+  | { kind: 'preview' };
 
 type Values = Record<string, unknown>;
 
@@ -579,10 +578,7 @@ export function CustomForm({
       setError('請上傳附件');
       return;
     }
-    if (mode.kind === 'preview') {
-      mode.onValid(check.value);
-      return;
-    }
+    if (mode.kind === 'preview') return;
     const fd = new FormData();
     fd.set(
       'payload',
@@ -681,19 +677,17 @@ export function CustomForm({
           </div>
         </section>
       ))}
-      <div className="flex flex-wrap items-center justify-end gap-3 border-t border-td-border px-5 py-4">
-        {error && <p className="mr-auto text-sm text-red-600">{error}</p>}
-        {mode.kind !== 'preview' && (
+      {mode.kind !== 'preview' && (
+        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-td-border px-5 py-4">
+          {error && <p className="mr-auto text-sm text-red-600">{error}</p>}
           <button type="button" onClick={() => router.back()} className="btn-secondary" disabled={submitting}>
             取消
           </button>
-        )}
-        <button type="button" onClick={onSubmit} className="btn-primary" disabled={submitting}>
-          {submitting
-            ? '送出中…'
-            : { create: '送出申請', update: '儲存修改', resubmit: '重新送出', preview: '試送出（不會建立資料）' }[mode.kind]}
-        </button>
-      </div>
+          <button type="button" onClick={onSubmit} className="btn-primary" disabled={submitting}>
+            {submitting ? '送出中…' : { create: '送出申請', update: '儲存修改', resubmit: '重新送出' }[mode.kind]}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

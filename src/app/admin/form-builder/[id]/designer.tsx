@@ -375,12 +375,9 @@ function Designer({
             name={settings.name}
             description={settings.description}
             schema={schema}
-            flow={flow}
-            flowValid={parsed.ok}
             options={data.options}
             sourceForms={data.sourceForms}
             today={data.today}
-            defaultApplicantId={data.currentEmployeeId}
           />
           <div className="card !py-3">
             <StepNav tab="preview" goTo={goTo} blocked={null} />
