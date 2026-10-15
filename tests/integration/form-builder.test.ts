@@ -120,8 +120,8 @@ describe('form designer (/admin/form-builder)', () => {
     expect(audits.map((a) => a.details.version)).toEqual([1, 2]);
   });
 
-  it('fixes the key after publishing, archives, unarchives and deletes only unpublished forms', async () => {
-    const { createDefinition, saveDraft, publishDraft, saveSettings, setArchived, deleteDraftDefinition, discardDraft } = await builder();
+  it('fixes the key after publishing, archives, unarchives and deletes drafts', async () => {
+    const { createDefinition, saveDraft, publishDraft, saveSettings, setArchived, deleteDefinition, discardDraft } = await builder();
     const key = `${tag}-life`;
     const d = ok(await createDefinition(admin(), settings(key)));
     ok(await saveSettings(admin(), d.id, { ...settings(`${key}2`), name: '改名前' }, await rowVersion(d.id)));
@@ -133,7 +133,7 @@ describe('form designer (/admin/form-builder)', () => {
     const [audit] = await sql`select details from audit_events where action = 'form_definition.settings_updated' and entity_id = ${d.id} order by id desc limit 1`;
     expect(audit.details).toMatchObject({ before: { name: '改名前' }, after: { name: '改名後', visibility: { departmentIds: [ids.dept] } } });
 
-    expect(await deleteDraftDefinition(admin(), d.id, await rowVersion(d.id))).toMatchObject({ ok: false, code: 'conflict' });
+    expect(await deleteDefinition(admin(), d.id, (await rowVersion(d.id)) - 1)).toMatchObject({ ok: false, code: 'conflict' });
     expect(await discardDraft(admin(), d.id, await rowVersion(d.id))).toMatchObject({ ok: true });
 
     ok(await setArchived(admin(), d.id, true, await rowVersion(d.id)));
@@ -146,8 +146,61 @@ describe('form designer (/admin/form-builder)', () => {
 
     const draftOnly = ok(await createDefinition(admin(), settings(`${tag}-gone`)));
     expect(await discardDraft(admin(), draftOnly.id, await rowVersion(draftOnly.id))).toMatchObject({ ok: false, code: 'validation' });
-    ok(await deleteDraftDefinition(admin(), draftOnly.id, await rowVersion(draftOnly.id)));
+    ok(await deleteDefinition(admin(), draftOnly.id, await rowVersion(draftOnly.id)));
     expect((await sql`select count(*)::int as n from form_definitions where id = ${draftOnly.id}`)[0].n).toBe(0);
+  });
+
+  it('deletes a published form nobody filled in, never one with submissions, a legacy replacement or a 關聯單據 source', async () => {
+    const { createDefinition, saveDraft, publishDraft, setArchived, deleteDefinition } = await builder();
+    const published = async (key: string) => {
+      const d = ok(await createDefinition(admin(), settings(key)));
+      ok(await saveDraft(admin(), d.id, { schema: schemaV1, flow: emptyFlow() }, await rowVersion(d.id)));
+      ok(await publishDraft(admin(), d.id, await rowVersion(d.id)));
+      return d.id;
+    };
+    const versions = async (id: string) => (await sql`select count(*)::int as n from form_definition_versions where definition_id = ${id}`)[0].n;
+
+    // Used: the form from the publish test has a submission on version 1.
+    const [used] = await sql`select id from form_definitions where key = ${`${tag}-pub`}`;
+    const refused = await deleteDefinition(admin(), used.id, await rowVersion(used.id));
+    expect(refused).toMatchObject({ ok: false, code: 'conflict' });
+    if (!refused.ok) expect(refused.error).toContain('暫停');
+    expect(await versions(used.id)).toBe(2);
+    const [{ version_id: usedVersion }] = await sql`select version_id from form_submissions where definition_id = ${used.id} limit 1`;
+    await expect(sql`delete from form_definition_versions where id = ${usedVersion}`).rejects.toMatchObject({ code: '23514' });
+    const unused = await published(`${tag}-imm`);
+    await expect(sql`update form_definition_versions set published_at = now() where definition_id = ${unused}`).rejects.toMatchObject({ code: '23514' });
+    await expect(sql`delete from form_definition_versions where definition_id = ${unused}`).rejects.toMatchObject({ code: '23514' });
+
+    // A source of another form's 關聯單據 (draft included) stays until the link is removed.
+    const sourceKey = `${tag}-src`;
+    const source = await published(sourceKey);
+    const linking = ok(await createDefinition(admin(), settings(`${tag}-link`)));
+    const linked = { version: 1, sections: [{ id: 'main', title: '', description: '', fields: [{ id: 'from', type: 'source', label: '來源', sources: [{ form: sourceKey }] }] }] };
+    ok(await saveDraft(admin(), linking.id, { schema: linked, flow: emptyFlow() }, await rowVersion(linking.id)));
+    const blocked = await deleteDefinition(admin(), source, await rowVersion(source));
+    expect(blocked).toMatchObject({ ok: false, code: 'conflict' });
+    if (!blocked.ok) expect(blocked.error).toContain('關聯單據');
+    ok(await deleteDefinition(admin(), linking.id, await rowVersion(linking.id)));
+
+    // Published migration forms that replaced a hard-coded form are only archived.
+    await sql`update form_definitions set legacy_form_type = ${`${tag}-legacy`} where id = ${source}`;
+    expect(await deleteDefinition(admin(), source, await rowVersion(source))).toMatchObject({ ok: false, code: 'conflict' });
+    await sql`update form_definitions set legacy_form_type = null where id = ${source}`;
+
+    expect(await deleteDefinition({ id: ids.staff, role: 'staff', authenticatedAt: new Date() }, source, await rowVersion(source))).toMatchObject({
+      ok: false,
+      code: 'forbidden',
+    });
+    ok(await setArchived(admin(), source, true, await rowVersion(source)));
+    ok(await deleteDefinition(admin(), source, await rowVersion(source)));
+    ok(await deleteDefinition(admin(), unused, await rowVersion(unused)));
+    for (const id of [source, unused]) {
+      expect((await sql`select count(*)::int as n from form_definitions where id = ${id}`)[0].n).toBe(0);
+      expect(await versions(id)).toBe(0);
+    }
+    const [audit] = await sql`select details from audit_events where action = 'form_definition.deleted' and entity_id = ${source}`;
+    expect(audit.details).toMatchObject({ key: sourceKey, status: 'archived', versions: 1 });
   });
 
   it('adds entry categories for admins only, with a generated key and an audit record', async () => {

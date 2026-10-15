@@ -281,7 +281,7 @@ function Designer({
       {data.replacesLegacy && (
         <p className="rounded border border-td-blue/30 bg-td-blue-light/40 px-3 py-2 text-sm text-td-blue-dark">
           {data.status === 'published'
-            ? `這張表單已取代舊版「${data.replacesLegacy}」：選單入口指向這裡，舊版不再受理新申請（已送出的舊單仍可簽核與查閱）。下架這張表單會恢復舊版入口。`
+            ? `這張表單已取代舊版「${data.replacesLegacy}」：選單入口指向這裡，舊版不再受理新申請（已送出的舊單仍可簽核與查閱）。暫停這張表單會恢復舊版入口。`
             : `發佈後會取代舊版「${data.replacesLegacy}」：選單入口改指向這張表單，舊版不再受理新申請（已送出的舊單仍可簽核與查閱）。發佈前請先用「預覽」與「模擬」確認欄位與簽核流程。`}
         </p>
       )}

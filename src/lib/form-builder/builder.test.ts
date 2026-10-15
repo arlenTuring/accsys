@@ -6,7 +6,7 @@ import { FIELD_TYPES, parseFormSchema, type FormSchema } from '@/lib/custom-form
 import { PURCHASE_ADMIN_SAMPLE } from '@/lib/custom-forms/samples';
 import { emptyFlow, emptySchema, newApprover, newCondition, newField, uniqueId } from './blank';
 import { changeSummary, collectFieldTypes, fieldTypeConflicts, hasChanges } from './diff';
-import { draftProblem, MAX_DRAFT_BYTES } from './draft';
+import { draftProblem, MAX_DRAFT_BYTES, sourceFormKeys } from './draft';
 import { findBlock, flowIds, insertBlock, locate, moveBlock, removeBlock, someApprover } from './flow-tree';
 import { duplicateField, insertField, moveField, schemaFieldIds } from './schema-edit';
 import { parseSettings } from './settings';
@@ -142,6 +142,16 @@ describe('drafts and settings', () => {
     const big = emptySchema();
     big.sections[0].description = '字'.repeat(Math.ceil(MAX_DRAFT_BYTES / 3) + 10);
     expect(draftProblem(big, emptyFlow())).toMatch(/過大/);
+  });
+
+  it('finds the forms a stored schema uses as 關聯單據 source, also in broken drafts', () => {
+    const field = (sources: unknown) => ({ version: 1, sections: [{ id: 'a', title: '', description: '', fields: [{ id: 's', label: '', type: 'source', sources }] }] });
+    expect(sourceFormKeys(field([{ form: 'purchase-order', unlessCaseHas: 'acceptance' }, { form: 'purchase-order' }]))).toEqual(['purchase-order', 'acceptance']);
+    expect(sourceFormKeys(emptySchema())).toEqual([]);
+    expect(sourceFormKeys(field('x'))).toEqual([]);
+    expect(sourceFormKeys(field([null, { form: 3 }]))).toEqual([]);
+    expect(sourceFormKeys(null)).toEqual([]);
+    expect(sourceFormKeys({ sections: [{ fields: 'x' }] })).toEqual([]);
   });
 
   it('validates publish settings', () => {

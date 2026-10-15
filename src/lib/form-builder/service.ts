@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { sanitizeSimFields, simulationInputs } from '@/lib/admin/org/sim-inputs';
 import { simulateFlow, type Simulation } from '@/lib/approval/flow/simulate';
 import { recordAudit } from '@/lib/audit/record';
@@ -6,14 +6,23 @@ import { isUuid } from '@/lib/authz/forms';
 import { parseDefinition } from '@/lib/custom-forms/definition';
 import { publishDefinition } from '@/lib/custom-forms/publish';
 import { parseVisibility } from '@/lib/custom-forms/visibility';
-import { departments, employees, formCategories, formDefinitions, formDefinitionVersions, jobRoles } from '@/lib/db/schema';
+import {
+  departments,
+  employees,
+  formCategories,
+  formDefinitions,
+  formDefinitionVersions,
+  formNumberCounters,
+  formSubmissions,
+  jobRoles,
+} from '@/lib/db/schema';
 import { hitRateLimit, RATE_LIMITS } from '@/lib/rate-limit';
 import { isIsoDate } from '@/lib/seal-requests/validate';
 import { taipeiToday } from '@/lib/taipei-date';
 import { abort, runInTransaction, type ErrorCode, type Tx } from '@/lib/workflow/tx';
 import { CATEGORY_LIMITS, emptyFlow, emptySchema, uniqueId } from './blank';
 import { collectFieldTypes, fieldTypeConflicts } from './diff';
-import { draftProblem } from './draft';
+import { draftProblem, sourceFormKeys } from './draft';
 import { parseSettings, type DefinitionSettings } from './settings';
 
 /**
@@ -21,7 +30,8 @@ import { parseSettings, type DefinitionSettings } from './settings';
  * archiving of designer forms. Admin only, with a login in the last hour for
  * changes. Every change locks the definition row and checks the version the
  * editor loaded, so two admins cannot silently overwrite each other; all of
- * it is audited. Published versions stay immutable (database trigger).
+ * it is audited. Published versions stay immutable (database trigger); they
+ * are deleted only together with a form nobody ever filled in.
  */
 
 export type BuilderActor = { id: string; role: string; authenticatedAt: Date } | null;
@@ -302,8 +312,8 @@ export function publishDraft(actor: BuilderActor, id: unknown, expectedVersion: 
 export function setArchived(actor: BuilderActor, id: unknown, archived: boolean, expectedVersion: unknown) {
   return run(actor, archived ? 'archive' : 'unarchive', async (tx, actorId) => {
     const row = await lockDefinition(tx, id, expectedVersion);
-    if (archived && row.status !== 'published') abort('conflict', '只有已發佈的表單可以下架');
-    if (!archived && (row.status !== 'archived' || !row.publishedVersionId)) abort('conflict', '只有已下架的表單可以重新上架');
+    if (archived && row.status !== 'published') abort('conflict', '只有已發佈的表單可以暫停');
+    if (!archived && (row.status !== 'archived' || !row.publishedVersionId)) abort('conflict', '只有已暫停的表單可以重新發佈');
     const [updated] = await tx
       .update(formDefinitions)
       .set({ status: archived ? 'archived' : 'published', updatedAt: sql`now()`, version: sql`${formDefinitions.version} + 1` })
@@ -314,17 +324,42 @@ export function setArchived(actor: BuilderActor, id: unknown, archived: boolean,
   });
 }
 
-/** Only a form that was never published (so has no versions or submissions) can be deleted. */
-export function deleteDraftDefinition(actor: BuilderActor, id: unknown, expectedVersion: unknown) {
+/** Names of other forms whose draft or published 關聯單據 names this key. */
+async function sourceUsers(tx: Tx, row: DefinitionRow): Promise<string[]> {
+  const others = await tx
+    .select({ name: formDefinitions.name, draft: formDefinitions.draftSchema, published: formDefinitionVersions.schema })
+    .from(formDefinitions)
+    .leftJoin(formDefinitionVersions, eq(formDefinitionVersions.id, formDefinitions.publishedVersionId))
+    .where(ne(formDefinitions.id, row.id));
+  return others.filter((o) => sourceFormKeys(o.draft).includes(row.key) || sourceFormKeys(o.published).includes(row.key)).map((o) => o.name);
+}
+
+/**
+ * A form nobody ever filled in can be deleted, published or not; its versions
+ * go with it. Once there are submissions it can only be archived (they are
+ * shown and validated against their version; the database refuses as well).
+ */
+export function deleteDefinition(actor: BuilderActor, id: unknown, expectedVersion: unknown) {
   return run(actor, 'delete', async (tx, actorId) => {
     const row = await lockDefinition(tx, id, expectedVersion);
     const [{ n }] = await tx
       .select({ n: sql<number>`count(*)::int` })
-      .from(formDefinitionVersions)
-      .where(eq(formDefinitionVersions.definitionId, row.id));
-    if (row.publishedVersionId || row.status !== 'draft' || n > 0) abort('conflict', '發佈過的表單不能刪除，請改用「下架」');
+      .from(formSubmissions)
+      .where(eq(formSubmissions.definitionId, row.id));
+    if (n > 0) abort('conflict', `這張表單已有 ${n} 張單據，不能刪除（舊單據要保留它的版本），請改用「暫停」`);
+    if (row.legacyFormType && row.publishedVersionId) abort('conflict', '這張表單已取代舊版系統表單，不能刪除，請改用「暫停」');
+    const users = await sourceUsers(tx, row);
+    if (users.length > 0) abort('conflict', `「${users.join('」、「')}」的關聯單據以這張表單為來源，請先移除該來源再刪除`);
+    if (row.publishedVersionId) {
+      await tx.update(formDefinitions).set({ publishedVersionId: null, status: 'draft' }).where(eq(formDefinitions.id, row.id));
+    }
+    const versions = await tx
+      .delete(formDefinitionVersions)
+      .where(eq(formDefinitionVersions.definitionId, row.id))
+      .returning({ version: formDefinitionVersions.version });
+    await tx.delete(formNumberCounters).where(eq(formNumberCounters.definitionId, row.id));
     await tx.delete(formDefinitions).where(eq(formDefinitions.id, row.id));
-    await audit(tx, actorId, 'form_definition.deleted', row.id, { key: row.key, name: row.name });
+    await audit(tx, actorId, 'form_definition.deleted', row.id, { key: row.key, name: row.name, status: row.status, versions: versions.length });
     return {};
   });
 }

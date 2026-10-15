@@ -28,6 +28,7 @@ export type BuilderStatus = 'draft' | 'published' | 'archived';
 
 export type BuilderListItem = {
   id: string;
+  rowVersion: number;
   key: string;
   name: string;
   categoryTitle: string;
@@ -37,6 +38,8 @@ export type BuilderListItem = {
   updatedAt: Date;
   submissionCount: number;
   openCount: number;
+  /** Published migration form that took over a hard-coded form (not deletable). */
+  replacesLegacy: boolean;
 };
 
 export type BuilderCategory = { key: string; title: string };
@@ -63,10 +66,12 @@ export async function getFormBuilderList(): Promise<BuilderList | null> {
     db
       .select({
         id: formDefinitions.id,
+        rowVersion: formDefinitions.version,
         key: formDefinitions.key,
         name: formDefinitions.name,
         categoryTitle: formCategories.title,
         status: formDefinitions.status,
+        legacyFormType: formDefinitions.legacyFormType,
         publishedVersion: formDefinitionVersions.version,
         draftSchema: formDefinitions.draftSchema,
         draftFlow: formDefinitions.draftFlow,
@@ -92,6 +97,7 @@ export async function getFormBuilderList(): Promise<BuilderList | null> {
       const c = counts.find((x) => x.definitionId === r.id);
       return {
         id: r.id,
+        rowVersion: r.rowVersion,
         key: r.key,
         name: r.name,
         categoryTitle: r.categoryTitle,
@@ -101,6 +107,7 @@ export async function getFormBuilderList(): Promise<BuilderList | null> {
         updatedAt: r.updatedAt,
         submissionCount: c?.total ?? 0,
         openCount: c?.open ?? 0,
+        replacesLegacy: r.legacyFormType !== null && r.publishedVersion !== null,
       };
     }),
   };

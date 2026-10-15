@@ -55,6 +55,23 @@ function flowProblem(raw: unknown): string | null {
   return blocksProblem(raw.blocks, 0);
 }
 
+/** Form keys a stored schema (draft or published, possibly incomplete) names as 關聯單據 source or 「案件已有」. */
+export function sourceFormKeys(raw: unknown): string[] {
+  const keys = new Set<string>();
+  const sections = isObj(raw) && Array.isArray(raw.sections) ? raw.sections : [];
+  for (const s of sections) {
+    for (const f of isObj(s) && Array.isArray(s.fields) ? s.fields : []) {
+      if (!isObj(f) || f.type !== 'source' || !Array.isArray(f.sources)) continue;
+      for (const r of f.sources) {
+        if (!isObj(r)) continue;
+        if (isStr(r.form)) keys.add(r.form as string);
+        if (isStr(r.unlessCaseHas)) keys.add(r.unlessCaseHas as string);
+      }
+    }
+  }
+  return [...keys];
+}
+
 /** null when the draft can be stored; otherwise why not. */
 export function draftProblem(schema: unknown, flow: unknown): string | null {
   const size = new TextEncoder().encode(JSON.stringify({ schema, flow })).length;

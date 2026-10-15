@@ -4,7 +4,7 @@ import type { BuilderStatus } from '@/lib/form-builder/queries';
 export const STATUS_BADGE: Record<BuilderStatus, { label: string; cls: string }> = {
   draft: { label: '草稿', cls: 'badge-withdrawn' },
   published: { label: '已發佈', cls: 'badge-approved' },
-  archived: { label: '已下架', cls: 'badge-returned' },
+  archived: { label: '已暫停', cls: 'badge-returned' },
 };
 
 export const fieldLabelCls = 'text-xs font-semibold text-td-blue-dark';

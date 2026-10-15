@@ -46,8 +46,8 @@ export async function setArchivedAction(id: string, archived: boolean, expectedV
   return done(await builder.setArchived(await me(), id, archived === true, expectedVersion), true);
 }
 
-export async function deleteDraftDefinitionAction(id: string, expectedVersion: number) {
-  return done(await builder.deleteDraftDefinition(await me(), id, expectedVersion));
+export async function deleteDefinitionAction(id: string, expectedVersion: number) {
+  return done(await builder.deleteDefinition(await me(), id, expectedVersion), true);
 }
 
 export async function simulateDraftAction(input: unknown) {

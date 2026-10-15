@@ -1116,7 +1116,7 @@ export const formDefinitions = pgTable(
   ]
 );
 
-/** Published versions; a database trigger refuses UPDATE and DELETE. */
+/** Published versions; a database trigger refuses UPDATE, and DELETE while a submission uses the version. */
 export const formDefinitionVersions = pgTable(
   'form_definition_versions',
   {
