@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { inputCls, Req } from '@/app/components/form-fields';
 import { PendingFilesField } from '@/app/components/pending-files-field';
@@ -37,7 +37,7 @@ export type CustomFormMode =
 
 type Values = Record<string, unknown>;
 
-const SPAN: Record<1 | 2 | 3 | 4, string> = { 1: 'md:col-span-1', 2: 'md:col-span-2', 3: 'md:col-span-3', 4: 'md:col-span-4' };
+export const SPAN: Record<1 | 2 | 3 | 4, string> = { 1: 'md:col-span-1', 2: 'md:col-span-2', 3: 'md:col-span-3', 4: 'md:col-span-4' };
 const white = `${inputCls} !bg-white`;
 
 type TableField = Extract<FieldDef, { type: 'table' }>;
@@ -54,7 +54,7 @@ function effectiveRow(field: TableField, row: Values): Values {
   return out;
 }
 
-function initialValues(schema: FormSchema, initial?: Values): Values {
+export function initialValues(schema: FormSchema, initial?: Values): Values {
   const out: Values = {};
   for (const f of allFields(schema)) {
     if (isDisplayOnly(f)) continue;
@@ -155,8 +155,8 @@ function preview(field: TableField, col: TableColumn, row: Values): string {
 }
 
 function tableTotal(field: TableField, value: TableValue): number | null {
-  if (!field.totalColumn) return null;
-  const col = field.columns.find((c) => c.id === field.totalColumn)!;
+  const col = field.columns.find((c) => c.id === field.totalColumn);
+  if (!col) return null;
   return value.rows.reduce((sum, row) => {
     const v = col.formula ? preview(field, col, row) : String(row[col.id] ?? '');
     const n = Number(v.replace(/,/g, ''));
@@ -209,6 +209,7 @@ function TableInput({
   options,
   ticked,
   carried,
+  columnLabel,
 }: {
   field: TableField;
   value: TableValue;
@@ -220,6 +221,7 @@ function TableInput({
   /** Options currently ticked in a checkboxes field (pickFrom columns). */
   ticked: (fieldId: string) => string[];
   carried: Carried | null;
+  columnLabel?: (c: TableColumn) => ReactNode;
 }) {
   const setCell = (i: number, col: string, v: unknown) =>
     onChange({ ...value, rows: value.rows.map((r, idx) => (idx === i ? { ...r, [col]: v } : r)) });
@@ -247,7 +249,7 @@ function TableInput({
             <th className="w-10 border border-td-border px-2 py-1.5">#</th>
             {field.columns.map((c) => (
               <th key={c.id} className={`border border-td-border px-2 py-1.5 text-left font-semibold ${COLUMN_MIN_WIDTH[c.type]}`}>
-                {c.label}
+                {columnLabel ? columnLabel(c) : c.label}
                 {c.required && <Req />}
               </th>
             ))}
@@ -335,7 +337,7 @@ function TableInput({
   );
 }
 
-function FieldInput({
+export function FieldInput({
   field,
   value,
   onChange,
@@ -347,6 +349,7 @@ function FieldInput({
   ticked,
   carried,
   sourceFixed,
+  columnLabel,
 }: {
   field: FieldDef;
   value: unknown;
@@ -360,6 +363,8 @@ function FieldInput({
   carried: Carried | null;
   /** Editing: the source stays the one the form was filed with. */
   sourceFixed: boolean;
+  /** Designer canvas: replaces the plain header text of table columns. */
+  columnLabel?: (c: TableColumn) => ReactNode;
 }) {
   const str = String(value ?? '');
   const a11y = { 'aria-labelledby': labelId, 'aria-invalid': errors[field.id] ? true : undefined };
@@ -476,6 +481,7 @@ function FieldInput({
           options={options}
           ticked={ticked}
           carried={carried}
+          columnLabel={columnLabel}
         />
       );
     default:

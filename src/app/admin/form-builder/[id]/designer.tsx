@@ -169,6 +169,8 @@ function Designer({
 
       {tab === 'fields' && (
         <FieldsEditor
+          name={settings.name}
+          description={settings.description}
           schema={schema}
           setSchema={setSchema}
           flow={flow}
