@@ -53,6 +53,9 @@ export const SOURCE_LABELS: Record<ApproverSourceKind, string> = {
   job_role: '職務類別',
 };
 
+/** Lengths of an admin-created entry category. */
+export const CATEGORY_LIMITS = { title: 20, description: 100 } as const;
+
 /** `${prefix}${n}` with the smallest n not in `taken`. */
 export function uniqueId(prefix: string, taken: Iterable<string>): string {
   const used = new Set(taken);

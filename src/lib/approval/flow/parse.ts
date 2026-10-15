@@ -153,7 +153,7 @@ export function parseFlow(raw: unknown): ParseFlowResult {
         const defaultToLevel = v.defaultToLevel === null || v.defaultToLevel === undefined || v.defaultToLevel === ''
           ? null
           : code(v.defaultToLevel, `${where} 預設終點`);
-        if (parsedRules.length === 0 && defaultToLevel === null) errors.push(`${where}：至少需設定一條層級規則或預設終點`);
+        if (parsedRules.length === 0 && defaultToLevel === null) errors.push(`${where}：請選擇要逐級簽到哪一個組織層級`);
         return {
           kind: 'org_chain',
           of,
@@ -208,7 +208,8 @@ export function parseFlow(raw: unknown): ParseFlowResult {
     const out: FlowBlock[] = [];
     v.forEach((b, i) => {
       count += 1;
-      const at = `${where}第 ${i + 1} 關`;
+      const title = isObj(b) && typeof b.label === 'string' && b.label.trim() ? `「${b.label.trim().slice(0, FLOW_LIMITS.label)}」` : '';
+      const at = `${where}第 ${i + 1} 關${title}`;
       if (!isObj(b)) {
         errors.push(`${at}：格式不正確`);
         return;

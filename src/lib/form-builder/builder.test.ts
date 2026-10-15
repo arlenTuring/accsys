@@ -7,7 +7,7 @@ import { PURCHASE_ADMIN_SAMPLE } from '@/lib/custom-forms/samples';
 import { emptyFlow, emptySchema, newApprover, newCondition, newField, uniqueId } from './blank';
 import { changeSummary, collectFieldTypes, fieldTypeConflicts, hasChanges } from './diff';
 import { draftProblem, MAX_DRAFT_BYTES } from './draft';
-import { findBlock, flowIds, insertBlock, locate, moveBlock, removeBlock } from './flow-tree';
+import { findBlock, flowIds, insertBlock, locate, moveBlock, removeBlock, someApprover } from './flow-tree';
 import { duplicateField, insertField, moveField, schemaFieldIds } from './schema-edit';
 import { parseSettings } from './settings';
 
@@ -65,6 +65,14 @@ describe('flow tree edits', () => {
     expect(findBlock(withNew, block.id)).toEqual(block);
     expect(removeBlock(withNew, block.id)).toEqual(blocks);
     expect(blocks).toEqual(sample().blocks);
+  });
+
+  it('finds approver blocks nested inside branches', () => {
+    const { blocks } = sample();
+    const isOrgChain = (b: { source: { kind: string } }) => b.source.kind === 'org_chain';
+    expect(someApprover(blocks, isOrgChain)).toBe(false);
+    const nested = insertBlock(blocks, { conditionId: 'amount_check', branchId: 'otherwise' }, 0, newApprover('org_chain', flowIds(blocks)));
+    expect(someApprover(nested, isOrgChain)).toBe(true);
   });
 });
 

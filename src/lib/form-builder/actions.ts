@@ -34,6 +34,10 @@ export async function saveSettingsAction(id: string, input: unknown, expectedVer
   return done(await builder.saveSettings(await me(), id, input, expectedVersion), true);
 }
 
+export async function createCategoryAction(input: unknown) {
+  return done(await builder.createCategory(await me(), input));
+}
+
 export async function publishDraftAction(id: string, expectedVersion: number) {
   return done(await builder.publishDraft(await me(), id, expectedVersion), true);
 }

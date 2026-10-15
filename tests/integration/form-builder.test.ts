@@ -150,6 +150,25 @@ describe('form designer (/admin/form-builder)', () => {
     expect((await sql`select count(*)::int as n from form_definitions where id = ${draftOnly.id}`)[0].n).toBe(0);
   });
 
+  it('adds entry categories for admins only, with a generated key and an audit record', async () => {
+    const { createCategory } = await builder();
+    const title = `${tag}分類`.slice(0, 20);
+    expect(await createCategory({ id: ids.staff, role: 'staff', authenticatedAt: new Date() }, { title })).toMatchObject({ ok: false, code: 'forbidden' });
+    expect(await createCategory(admin(), { title: '  ' })).toMatchObject({ ok: false, code: 'validation' });
+    expect(await createCategory(admin(), { title: 'x'.repeat(21) })).toMatchObject({ ok: false, code: 'validation' });
+    expect(await createCategory(admin(), { title: '一般申請' })).toMatchObject({ ok: false, code: 'conflict' });
+
+    const created = ok(await createCategory(admin(), { title, description: '測試用' }));
+    expect(created.category.key).toMatch(/^custom_[0-9]+$/);
+    expect(created.category.title).toBe(title);
+    const [row] = await sql`select id, title, description, active from form_categories where key = ${created.category.key}`;
+    expect(row).toMatchObject({ title, description: '測試用', active: true });
+    expect(await createCategory(admin(), { title })).toMatchObject({ ok: false, code: 'conflict' });
+    const [{ n }] = await sql`select count(*)::int as n from audit_events where action = 'form_category.created' and entity_id = ${row.id}`;
+    expect(n).toBe(1);
+    await sql`delete from form_categories where id = ${row.id}`;
+  });
+
   it('simulates the unsaved definition read-only', async () => {
     const { simulateDraft } = await builder();
     const flow = {

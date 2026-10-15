@@ -75,6 +75,31 @@ export function sourceSummary(s: ApproverSource, org: BuilderOrg, schema: FormSc
   }
 }
 
+/** What an approver step still needs before it can be used; null when it is complete. */
+export function sourceIssue(s: ApproverSource, org: BuilderOrg): string | null {
+  switch (s.kind) {
+    case 'employee':
+      return s.employeeId ? null : '尚未選擇簽核人';
+    case 'department_manager':
+      if (s.of === 'department' && !s.departmentId) return '尚未選擇部門';
+      return s.of === 'field' && !s.fieldId ? '尚未選擇部門欄位' : null;
+    case 'department_members':
+      return s.departmentId ? null : '尚未選擇部門';
+    case 'org_chain':
+      if (org.levels.length === 0) return '系統還沒有建立組織層級';
+      if (s.of === 'field' && !s.fieldId) return '尚未選擇部門欄位';
+      if (s.rules.some((r) => !r.fromLevel || !r.toLevel)) return '層級規則還沒選完';
+      return s.rules.length === 0 && !s.defaultToLevel ? '尚未選擇要簽到哪一層' : null;
+    case 'form_party':
+      return s.party !== 'applicant' && s.party !== 'filer' && !s.fieldId ? '尚未選擇欄位' : null;
+    case 'employee_group':
+      return s.groupId ? null : '尚未選擇群組';
+    case 'job_role':
+      if (!s.jobRole) return '尚未選擇職務';
+      return s.scope === 'field_department' && !s.fieldId ? '尚未選擇部門欄位' : null;
+  }
+}
+
 export function SourceEditor({
   source,
   onChange,
@@ -154,6 +179,18 @@ export function SourceEditor({
         </div>
       );
     case 'org_chain':
+      if (org.levels.length === 0) {
+        return (
+          <div className="space-y-2 rounded border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+            <p className="font-semibold">系統還沒有建立組織層級，這一關無法決定要簽到哪裡。</p>
+            <p>「組織層級」是依部門的層級（例如 組 → 處 → 總經理）從申請人部門逐級往上簽。請先建立層級並設定各部門屬於哪一層，再回來選擇要簽到哪一層。</p>
+            <p>如果只需要申請人部門的主管簽核，把上方「簽核人來源」改成「部門主管」即可，不需要組織層級。</p>
+            <a href="/admin/org/levels" target="_blank" rel="noopener" className="inline-block font-semibold text-td-blue hover:underline">
+              前往建立組織層級（新分頁）→
+            </a>
+          </div>
+        );
+      }
       return (
         <div className="space-y-2">
           <Field label="起點">
@@ -180,8 +217,21 @@ export function SourceEditor({
             <input type="checkbox" checked={source.includeStartDepartment} onChange={(e) => onChange({ ...source, includeStartDepartment: e.target.checked })} />
             包含起點部門的主管
           </label>
+          <Field
+            label={source.rules.length ? '其他層級（沒有符合下方規則時）簽到' : '逐級簽到哪一層'}
+            hint="從起點部門往上，每一層部門的主管依序簽核，簽到這個層級的部門主管為止。"
+          >
+            <Select
+              label="簽到哪一層"
+              value={source.defaultToLevel ?? ''}
+              onChange={(v) => onChange({ ...source, defaultToLevel: v || null })}
+              list={levels}
+              placeholder={source.rules.length ? '（不設定）' : '選擇層級…'}
+            />
+          </Field>
           <div className="space-y-1">
-            <p className="text-xs font-semibold text-td-blue-dark">依起點部門的層級決定簽到哪一層</p>
+            <p className="text-xs font-semibold text-td-blue-dark">依起點部門的層級另外指定（選用）</p>
+            <p className="text-xs text-td-muted">例如組級簽到處級、部級簽到總經理級；沒有符合的規則時用上面的層級。</p>
             {source.rules.map((r, i) => (
               <div key={i} className="flex items-center gap-1">
                 <Select
@@ -208,16 +258,6 @@ export function SourceEditor({
               ＋ 層級規則
             </button>
           </div>
-          <Field label="其他層級（或沒有符合的規則時）簽到">
-            <Select
-              label="預設終點"
-              value={source.defaultToLevel ?? ''}
-              onChange={(v) => onChange({ ...source, defaultToLevel: v || null })}
-              list={levels}
-              placeholder="（不設定）"
-            />
-          </Field>
-          {org.levels.length === 0 && <p className="text-xs text-amber-700">尚未設定組織層級，請先到「組織與簽核設定 → 組織層級」建立。</p>}
         </div>
       );
     case 'form_party': {

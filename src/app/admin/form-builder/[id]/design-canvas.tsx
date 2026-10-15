@@ -10,6 +10,7 @@ import { SCHEMA_LIMITS, type FieldDef, type FieldOption, type FormSchema, type F
 import { FIELD_TYPE_LABELS, uniqueId } from '@/lib/form-builder/blank';
 import { updateField } from '@/lib/form-builder/schema-edit';
 import type { FieldSelection } from './fields-editor';
+import { KEEP_SELECTION } from './shortcuts';
 
 const SEMANTIC_BADGE = { amount: '單據金額', budget_code: '主要預算', project: '主要專案' } as const;
 const WIDTH_LABELS = { 1: '1/4 寬', 2: '1/2 寬', 3: '3/4 寬', 4: '整列' } as const;
@@ -147,6 +148,7 @@ export function DesignCanvas({
   onRemove,
   onMoveSection,
   onRemoveSection,
+  footer,
 }: {
   name: string;
   description: string;
@@ -165,6 +167,8 @@ export function DesignCanvas({
   onRemove: (f: FieldDef) => void;
   onMoveSection: (id: string, delta: -1 | 1) => void;
   onRemoveSection: (id: string) => void;
+  /** Bottom of the card, where the form's submit button would be. */
+  footer: ReactNode;
 }) {
   const [over, setOver] = useState<Over>(null);
   const values = useMemo(() => initialValues(schema), [schema]);
@@ -369,6 +373,7 @@ export function DesignCanvas({
   /** Actions on the selection, kept above the form so they never cover it. */
   const contextBar = () => (
     <div
+      {...KEEP_SELECTION}
       className="sticky top-20 z-20 flex min-h-[2.75rem] flex-wrap items-center gap-1 rounded-t-card border-b border-td-border bg-white/95 px-5 py-1.5 text-xs backdrop-blur"
       onClick={(e) => e.stopPropagation()}
     >
@@ -386,7 +391,7 @@ export function DesignCanvas({
             aria-label="欄位寬度"
             value={selectedField.width}
             onChange={(e) => patch(selectedField.id, (x) => ({ ...x, width: Number(e.target.value) as 1 | 2 | 3 | 4 }))}
-            className="mr-1 rounded border border-td-border bg-white px-1 py-0.5 text-xs text-td-blue-dark"
+            className="mr-1 rounded border border-td-border bg-white py-0.5 pl-2 text-xs text-td-blue-dark focus:border-td-blue focus:outline-none focus:ring-2 focus:ring-td-blue/15"
           >
             {([1, 2, 3, 4] as const).map((w) => (
               <option key={w} value={w}>
@@ -494,7 +499,7 @@ export function DesignCanvas({
             key={section.id}
             className={`border-t border-dashed border-td-border ${sectionSelected ? 'outline outline-2 -outline-offset-2 outline-td-blue' : ''}`}
           >
-            <div className="cursor-pointer px-5 pt-4" onClick={() => setSelection({ kind: 'section', id: section.id })}>
+            <div {...KEEP_SELECTION} className="cursor-pointer px-5 pt-4" onClick={() => setSelection({ kind: 'section', id: section.id })}>
               <h2 className="font-semibold text-td-blue-dark">
                 <InlineText
                   value={section.title}
@@ -532,6 +537,7 @@ export function DesignCanvas({
                 return (
                   <div
                     key={f.id}
+                    {...KEEP_SELECTION}
                     className={`group relative ${SPAN[f.width]}`}
                     draggable
                     onDragStart={(e) => startMove(e, f.id)}
@@ -564,6 +570,20 @@ export function DesignCanvas({
                       )}
                       {body(f, selected)}
                     </div>
+                    <button
+                      type="button"
+                      aria-label={`刪除 ${f.label || f.id}`}
+                      title="刪除（Delete）"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemove(f);
+                      }}
+                      className={`absolute -right-4 -top-4 z-10 h-6 w-6 items-center justify-center rounded-full border border-red-200 bg-white text-xs font-bold text-red-600 shadow-sm hover:bg-red-600 hover:text-white focus-visible:flex group-hover:flex ${
+                        selected ? 'flex' : 'hidden'
+                      }`}
+                    >
+                      ✕
+                    </button>
                     {indicator(f)}
                   </div>
                 );
@@ -585,9 +605,7 @@ export function DesignCanvas({
           </section>
         );
       })}
-      <div className="flex justify-end border-t border-td-border px-5 py-4" inert>
-        <span className="btn-primary pointer-events-none opacity-90">送出申請</span>
-      </div>
+      <div className="border-t border-td-border px-5 py-4">{footer}</div>
     </div>
   );
 }

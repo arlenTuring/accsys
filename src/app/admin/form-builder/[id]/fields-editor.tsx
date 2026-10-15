@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, useSyncExternalStore, type DragEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type ReactNode } from 'react';
 import { flowFieldIds } from '@/lib/approval/flow/references';
 import type { FlowDef } from '@/lib/approval/flow/types';
 import type { PickerOptions } from '@/lib/custom-forms/queries';
@@ -28,6 +28,7 @@ import { DesignCanvas } from './design-canvas';
 import { PaymentEditor } from './payment-editor';
 import { earlierCondFields } from './designer-model';
 import { FieldProps } from './field-props';
+import { isBlankPress, isDeleteKey, isTextEntry, KEEP_SELECTION } from './shortcuts';
 
 export type FieldSelection = { kind: 'field'; id: string } | { kind: 'section'; id: string } | null;
 
@@ -59,6 +60,8 @@ export function FieldsEditor({
   publishedTypes,
   options,
   sourceForms,
+  announce,
+  footer,
 }: {
   name: string;
   description: string;
@@ -70,6 +73,9 @@ export function FieldsEditor({
   publishedTypes: PublishedFieldTypes;
   options: PickerOptions;
   sourceForms: BuilderSourceForm[];
+  /** Short notice after a deletion (offers undo). */
+  announce: (text: string) => void;
+  footer: ReactNode;
 }) {
   const [drag, setDrag] = useState<Drag>(null);
   const drawerOpen = useSyncExternalStore(subscribeDrawer, drawerSnapshot, () => true);
@@ -142,18 +148,49 @@ export function FieldsEditor({
   };
 
   const remove = (f: FieldDef) => {
-    if (usedByFlow.has(f.id) && !window.confirm(`簽核流程有用到「${f.label}」，刪除後流程需要重新設定。確定刪除？`)) return;
     setSchema(removeField(schema, f.id));
     setSelection(null);
+    announce(`已刪除「${f.label || f.id}」${usedByFlow.has(f.id) ? '（簽核流程有用到，需重新設定）' : ''}`);
   };
 
   const removeSection = (id: string) => {
     const section = schema.sections.find((s) => s.id === id);
     if (!section || schema.sections.length === 1) return;
-    if (section.fields.length > 0 && !window.confirm(`區段「${section.title || section.id}」內的 ${section.fields.length} 個欄位會一起刪除，確定？`)) return;
     setSchema({ ...schema, sections: schema.sections.filter((s) => s.id !== id) });
     setSelection(null);
+    announce(`已刪除區段「${section.title || section.id}」${section.fields.length > 0 ? `與其中 ${section.fields.length} 個欄位` : ''}`);
   };
+
+  const latest = useRef({ remove, removeSection, selectedField, selection });
+  useEffect(() => {
+    latest.current = { remove, removeSection, selectedField, selection };
+  });
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (isTextEntry(e.target)) return;
+      const { selection: sel, selectedField: field } = latest.current;
+      if (!sel) return;
+      if (e.key === 'Escape') {
+        setSelection(null);
+      } else if (isDeleteKey(e)) {
+        e.preventDefault();
+        if (sel.kind === 'field' && field) latest.current.remove(field);
+        if (sel.kind === 'section') latest.current.removeSection(sel.id);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [setSelection]);
+
+  useEffect(() => {
+    if (!selection) return;
+    const onPress = (e: PointerEvent) => {
+      if (isBlankPress(e)) setSelection(null);
+    };
+    document.addEventListener('pointerdown', onPress);
+    return () => document.removeEventListener('pointerdown', onPress);
+  }, [selection, setSelection]);
 
   const startDrag = (e: DragEvent, d: Drag) => {
     e.dataTransfer.effectAllowed = 'move';
@@ -183,8 +220,10 @@ export function FieldsEditor({
             onRemove={remove}
             onMoveSection={(id, delta) => setSchema(moveSection(schema, id, delta))}
             onRemoveSection={removeSection}
+            footer={footer}
           />
           <button
+            {...KEEP_SELECTION}
             type="button"
             className="btn-secondary w-full !py-2"
             onClick={() => {
@@ -198,6 +237,7 @@ export function FieldsEditor({
         </div>
 
         <aside
+          {...KEEP_SELECTION}
           className={`card h-fit !p-3 lg:sticky lg:top-24 lg:overflow-y-auto ${drawerOpen ? 'lg:max-h-[calc(83.333vh-7rem)]' : 'lg:max-h-[calc(100vh-7rem)]'}`}
         >
           {selectedField && (

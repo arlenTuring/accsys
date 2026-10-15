@@ -11,7 +11,7 @@ import { hitRateLimit, RATE_LIMITS } from '@/lib/rate-limit';
 import { isIsoDate } from '@/lib/seal-requests/validate';
 import { taipeiToday } from '@/lib/taipei-date';
 import { abort, runInTransaction, type ErrorCode, type Tx } from '@/lib/workflow/tx';
-import { emptyFlow, emptySchema } from './blank';
+import { CATEGORY_LIMITS, emptyFlow, emptySchema, uniqueId } from './blank';
 import { collectFieldTypes, fieldTypeConflicts } from './diff';
 import { draftProblem } from './draft';
 import { parseSettings, type DefinitionSettings } from './settings';
@@ -235,6 +235,30 @@ export function saveSettings(actor: BuilderActor, id: unknown, raw: unknown, exp
       .returning({ version: formDefinitions.version });
     await audit(tx, actorId, 'form_definition.settings_updated', row.id, { before, after: s });
     return { version: updated.version };
+  });
+}
+
+const CONTROL_CHARS = /[\u0000-\u001F\u007F]/;
+
+/**
+ * A new menu category for designer forms. It shows in the menus once a
+ * published form uses it; the key is generated (titles are free text).
+ */
+export function createCategory(actor: BuilderActor, raw: unknown) {
+  return run(actor, 'category.create', async (tx, actorId) => {
+    const r = (raw ?? {}) as { title?: unknown; description?: unknown };
+    const title = typeof r.title === 'string' ? r.title.trim() : '';
+    const description = typeof r.description === 'string' ? r.description.trim() : '';
+    if (!title || title.length > CATEGORY_LIMITS.title || CONTROL_CHARS.test(title)) abort('validation', `分類名稱需為 1–${CATEGORY_LIMITS.title} 字`);
+    if (description.length > CATEGORY_LIMITS.description || CONTROL_CHARS.test(description)) abort('validation', `分類說明最多 ${CATEGORY_LIMITS.description} 字`);
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('accsys.form_categories'))`);
+    const all = await tx.select({ key: formCategories.key, title: formCategories.title, sortOrder: formCategories.sortOrder, active: formCategories.active }).from(formCategories);
+    if (all.some((c) => c.active && c.title === title)) abort('conflict', '已有同名的入口分類');
+    const key = uniqueId('custom_', all.map((c) => c.key));
+    const sortOrder = Math.max(0, ...all.map((c) => c.sortOrder)) + 10;
+    const [row] = await tx.insert(formCategories).values({ key, title, description, sortOrder }).returning({ id: formCategories.id });
+    await recordAudit(tx, { actorEmployeeId: actorId, action: 'form_category.created', entityType: 'form_category', entityId: row.id, details: { key, title } });
+    return { category: { key, title } };
   });
 }
 

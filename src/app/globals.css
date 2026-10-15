@@ -20,6 +20,59 @@
   a {
     @apply transition-colors duration-150;
   }
+
+  /* Drop-downs share one look: the field's own border and colours, a muted chevron, and (where the browser allows) a list styled like the cards. */
+  select:not([multiple]):not([size]) {
+    appearance: none;
+    padding-right: 2rem;
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none'%3e%3cpath d='M6 8l4 4 4-4' stroke='%2364748b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3e%3c/svg%3e");
+    background-position: right 0.5rem center;
+    background-repeat: no-repeat;
+    background-size: 1rem 1rem;
+    cursor: pointer;
+  }
+
+  select:disabled {
+    cursor: not-allowed;
+  }
+
+  @supports (appearance: base-select) {
+    select:not([multiple]):not([size]),
+    select:not([multiple]):not([size])::picker(select) {
+      appearance: base-select;
+    }
+
+    select:not([multiple]):not([size])::picker-icon {
+      display: none;
+    }
+
+    select:not([multiple]):not([size])::picker(select) {
+      @apply mt-1 rounded-lg border border-td-border bg-white p-1 text-sm text-td-blue-dark;
+      box-shadow: 0 8px 24px rgba(15, 45, 92, 0.14);
+      max-height: min(20rem, 60vh);
+    }
+
+    select:not([multiple]):not([size]) option {
+      @apply cursor-pointer gap-2 rounded-md px-2.5 py-1.5;
+    }
+
+    select:not([multiple]):not([size]) option:hover,
+    select:not([multiple]):not([size]) option:focus-visible {
+      @apply bg-td-blue-light text-td-blue-dark outline-none;
+    }
+
+    select:not([multiple]):not([size]) option:checked {
+      @apply font-semibold text-td-blue;
+    }
+
+    select:not([multiple]):not([size]) option::checkmark {
+      @apply text-td-blue;
+    }
+
+    select:not([multiple]):not([size]) option:disabled {
+      @apply cursor-not-allowed text-slate-400;
+    }
+  }
 }
 
 @layer components {
@@ -49,6 +102,10 @@
 
   .btn {
     @apply inline-flex items-center justify-center rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors duration-150;
+  }
+
+  .btn:disabled {
+    @apply pointer-events-none opacity-50;
   }
 
   .btn-primary {

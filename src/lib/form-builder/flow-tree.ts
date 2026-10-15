@@ -32,6 +32,13 @@ export function flowIds(blocks: FlowBlock[]): string[] {
   return out;
 }
 
+/** Whether any approver block, at any depth, matches `test`. */
+export function someApprover(blocks: FlowBlock[], test: (b: Extract<FlowBlock, { type: 'approver' }>) => boolean): boolean {
+  return blocks.some((b) =>
+    b.type === 'approver' ? test(b) : b.branches.some((br) => someApprover(br.blocks, test)) || someApprover(b.otherwise.blocks, test)
+  );
+}
+
 function mapLists(blocks: FlowBlock[], ref: ListRef, fn: (list: FlowBlock[]) => FlowBlock[]): FlowBlock[] {
   if (ref === null) return fn(blocks);
   return blocks.map((b) => {

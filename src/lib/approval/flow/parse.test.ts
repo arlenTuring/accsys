@@ -68,6 +68,12 @@ describe('parseFlow', () => {
     expect(parseFlow(raw).ok).toBe(false);
   });
 
+  it('names the step and says what to pick when an org chain has no end level', () => {
+    const r = parseFlow({ version: 1, blocks: [{ id: 'a', type: 'approver', label: '組織層級', source: { kind: 'org_chain', of: 'applicant', rules: [], defaultToLevel: null } }] });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors).toContain('第 1 關「組織層級」：請選擇要逐級簽到哪一個組織層級');
+  });
+
   it('keeps an escalation step that refers to earlier steps, including ones inside a branch', () => {
     const raw = {
       version: 1,

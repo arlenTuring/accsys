@@ -3,6 +3,7 @@
 import type { DragEvent } from 'react';
 import type { FieldType } from '@/lib/custom-forms/schema';
 import { FIELD_GROUPS, FIELD_TYPE_LABELS } from '@/lib/form-builder/blank';
+import { KEEP_SELECTION } from './shortcuts';
 
 /** Share of the viewport height the open drawer may take. */
 export const DRAWER_HEIGHT = 'h-[16.667vh]';
@@ -28,6 +29,7 @@ export function ComponentDrawer({
   if (!open) {
     return (
       <button
+        {...KEEP_SELECTION}
         type="button"
         onClick={() => setOpen(true)}
         aria-expanded={false}
@@ -39,6 +41,7 @@ export function ComponentDrawer({
   }
   return (
     <aside
+      {...KEEP_SELECTION}
       aria-label="元件庫"
       className={`fixed inset-x-0 bottom-0 z-30 ${DRAWER_HEIGHT} border-t border-td-border bg-white/95 shadow-[0_-4px_12px_rgba(15,45,92,0.08)] backdrop-blur`}
     >

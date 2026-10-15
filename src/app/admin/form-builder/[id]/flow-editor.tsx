@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, type DragEvent } from 'react';
+import { useEffect, useRef, useState, type DragEvent } from 'react';
 import {
   APPROVER_SOURCE_KINDS,
   type ApproverBlock,
+  type ApproverSource,
   type ApproverSourceKind,
   type FlowBlock,
   type FlowDef,
@@ -18,8 +19,9 @@ import { dangerBtn, smallBtn, smallInput } from '../../org/org-ui';
 import { Field } from '../builder-ui';
 import { ConditionEditor, conditionSummary, type CondField } from './condition-editor';
 import { flowCondFields } from './designer-model';
+import { isDeleteKey, isTextEntry } from './shortcuts';
 import { SimPanel } from './sim-panel';
-import { SourceEditor, sourceSummary } from './source-editor';
+import { SourceEditor, sourceIssue, sourceSummary } from './source-editor';
 
 export type FlowSelection =
   | { kind: 'block'; id: string }
@@ -79,6 +81,7 @@ export function FlowEditor({
   valid,
   today,
   defaultApplicantId,
+  announce,
 }: {
   flow: FlowDef;
   setFlow: (f: FlowDef) => void;
@@ -91,6 +94,8 @@ export function FlowEditor({
   valid: boolean;
   today: string;
   defaultApplicantId: string;
+  /** Short notice after a deletion (offers undo). */
+  announce: (text: string) => void;
 }) {
   const [drag, setDrag] = useState<Drag>(null);
   const condFields = flowCondFields(schema, options, org);
@@ -98,8 +103,37 @@ export function FlowEditor({
 
   const make = (what: 'condition' | ApproverSourceKind): FlowBlock => {
     const taken = flowIds(flow.blocks);
-    return what === 'condition' ? newCondition(taken) : newApprover(what, taken);
+    return what === 'condition' ? newCondition(taken) : { ...newApprover(what, taken), source: sourceFor(what, org) };
   };
+
+  const remove = (id: string) => {
+    const b = findBlock(flow.blocks, id);
+    if (!b) return;
+    setBlocks(removeBlock(flow.blocks, id));
+    setSelection(null);
+    announce(b.type === 'condition' ? `已刪除條件式「${b.label}」與分支內的關卡` : `已刪除關卡「${b.label || b.id}」`);
+  };
+
+  const latest = useRef({ remove, selection });
+  useEffect(() => {
+    latest.current = { remove, selection };
+  });
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (isTextEntry(e.target)) return;
+      const sel = latest.current.selection;
+      if (!sel) return;
+      if (e.key === 'Escape') {
+        setSelection(null);
+      } else if (isDeleteKey(e) && sel.kind === 'block') {
+        e.preventDefault();
+        latest.current.remove(sel.id);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [setSelection]);
 
   /** Where a palette click lands: after the selected block, or at the end of the selected branch / the flow. */
   const clickTarget = (): { ref: ListRef; index: number } => {
@@ -163,16 +197,7 @@ export function FlowEditor({
       <button type="button" className={smallBtn} aria-label="下移" onClick={() => nudge(id, 1)}>
         ↓
       </button>
-      <button
-        type="button"
-        className={dangerBtn}
-        onClick={() => {
-          const b = findBlock(flow.blocks, id);
-          if (b?.type === 'condition' && !window.confirm(`刪除「${b.label}」會連同分支內的關卡一起刪除，確定？`)) return;
-          setBlocks(removeBlock(flow.blocks, id));
-          setSelection(null);
-        }}
-      >
+      <button type="button" className={dangerBtn} title="刪除（Delete）" onClick={() => remove(id)}>
         刪除
       </button>
     </span>
@@ -180,6 +205,7 @@ export function FlowEditor({
 
   const renderApprover = (b: Extract<FlowBlock, { type: 'approver' }>) => {
     const selected = selection?.kind === 'block' && selection.id === b.id;
+    const issue = sourceIssue(b.source, org);
     return (
       <div
         draggable
@@ -197,6 +223,7 @@ export function FlowEditor({
           <span className="font-semibold text-td-blue-dark">{b.label || '（未命名關卡）'}</span>
           <span className="ml-2 text-xs text-td-muted">{SOURCE_LABELS[b.source.kind]}</span>
           <span className="block truncate text-xs text-td-blue-dark">{sourceSummary(b.source, org, schema)}</span>
+          {issue && <span className="badge mr-1 mt-0.5 bg-amber-100 text-amber-900">⚠ {issue}（點這張卡片在右側設定）</span>}
           {b.fallbackFor && <span className="badge mr-1 mt-0.5 bg-amber-100 text-amber-800">升級關卡</span>}
           {b.onUnresolved === 'skip' && <span className="badge mt-0.5 bg-slate-100 text-slate-700">找不到人時略過</span>}
         </span>
@@ -316,6 +343,13 @@ export function FlowEditor({
   );
 }
 
+/** A new org chain goes up to the top level unless the admin picks another one. */
+function sourceFor(kind: ApproverSourceKind, org: BuilderOrg): ApproverSource {
+  const source = newSource(kind);
+  const top = org.levels.reduce<BuilderOrg['levels'][number] | null>((best, l) => (best === null || l.rank > best.rank ? l : best), null);
+  return source.kind === 'org_chain' && top ? { ...source, defaultToLevel: top.code } : source;
+}
+
 /** Approver blocks placed before `id`, in the order the flow walks them. */
 function approversBefore(blocks: FlowBlock[], id: string): ApproverBlock[] {
   const out: ApproverBlock[] = [];
@@ -423,7 +457,7 @@ function SelectionPanel({
           <select
             className={smallInput}
             value={block.source.kind}
-            onChange={(e) => setBlocks(updateBlock(flow.blocks, block.id, (b) => (b.type === 'approver' ? { ...b, source: newSource(e.target.value as ApproverSourceKind) } : b)))}
+            onChange={(e) => setBlocks(updateBlock(flow.blocks, block.id, (b) => (b.type === 'approver' ? { ...b, source: sourceFor(e.target.value as ApproverSourceKind, org) } : b)))}
           >
             {APPROVER_SOURCE_KINDS.map((k) => (
               <option key={k} value={k}>
