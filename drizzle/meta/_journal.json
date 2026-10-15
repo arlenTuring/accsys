@@ -169,6 +169,13 @@
       "when": 1792084053320,
       "tag": "0023_form_delete_unused",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792086796814,
+      "tag": "0024_form_soft_delete",
+      "breakpoints": true
     }
   ]
 }

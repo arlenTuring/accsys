@@ -92,12 +92,17 @@ export async function publishDefinition(
     ...(input.legacyFormType !== undefined ? { legacyFormType: input.legacyFormType } : {}),
   };
   // Serializes concurrent publishes of the same key (version numbers stay gapless and unique).
-  let [def] = await tx.select({ id: formDefinitions.id }).from(formDefinitions).where(eq(formDefinitions.key, input.key)).for('update');
+  let [def] = await tx
+    .select({ id: formDefinitions.id, deletedAt: formDefinitions.deletedAt })
+    .from(formDefinitions)
+    .where(eq(formDefinitions.key, input.key))
+    .for('update');
+  if (def?.deletedAt) abort('conflict', '這個表單代號屬於已刪除的表單，不能再發佈');
   if (!def) {
     [def] = await tx
       .insert(formDefinitions)
       .values({ key: input.key, createdByEmployeeId: input.actorId, ...fields })
-      .returning({ id: formDefinitions.id });
+      .returning({ id: formDefinitions.id, deletedAt: formDefinitions.deletedAt });
   }
   const [{ next }] = await tx.execute<{ next: number }>(
     sql`select coalesce(max(version), 0) + 1 as next from form_definition_versions where definition_id = ${def.id}`

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { confirmDialog } from '@/app/components/dialog';
 import {
   addRoleHolderAction,
   removeRoleHolderAction,
@@ -76,8 +77,10 @@ function RoleCard({ role, data, pending, run }: { role: OrgJobRoleRow; data: Org
                   type="button"
                   className={dangerBtn}
                   disabled={pending}
-                  onClick={() => {
-                    if (window.confirm(`停用職務類別「${role.name}」？`)) run(() => setJobRoleActiveAction(role.id, false), '職務類別已停用');
+                  onClick={async () => {
+                    if (await confirmDialog({ title: `停用職務類別「${role.name}」？`, confirmLabel: '停用', tone: 'danger' })) {
+                      run(() => setJobRoleActiveAction(role.id, false), '職務類別已停用');
+                    }
                   }}
                 >
                   停用
@@ -140,8 +143,8 @@ function RoleCard({ role, data, pending, run }: { role: OrgJobRoleRow; data: Org
                   type="button"
                   className={dangerBtn}
                   disabled={pending}
-                  onClick={() => {
-                    if (window.confirm('移除這位擔任者？')) run(() => removeRoleHolderAction(h.bindingId), '已移除');
+                  onClick={async () => {
+                    if (await confirmDialog({ title: '移除這位擔任者？', confirmLabel: '移除', tone: 'danger' })) run(() => removeRoleHolderAction(h.bindingId), '已移除');
                   }}
                 >
                   移除

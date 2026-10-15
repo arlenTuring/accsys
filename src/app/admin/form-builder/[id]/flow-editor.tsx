@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type DragEvent } from 'react';
+import { confirmDialog } from '@/app/components/dialog';
 import {
   APPROVER_SOURCE_KINDS,
   type ApproverBlock,
@@ -538,8 +539,13 @@ function SelectionPanel({
             type="button"
             className={dangerBtn}
             disabled={c.branches.length === 1}
-            onClick={() => {
-              if (br.blocks.length > 0 && !window.confirm(`分支「${br.label}」內的關卡會一起刪除，確定？`)) return;
+            onClick={async () => {
+              if (
+                br.blocks.length > 0 &&
+                !(await confirmDialog({ title: `刪除分支「${br.label}」？`, message: '分支內的關卡會一起刪除（可以按「復原」救回）。', confirmLabel: '刪除', tone: 'danger' }))
+              ) {
+                return;
+              }
               setBlocks(updateCondition(flow.blocks, c.id, (x) => ({ ...x, branches: x.branches.filter((b) => b.id !== br.id) })));
               setSelection({ kind: 'block', id: c.id });
             }}

@@ -13,13 +13,13 @@ export function useOrgAction() {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<Message | null>(null);
-  const run = (action: () => Promise<Result>, success: string, after?: () => void) => {
+  const run = <R extends Result>(action: () => Promise<R>, success: string | ((r: Extract<R, { ok: true }>) => string), after?: () => void) => {
     setMsg(null);
     start(async () => {
       try {
         const r = await action();
         if (r.ok) {
-          setMsg({ kind: 'ok', text: success });
+          setMsg({ kind: 'ok', text: typeof success === 'string' ? success : success(r as Extract<R, { ok: true }>) });
           after?.();
           router.refresh();
         } else {

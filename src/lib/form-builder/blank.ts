@@ -65,6 +65,28 @@ export function uniqueId(prefix: string, taken: Iterable<string>): string {
   }
 }
 
+/** Key of a copy: `<key>-copy`, then `<key>-copy-2`, … within the 40-character key limit. */
+export function copyKey(key: string, taken: Iterable<string>): string {
+  const used = new Set(taken);
+  for (let n = 1; ; n += 1) {
+    const suffix = n === 1 ? '-copy' : `-copy-${n}`;
+    const candidate = `${key.slice(0, 40 - suffix.length)}${suffix}`;
+    if (!used.has(candidate)) return candidate;
+  }
+}
+
+/** Form numbers are unique across forms, so a copy gets a prefix nobody uses: `<prefix>2`, `<prefix>3`, … (at most 6 characters). */
+export function copyPrefix(prefix: string, taken: Iterable<string>): string {
+  const used = new Set(taken);
+  for (let n = 2; ; n += 1) {
+    const digits = String(n);
+    const candidate = `${prefix.slice(0, 6 - digits.length)}${digits}`;
+    if (!used.has(candidate)) return candidate;
+  }
+}
+
+export const copyName = (name: string) => `${name.slice(0, 56)}（複製）`;
+
 export function emptySchema(): FormSchema {
   return { version: 1, sections: [{ id: 'main', title: '申請內容', description: '', fields: [] }] };
 }

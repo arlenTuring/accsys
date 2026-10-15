@@ -7,6 +7,7 @@ import './globals.css';
 import { getPendingApprovalCount } from '@/lib/approvals/pending-count';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getFormCatalog } from '@/lib/forms/catalog-server';
+import { DialogHost } from '@/app/components/dialog';
 import { TopNav } from '@/app/components/top-nav';
 import type { MenuEmployee } from '@/app/components/user-menu';
 
@@ -36,6 +37,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <body className="font-sans" suppressHydrationWarning>
         {menuEmployee && <TopNav employee={menuEmployee} pendingApprovalCount={pendingApprovalCount} categories={categories} />}
         {children}
+        <DialogHost />
       </body>
     </html>
   );

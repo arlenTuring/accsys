@@ -63,28 +63,28 @@ export function AttachmentsPanel({
   };
 
   return (
-    <section className="rounded border p-4">
-      <h2 className="mb-2 font-semibold">附件</h2>
-      {error && <p className="mb-2 text-sm text-red-700">{error}</p>}
+    <section className="card space-y-3">
+      <h2 className="text-base font-semibold text-td-blue-dark">附件</h2>
+      {error && <p className="text-sm text-red-700">{error}</p>}
       {attachments.length === 0 ? (
-        <p className="mb-2 text-sm text-gray-500">尚無附件。</p>
+        <p className="text-sm text-td-muted">尚無附件。</p>
       ) : (
-        <ul className="mb-2 space-y-1 text-sm">
+        <ul className="space-y-1 text-sm">
           {attachments.map((a) => (
             <li key={a.id} className="flex items-center gap-2">
               {BLOCKED.has(a.scanStatus) ? (
-                <span className="text-gray-500">{a.fileName}</span>
+                <span className="text-td-muted">{a.fileName}</span>
               ) : (
                 <button
                   type="button"
                   onClick={() => onPreview(a.id)}
                   disabled={previewBusyId === a.id}
-                  className="text-blue-600 underline disabled:opacity-50"
+                  className="font-medium text-td-blue hover:underline disabled:opacity-50"
                 >
                   {a.fileName}
                 </button>
               )}
-              <span className="text-gray-400">
+              <span className="text-xs text-td-muted">
                 {fmtFileSize(a.fileSizeBytes)}｜{a.uploadedByName}
               </span>
               {SCAN_LABELS[a.scanStatus] && (
@@ -98,13 +98,8 @@ export function AttachmentsPanel({
       )}
       {canUpload && (
         <div className="flex items-center gap-2">
-          <input ref={fileInputRef} type="file" accept=".pdf,.png,.jpg,.jpeg" className="text-sm" />
-          <button
-            type="button"
-            onClick={onUpload}
-            disabled={uploading}
-            className="rounded border px-3 py-1 text-sm disabled:opacity-50"
-          >
+          <input ref={fileInputRef} type="file" accept=".pdf,.png,.jpg,.jpeg" />
+          <button type="button" onClick={onUpload} disabled={uploading} className="btn-primary !py-1.5">
             {uploading ? '上傳中…' : '上傳附件'}
           </button>
         </div>

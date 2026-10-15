@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { confirmDialog } from '@/app/components/dialog';
 import { saveGroupAction, setGroupActiveAction, setGroupMembersAction } from '@/lib/admin/org/actions';
 import type { OrgDirectory, OrgGroupRow } from '@/lib/admin/org/queries';
 import { ActionMessage, EmployeeSelect, InUseNote, Section, dangerBtn, employeeLabel, smallBtn, smallInput, useOrgAction } from '../org-ui';
@@ -63,8 +64,8 @@ function GroupCard({ group, data, pending, run }: { group: OrgGroupRow; data: Or
               type="button"
               className={dangerBtn}
               disabled={pending}
-              onClick={() => {
-                if (window.confirm(`停用群組「${group.name}」？`)) run(() => setGroupActiveAction(group.id, false), '群組已停用');
+              onClick={async () => {
+                if (await confirmDialog({ title: `停用群組「${group.name}」？`, confirmLabel: '停用', tone: 'danger' })) run(() => setGroupActiveAction(group.id, false), '群組已停用');
               }}
             >
               停用

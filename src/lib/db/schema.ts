@@ -1093,6 +1093,9 @@ export const formDefinitions = pgTable(
     visibility: jsonb('visibility').notNull().default(sql`'{}'::jsonb`),
     /** Set on definitions that replace a hard-coded form (migration batches). */
     legacyFormType: text('legacy_form_type'),
+    /** Deleted in the designer while submissions still need it: hidden there, kept (archived) for those submissions. */
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    deletedByEmployeeId: uuid('deleted_by_employee_id'),
     createdByEmployeeId: uuid('created_by_employee_id').notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -1101,6 +1104,8 @@ export const formDefinitions = pgTable(
   (t): PgTableExtraConfigValue[] => [
     fk('form_definitions_category_id_fkey', t.categoryId, formCategories.id),
     fk('form_definitions_created_by_fkey', t.createdByEmployeeId, employees.id),
+    fk('form_definitions_deleted_by_fkey', t.deletedByEmployeeId, employees.id),
+    check('form_definitions_deleted_check', sql`(deleted_at is null) = (deleted_by_employee_id is null) and (deleted_at is null or status = 'archived')`),
     // The published version must belong to this definition.
     foreignKey({
       name: 'form_definitions_published_version_fkey',

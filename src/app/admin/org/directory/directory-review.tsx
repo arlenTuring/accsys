@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { ACCOUNT_ERRORS } from '@/app/admin/accounts/messages';
+import { confirmDialog } from '@/app/components/dialog';
 import { setEmployeeAccessAction } from '@/lib/admin/accounts/actions';
 import type { DirectoryPageData, LeaverWithHandover, SyncRunRow } from '@/lib/admin/directory/queries';
 import { applyDirectoryChangesAction, createEmployeeFromDirectoryAction } from '@/lib/admin/employees/actions';
@@ -425,8 +426,14 @@ function LeaverRow({ leaver, self, pending, run }: { leaver: LeaverWithHandover;
               type="button"
               className={dangerBtn}
               disabled={pending || !reason.trim()}
-              onClick={() => {
-                if (!window.confirm(`停用 ${leaver.employeeCode} ${leaver.name} 的系統存取？`)) return;
+              onClick={async () => {
+                const ok = await confirmDialog({
+                  title: '停用系統存取？',
+                  message: `停用 ${leaver.employeeCode} ${leaver.name} 的系統存取，並登出所有裝置。`,
+                  confirmLabel: '停用',
+                  tone: 'danger',
+                });
+                if (!ok) return;
                 run(() => adapt(setEmployeeAccessAction(leaver.employeeId, false, reason.trim())), `已停用 ${leaver.employeeCode}`);
               }}
             >

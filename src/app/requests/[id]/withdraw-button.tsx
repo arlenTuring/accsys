@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { confirmDialog } from '@/app/components/dialog';
 
 type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -19,7 +20,7 @@ export function WithdrawButton({
   const [busy, setBusy] = useState(false);
 
   const onClick = async () => {
-    if (!window.confirm('確定要撤回這張表單嗎？撤回後需重新填寫送出。')) return;
+    if (!(await confirmDialog({ title: '撤回這張表單？', message: '撤回後需重新填寫送出。', confirmLabel: '撤回', tone: 'danger' }))) return;
     setBusy(true);
     setError(null);
     const result = await onWithdraw(requestId);
@@ -37,7 +38,7 @@ export function WithdrawButton({
         type="button"
         onClick={onClick}
         disabled={busy}
-        className="rounded border border-red-300 px-4 py-2 text-sm text-red-700 disabled:opacity-50"
+        className="btn border border-red-200 bg-white text-red-700 hover:bg-red-50"
       >
         {busy ? '撤回中…' : '撤回'}
       </button>

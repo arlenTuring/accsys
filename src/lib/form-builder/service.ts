@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import { sanitizeSimFields, simulationInputs } from '@/lib/admin/org/sim-inputs';
 import { simulateFlow, type Simulation } from '@/lib/approval/flow/simulate';
 import { recordAudit } from '@/lib/audit/record';
@@ -20,7 +20,7 @@ import { hitRateLimit, RATE_LIMITS } from '@/lib/rate-limit';
 import { isIsoDate } from '@/lib/seal-requests/validate';
 import { taipeiToday } from '@/lib/taipei-date';
 import { abort, runInTransaction, type ErrorCode, type Tx } from '@/lib/workflow/tx';
-import { CATEGORY_LIMITS, emptyFlow, emptySchema, uniqueId } from './blank';
+import { CATEGORY_LIMITS, copyKey, copyName, copyPrefix, emptyFlow, emptySchema, uniqueId } from './blank';
 import { collectFieldTypes, fieldTypeConflicts } from './diff';
 import { draftProblem, sourceFormKeys } from './draft';
 import { parseSettings, type DefinitionSettings } from './settings';
@@ -76,7 +76,7 @@ async function lockDefinition(tx: Tx, id: unknown, expectedVersion: unknown): Pr
     .from(formDefinitions)
     .where(eq(formDefinitions.id, id as string))
     .for('update');
-  if (!row) abort('not_found', '找不到這張表單');
+  if (!row || row.deletedAt) abort('not_found', '找不到這張表單');
   if (expectedVersion !== row!.version) abort('conflict', '這張表單剛被修改過（可能是其他管理員），請重新整理後再試');
   return row!;
 }
@@ -117,8 +117,23 @@ async function assertVisibilityRefs(tx: Tx, s: DefinitionSettings) {
 }
 
 async function assertKeyFree(tx: Tx, key: string, exceptId: string | null) {
-  const [clash] = await tx.select({ id: formDefinitions.id }).from(formDefinitions).where(eq(formDefinitions.key, key));
-  if (clash && clash.id !== exceptId) abort('conflict', '表單代號已被使用，請換一個');
+  const [clash] = await tx.select({ id: formDefinitions.id, deletedAt: formDefinitions.deletedAt }).from(formDefinitions).where(eq(formDefinitions.key, key));
+  if (clash && clash.id !== exceptId) {
+    abort('conflict', clash.deletedAt ? '表單代號屬於已刪除的表單（舊單據仍使用），請換一個' : '表單代號已被使用，請換一個');
+  }
+}
+
+/** Form numbers are unique across all forms (each counts its own serial), so two forms cannot share a prefix. */
+const lockPrefixes = (tx: Tx) => tx.execute(sql`select pg_advisory_xact_lock(hashtext('accsys.form_definitions.number_prefix'))`);
+
+async function assertPrefixFree(tx: Tx, prefix: string, exceptId: string | null) {
+  await lockPrefixes(tx);
+  const [clash] = await tx
+    .select({ name: formDefinitions.name, deletedAt: formDefinitions.deletedAt })
+    .from(formDefinitions)
+    .where(exceptId ? and(eq(formDefinitions.numberPrefix, prefix), ne(formDefinitions.id, exceptId)) : eq(formDefinitions.numberPrefix, prefix))
+    .limit(1);
+  if (clash) abort('conflict', `表單編號字首 ${prefix} 已被「${clash.name}」${clash.deletedAt ? '（已刪除）' : ''}使用，請換一個，以免單號重複`);
 }
 
 async function publishedVersion(tx: Tx, row: DefinitionRow) {
@@ -147,6 +162,7 @@ export function createDefinition(actor: BuilderActor, raw: unknown) {
   return run(actor, 'create', async (tx, actorId) => {
     const s = needSettings(raw);
     await assertKeyFree(tx, s.key, null);
+    await assertPrefixFree(tx, s.numberPrefix, null);
     const catId = await categoryId(tx, s.categoryKey);
     await assertVisibilityRefs(tx, s);
     let schema: unknown = emptySchema();
@@ -155,7 +171,7 @@ export function createDefinition(actor: BuilderActor, raw: unknown) {
     if (copyFrom !== undefined && copyFrom !== null && copyFrom !== '') {
       if (!isUuid(copyFrom)) abort('validation', '要複製的表單不存在');
       const [src] = await tx.select().from(formDefinitions).where(eq(formDefinitions.id, copyFrom as string));
-      if (!src) abort('validation', '要複製的表單不存在');
+      if (!src || src.deletedAt) abort('validation', '要複製的表單不存在');
       const published = await publishedVersion(tx, src!);
       schema = src!.draftSchema ?? published?.schema ?? schema;
       flow = src!.draftFlow ?? published?.flow ?? flow;
@@ -178,6 +194,43 @@ export function createDefinition(actor: BuilderActor, raw: unknown) {
       .returning({ id: formDefinitions.id });
     await audit(tx, actorId, 'form_definition.created', row.id, { ...s, copyFrom: copyFrom ?? null });
     return { id: row.id };
+  });
+}
+
+/**
+ * A draft copy of a form: same working copy (draft, else published version)
+ * and settings, named 「…（複製）」. Key and number prefix must be unique, so
+ * they get a suffix; it does not replace any hard-coded form.
+ */
+export function duplicateDefinition(actor: BuilderActor, id: unknown) {
+  return run(actor, 'duplicate', async (tx, actorId) => {
+    if (!isUuid(id)) abort('not_found', '找不到這張表單');
+    const [src] = await tx.select().from(formDefinitions).where(eq(formDefinitions.id, id as string));
+    if (!src || src.deletedAt) abort('not_found', '找不到這張表單');
+    const published = await publishedVersion(tx, src!);
+    await lockPrefixes(tx);
+    const taken = await tx.select({ key: formDefinitions.key, prefix: formDefinitions.numberPrefix }).from(formDefinitions);
+    const values = {
+      key: copyKey(src!.key, taken.map((t) => t.key)),
+      name: copyName(src!.name),
+      description: src!.description,
+      categoryId: src!.categoryId,
+      sortOrder: src!.sortOrder,
+      numberPrefix: copyPrefix(src!.numberPrefix, taken.map((t) => t.prefix)),
+      visibility: src!.visibility,
+    };
+    const [row] = await tx
+      .insert(formDefinitions)
+      .values({
+        ...values,
+        status: 'draft',
+        draftSchema: src!.draftSchema ?? published?.schema ?? emptySchema(),
+        draftFlow: src!.draftFlow ?? published?.flow ?? emptyFlow(),
+        createdByEmployeeId: actorId,
+      })
+      .returning({ id: formDefinitions.id });
+    await audit(tx, actorId, 'form_definition.created', row.id, { key: values.key, name: values.name, numberPrefix: values.numberPrefix, copyFrom: src!.id });
+    return { id: row.id, name: values.name, key: values.key, numberPrefix: values.numberPrefix };
   });
 }
 
@@ -226,6 +279,7 @@ export function saveSettings(actor: BuilderActor, id: unknown, raw: unknown, exp
     if (row.publishedVersionId && rawKey !== undefined && rawKey !== row.key) abort('validation', '表單發佈後代號不能修改（連結與通知都使用代號）');
     const s = needSettings({ ...(raw as object), key: row.publishedVersionId ? row.key : rawKey });
     if (s.key !== row.key) await assertKeyFree(tx, s.key, row.id);
+    if (s.numberPrefix !== row.numberPrefix) await assertPrefixFree(tx, s.numberPrefix, row.id);
     const catId = s.categoryKey === before.categoryKey ? row.categoryId : await categoryId(tx, s.categoryKey);
     await assertVisibilityRefs(tx, s);
     const [updated] = await tx
@@ -330,14 +384,16 @@ async function sourceUsers(tx: Tx, row: DefinitionRow): Promise<string[]> {
     .select({ name: formDefinitions.name, draft: formDefinitions.draftSchema, published: formDefinitionVersions.schema })
     .from(formDefinitions)
     .leftJoin(formDefinitionVersions, eq(formDefinitionVersions.id, formDefinitions.publishedVersionId))
-    .where(ne(formDefinitions.id, row.id));
+    .where(and(ne(formDefinitions.id, row.id), isNull(formDefinitions.deletedAt)));
   return others.filter((o) => sourceFormKeys(o.draft).includes(row.key) || sourceFormKeys(o.published).includes(row.key)).map((o) => o.name);
 }
 
 /**
- * A form nobody ever filled in can be deleted, published or not; its versions
- * go with it. Once there are submissions it can only be archived (they are
- * shown and validated against their version; the database refuses as well).
+ * Deletes a form from the designer. One nobody depends on (never filled in,
+ * not replacing a hard-coded form, no other form's 關聯單據 source) is removed
+ * with its versions. Otherwise its submissions need it (shown and validated
+ * against their version; the database refuses removal), so a paused form is
+ * hidden instead: gone from the designer and menus, kept for those records.
  */
 export function deleteDefinition(actor: BuilderActor, id: unknown, expectedVersion: unknown) {
   return run(actor, 'delete', async (tx, actorId) => {
@@ -346,10 +402,23 @@ export function deleteDefinition(actor: BuilderActor, id: unknown, expectedVersi
       .select({ n: sql<number>`count(*)::int` })
       .from(formSubmissions)
       .where(eq(formSubmissions.definitionId, row.id));
-    if (n > 0) abort('conflict', `這張表單已有 ${n} 張單據，不能刪除（舊單據要保留它的版本），請改用「暫停」`);
-    if (row.legacyFormType && row.publishedVersionId) abort('conflict', '這張表單已取代舊版系統表單，不能刪除，請改用「暫停」');
-    const users = await sourceUsers(tx, row);
-    if (users.length > 0) abort('conflict', `「${users.join('」、「')}」的關聯單據以這張表單為來源，請先移除該來源再刪除`);
+    const users = row.publishedVersionId ? await sourceUsers(tx, row) : [];
+    const needed = [
+      n > 0 ? `已有 ${n} 張單據` : null,
+      row.legacyFormType && row.publishedVersionId ? '已取代舊版系統表單' : null,
+      users.length > 0 ? `是「${users.join('」、「')}」的關聯單據來源` : null,
+    ].filter((r): r is string => r !== null);
+
+    if (needed.length > 0) {
+      if (row.status !== 'archived') abort('conflict', `這張表單${needed.join('、')}，請先暫停再刪除`);
+      await tx
+        .update(formDefinitions)
+        .set({ deletedAt: sql`now()`, deletedByEmployeeId: actorId, updatedAt: sql`now()`, version: sql`${formDefinitions.version} + 1` })
+        .where(eq(formDefinitions.id, row.id));
+      await audit(tx, actorId, 'form_definition.deleted', row.id, { key: row.key, name: row.name, mode: 'hidden', submissions: n, reasons: needed });
+      return { hidden: true };
+    }
+
     if (row.publishedVersionId) {
       await tx.update(formDefinitions).set({ publishedVersionId: null, status: 'draft' }).where(eq(formDefinitions.id, row.id));
     }
@@ -359,8 +428,8 @@ export function deleteDefinition(actor: BuilderActor, id: unknown, expectedVersi
       .returning({ version: formDefinitionVersions.version });
     await tx.delete(formNumberCounters).where(eq(formNumberCounters.definitionId, row.id));
     await tx.delete(formDefinitions).where(eq(formDefinitions.id, row.id));
-    await audit(tx, actorId, 'form_definition.deleted', row.id, { key: row.key, name: row.name, status: row.status, versions: versions.length });
-    return {};
+    await audit(tx, actorId, 'form_definition.deleted', row.id, { key: row.key, name: row.name, mode: 'removed', status: row.status, versions: versions.length });
+    return { hidden: false };
   });
 }
 

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { confirmDialog } from '@/app/components/dialog';
 import { createLevelAction, deleteLevelAction, updateLevelAction } from '@/lib/admin/org/actions';
 import type { OrgLevelRow } from '@/lib/admin/org/queries';
 import { ActionMessage, InUseNote, Section, dangerBtn, smallBtn, smallInput, useOrgAction } from '../org-ui';
@@ -67,8 +68,8 @@ export function LevelsManager({ levels, inUse }: { levels: OrgLevelRow[]; inUse:
                       type="button"
                       className={dangerBtn}
                       disabled={pending}
-                      onClick={() => {
-                        if (window.confirm(`刪除層級「${l.name}」？`)) run(() => deleteLevelAction(l.id), '層級已刪除');
+                      onClick={async () => {
+                        if (await confirmDialog({ title: `刪除層級「${l.name}」？`, confirmLabel: '刪除', tone: 'danger' })) run(() => deleteLevelAction(l.id), '層級已刪除');
                       }}
                     >
                       刪除

@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
+import { confirmDialog, promptDialog } from '@/app/components/dialog';
 import {
   approveLinkRequestAction,
   rejectLinkRequestAction,
@@ -11,6 +12,7 @@ import {
 } from '@/lib/admin/accounts/actions';
 import type { AccountRow, LinkRequestRow } from '@/lib/admin/accounts/queries';
 import type { AccountActionResult } from '@/lib/admin/accounts/service';
+import { dangerBtn, smallBtn, smallInput } from '../org/org-ui';
 import { ACCOUNT_ERRORS } from './messages';
 
 const ERRORS = ACCOUNT_ERRORS;
@@ -39,17 +41,39 @@ export function AccountsManager({
     });
   };
 
+  const revoke = async (a: AccountRow) => {
+    const ok = await confirmDialog({
+      title: '撤銷 Google 綁定？',
+      message: `撤銷 ${a.name} 的 Google 綁定並登出所有裝置；之後需重新申請綁定才能登入。`,
+      confirmLabel: '撤銷綁定',
+      tone: 'danger',
+    });
+    if (ok) run(() => revokeIdentityAction(a.id));
+  };
+  const disable = async (a: AccountRow) => {
+    const reason = await promptDialog({
+      title: `停用 ${a.name}？`,
+      message: '停用後無法登入，並登出所有裝置。',
+      label: '停用原因（必填）',
+      maxLength: 200,
+      required: true,
+      confirmLabel: '停用',
+      tone: 'danger',
+    });
+    if (reason) run(() => setEmployeeAccessAction(a.id, false, reason));
+  };
+
   const unbound = accounts.filter((a) => !a.boundEmail && a.accessEnabled);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       {message && (
-        <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p role="alert" className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {ERRORS[message.error] ?? '操作失敗。'}
           {message.error === 'reauth_required' && (
             <>
               {' '}
-              <a className="underline" href="/auth/google?returnTo=/admin/accounts">
+              <a className="font-semibold underline" href="/auth/google?returnTo=/admin/accounts">
                 重新登入
               </a>
             </>
@@ -57,13 +81,13 @@ export function AccountsManager({
         </p>
       )}
 
-      <section className="rounded border p-4">
-        <h2 className="mb-3 font-semibold">待處理的 Google 帳號（{requests.length}）</h2>
+      <section className="card space-y-3">
+        <h2 className="text-base font-semibold text-td-blue-dark">待處理的 Google 帳號（{requests.length}）</h2>
         {requests.length === 0 ? (
-          <p className="text-sm text-gray-500">目前沒有申請。</p>
+          <p className="text-sm text-td-muted">目前沒有申請。</p>
         ) : (
           <table className="w-full text-sm">
-            <thead className="text-left text-gray-500">
+            <thead className="text-left text-xs text-td-muted">
               <tr>
                 <th className="py-1">Google 帳號</th>
                 <th>狀態</th>
@@ -75,10 +99,10 @@ export function AccountsManager({
               {requests.map((r) => {
                 const chosen = selection[r.id] ?? r.suggestedEmployeeId ?? '';
                 return (
-                  <tr key={r.id} className="border-t align-top">
+                  <tr key={r.id} className="border-t border-td-border align-top">
                     <td className="py-2">
                       <div>{r.email}</div>
-                      <div className="text-xs text-gray-500">
+                      <div className="text-xs text-td-muted">
                         {r.displayName ?? '—'} · 嘗試 {r.attemptCount} 次 ·{' '}
                         {new Date(r.lastAttemptAt).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })}
                       </div>
@@ -88,10 +112,11 @@ export function AccountsManager({
                         </div>
                       )}
                     </td>
-                    <td className="py-2">{r.status === 'pending' ? '待核准' : '已拒絕'}</td>
+                    <td className="py-2">{r.status === 'pending' ? <span className="badge-pending">待核准</span> : <span className="badge-withdrawn">已拒絕</span>}</td>
                     <td className="py-2">
                       <select
-                        className="rounded border px-2 py-1"
+                        className={smallInput}
+                        aria-label={`${r.email} 綁定到員工`}
                         value={chosen}
                         onChange={(e) => setSelection((s) => ({ ...s, [r.id]: e.target.value }))}
                       >
@@ -106,22 +131,12 @@ export function AccountsManager({
                           ))}
                       </select>
                     </td>
-                    <td className="space-x-2 py-2 text-right">
-                      <button
-                        type="button"
-                        disabled={pending || !chosen}
-                        onClick={() => run(() => approveLinkRequestAction(r.id, chosen))}
-                        className="rounded bg-blue-600 px-3 py-1 text-white disabled:opacity-50"
-                      >
+                    <td className="space-x-1.5 whitespace-nowrap py-2 pl-2 text-right">
+                      <button type="button" disabled={pending || !chosen} onClick={() => run(() => approveLinkRequestAction(r.id, chosen))} className={smallBtn}>
                         核准綁定
                       </button>
                       {r.status === 'pending' && (
-                        <button
-                          type="button"
-                          disabled={pending}
-                          onClick={() => run(() => rejectLinkRequestAction(r.id))}
-                          className="rounded border px-3 py-1 disabled:opacity-50"
-                        >
+                        <button type="button" disabled={pending} onClick={() => run(() => rejectLinkRequestAction(r.id))} className={dangerBtn}>
                           拒絕
                         </button>
                       )}
@@ -134,10 +149,10 @@ export function AccountsManager({
         )}
       </section>
 
-      <section className="rounded border p-4">
-        <h2 className="mb-3 font-semibold">員工帳號（{accounts.length}）</h2>
+      <section className="card space-y-3">
+        <h2 className="text-base font-semibold text-td-blue-dark">員工帳號（{accounts.length}）</h2>
         <table className="w-full text-sm">
-          <thead className="text-left text-gray-500">
+          <thead className="text-left text-xs text-td-muted">
             <tr>
               <th className="py-1">員工</th>
               <th>Google 綁定</th>
@@ -150,15 +165,16 @@ export function AccountsManager({
             {accounts.map((a) => {
               const self = a.id === currentEmployeeId;
               return (
-                <tr key={a.id} className="border-t">
+                <tr key={a.id} className="border-t border-td-border">
                   <td className="py-2">
                     {a.employeeCode} {a.name}
-                    <div className="text-xs text-gray-500">{a.departmentName}</div>
+                    <div className="text-xs text-td-muted">{a.departmentName}</div>
                   </td>
-                  <td className="py-2">{a.boundEmail ?? <span className="text-gray-400">未綁定</span>}</td>
+                  <td className="py-2">{a.boundEmail ?? <span className="text-td-muted">未綁定</span>}</td>
                   <td className="py-2">
                     <select
-                      className="rounded border px-2 py-1"
+                      className={`${smallInput} w-auto`}
+                      aria-label={`${a.name} 的角色`}
                       value={a.role}
                       disabled={pending || self}
                       onChange={(e) => run(() => setEmployeeRoleAction(a.id, e.target.value))}
@@ -171,43 +187,21 @@ export function AccountsManager({
                     </select>
                   </td>
                   <td className="py-2">
-                    {a.accessEnabled ? '啟用' : <span className="text-red-700">停用（{a.disabledReason}）</span>}
+                    {a.accessEnabled ? <span className="badge-approved">啟用</span> : <span className="text-red-700">停用（{a.disabledReason}）</span>}
                   </td>
-                  <td className="space-x-2 py-2 text-right">
+                  <td className="space-x-1.5 whitespace-nowrap py-2 pl-2 text-right">
                     {!self && a.boundEmail && (
-                      <button
-                        type="button"
-                        disabled={pending}
-                        onClick={() => {
-                          if (window.confirm(`撤銷 ${a.name} 的 Google 綁定並登出所有裝置？`)) {
-                            run(() => revokeIdentityAction(a.id));
-                          }
-                        }}
-                        className="rounded border px-3 py-1 disabled:opacity-50"
-                      >
+                      <button type="button" disabled={pending} onClick={() => revoke(a)} className={smallBtn}>
                         撤銷綁定
                       </button>
                     )}
                     {!self &&
                       (a.accessEnabled ? (
-                        <button
-                          type="button"
-                          disabled={pending}
-                          onClick={() => {
-                            const reason = window.prompt(`停用 ${a.name} 的原因（必填）`);
-                            if (reason?.trim()) run(() => setEmployeeAccessAction(a.id, false, reason));
-                          }}
-                          className="rounded border border-red-300 px-3 py-1 text-red-700 disabled:opacity-50"
-                        >
+                        <button type="button" disabled={pending} onClick={() => disable(a)} className={dangerBtn}>
                           停用
                         </button>
                       ) : (
-                        <button
-                          type="button"
-                          disabled={pending}
-                          onClick={() => run(() => setEmployeeAccessAction(a.id, true))}
-                          className="rounded border px-3 py-1 disabled:opacity-50"
-                        >
+                        <button type="button" disabled={pending} onClick={() => run(() => setEmployeeAccessAction(a.id, true))} className={smallBtn}>
                           啟用
                         </button>
                       ))}

@@ -36,6 +36,22 @@
     cursor: not-allowed;
   }
 
+  input[type='file'] {
+    @apply text-sm text-td-muted;
+  }
+
+  input[type='file']::file-selector-button {
+    @apply mr-3 cursor-pointer rounded-lg border border-td-blue bg-white px-3 py-1.5 text-sm font-semibold text-td-blue transition-colors duration-150;
+  }
+
+  input[type='file']::file-selector-button:hover {
+    @apply bg-td-blue-light;
+  }
+
+  input[type='file']:disabled::file-selector-button {
+    @apply cursor-not-allowed opacity-50;
+  }
+
   @supports (appearance: base-select) {
     select:not([multiple]):not([size]),
     select:not([multiple]):not([size])::picker(select) {
@@ -118,6 +134,10 @@
 
   .btn-ghost {
     @apply btn text-td-muted hover:bg-td-blue-light hover:text-td-blue-dark;
+  }
+
+  .btn-danger {
+    @apply btn bg-red-600 text-white hover:bg-red-700;
   }
 
   .nav-link {

@@ -3,6 +3,7 @@
 import { useRef, useState, useTransition, type InputHTMLAttributes } from 'react';
 import { useRouter } from 'next/navigation';
 import { ACCOUNT_ERRORS } from '@/app/admin/accounts/messages';
+import { confirmDialog } from '@/app/components/dialog';
 import type { ImportField, ImportPlan } from '@/lib/admin/employees/import';
 import {
   applyEmployeeImportAction,
@@ -287,8 +288,17 @@ function RoleEditor({ employee, self, pending, run }: { employee: EmployeeAdminR
             type="button"
             className={smallBtn}
             disabled={pending || role === employee.role}
-            onClick={() => {
-              if (role === 'admin' && !window.confirm(`將 ${employee.employeeCode} ${employee.name} 設為系統管理員？`)) return;
+            onClick={async () => {
+              if (
+                role === 'admin' &&
+                !(await confirmDialog({
+                  title: '設為系統管理員？',
+                  message: `將 ${employee.employeeCode} ${employee.name} 設為系統管理員，可以管理帳號、組織與表單。`,
+                  confirmLabel: '設為系統管理員',
+                }))
+              ) {
+                return;
+              }
               run(() => adapt(setEmployeeRoleAction(employee.id, role)), `已將 ${employee.employeeCode} 設為${ROLE_LABELS[role]}`);
             }}
           >
@@ -331,8 +341,8 @@ function JobRoleEditor({
                 type="button"
                 className={dangerBtn}
                 disabled={pending}
-                onClick={() => {
-                  if (!window.confirm(`移除 ${employee.name} 的職務「${b.jobRoleName}」？`)) return;
+                onClick={async () => {
+                  if (!(await confirmDialog({ title: '移除職務？', message: `移除 ${employee.name} 的職務「${b.jobRoleName}」。`, confirmLabel: '移除', tone: 'danger' }))) return;
                   run(() => removeRoleHolderAction(b.bindingId), `已移除職務「${b.jobRoleName}」`);
                 }}
               >

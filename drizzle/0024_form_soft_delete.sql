@@ -1,0 +1,4 @@
+ALTER TABLE "form_definitions" ADD COLUMN "deleted_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "form_definitions" ADD COLUMN "deleted_by_employee_id" uuid;--> statement-breakpoint
+ALTER TABLE "form_definitions" ADD CONSTRAINT "form_definitions_deleted_by_fkey" FOREIGN KEY ("deleted_by_employee_id") REFERENCES "public"."employees"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "form_definitions" ADD CONSTRAINT "form_definitions_deleted_check" CHECK ((deleted_at is null) = (deleted_by_employee_id is null) and (deleted_at is null or status = 'archived'));

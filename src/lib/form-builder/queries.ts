@@ -1,4 +1,4 @@
-import { asc, desc, eq, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, ne, sql } from 'drizzle-orm';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { isUuid } from '@/lib/authz/forms';
 import type { FlowDef } from '@/lib/approval/flow/types';
@@ -38,7 +38,7 @@ export type BuilderListItem = {
   updatedAt: Date;
   submissionCount: number;
   openCount: number;
-  /** Published migration form that took over a hard-coded form (not deletable). */
+  /** Published migration form that took over a hard-coded form (deleting only hides it). */
   replacesLegacy: boolean;
 };
 
@@ -80,6 +80,7 @@ export async function getFormBuilderList(): Promise<BuilderList | null> {
       .from(formDefinitions)
       .innerJoin(formCategories, eq(formCategories.id, formDefinitions.categoryId))
       .leftJoin(formDefinitionVersions, eq(formDefinitionVersions.id, formDefinitions.publishedVersionId))
+      .where(isNull(formDefinitions.deletedAt))
       .orderBy(asc(formCategories.sortOrder), asc(formDefinitions.sortOrder), asc(formDefinitions.name)),
     db
       .select({
@@ -190,7 +191,7 @@ export async function getDesignerData(id: string): Promise<DesignerData | null> 
     .from(formDefinitions)
     .innerJoin(formCategories, eq(formCategories.id, formDefinitions.categoryId))
     .where(eq(formDefinitions.id, id));
-  if (!row) return null;
+  if (!row || row.d.deletedAt) return null;
   const d = row.d;
 
   const [versionRows, counts, categories, emps, depts, groups, roles, levels, options, others] = await Promise.all([
@@ -240,7 +241,7 @@ export async function getDesignerData(id: string): Promise<DesignerData | null> 
       })
       .from(formDefinitions)
       .leftJoin(formDefinitionVersions, eq(formDefinitionVersions.id, formDefinitions.publishedVersionId))
-      .where(ne(formDefinitions.id, d.id))
+      .where(and(ne(formDefinitions.id, d.id), isNull(formDefinitions.deletedAt)))
       .orderBy(asc(formDefinitions.name)),
   ]);
   const sourceForms: BuilderSourceForm[] = [];
@@ -308,5 +309,9 @@ export async function getDesignerData(id: string): Promise<DesignerData | null> 
 /** Other forms a new one can start from (working copy is copied). */
 export async function getCopySources(): Promise<{ id: string; name: string }[]> {
   if (!(await requireAdmin())) return [];
-  return getDb().select({ id: formDefinitions.id, name: formDefinitions.name }).from(formDefinitions).orderBy(asc(formDefinitions.name));
+  return getDb()
+    .select({ id: formDefinitions.id, name: formDefinitions.name })
+    .from(formDefinitions)
+    .where(isNull(formDefinitions.deletedAt))
+    .orderBy(asc(formDefinitions.name));
 }

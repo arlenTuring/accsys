@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { confirmDialog } from '@/app/components/dialog';
 import { createDelegationAction, revokeDelegationAction } from '@/lib/admin/org/actions';
 import type { DelegationStatus, OrgDirectory } from '@/lib/admin/org/queries';
 import { ActionMessage, EmployeeSelect, Section, dangerBtn, employeeLabel, smallInput, useOrgAction } from '../org-ui';
@@ -154,8 +155,10 @@ export function DelegationsManager({ data }: { data: OrgDirectory }) {
                         type="button"
                         className={dangerBtn}
                         disabled={pending}
-                        onClick={() => {
-                          if (window.confirm('撤銷這筆代理設定？已經產生的簽核關卡不會改回。')) run(() => revokeDelegationAction(d.id), '代理設定已撤銷');
+                        onClick={async () => {
+                          if (await confirmDialog({ title: '撤銷這筆代理設定？', message: '已經產生的簽核關卡不會改回。', confirmLabel: '撤銷', tone: 'danger' })) {
+                            run(() => revokeDelegationAction(d.id), '代理設定已撤銷');
+                          }
                         }}
                       >
                         撤銷

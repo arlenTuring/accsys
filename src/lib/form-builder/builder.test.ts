@@ -4,7 +4,7 @@ import type { FlowBlock } from '@/lib/approval/flow/types';
 import { parseDefinition } from '@/lib/custom-forms/definition';
 import { FIELD_TYPES, parseFormSchema, type FormSchema } from '@/lib/custom-forms/schema';
 import { PURCHASE_ADMIN_SAMPLE } from '@/lib/custom-forms/samples';
-import { emptyFlow, emptySchema, newApprover, newCondition, newField, uniqueId } from './blank';
+import { copyKey, copyName, copyPrefix, emptyFlow, emptySchema, newApprover, newCondition, newField, uniqueId } from './blank';
 import { changeSummary, collectFieldTypes, fieldTypeConflicts, hasChanges } from './diff';
 import { draftProblem, MAX_DRAFT_BYTES, sourceFormKeys } from './draft';
 import { findBlock, flowIds, insertBlock, locate, moveBlock, removeBlock, someApprover } from './flow-tree';
@@ -39,6 +39,18 @@ describe('designer defaults', () => {
 
   it('picks the first free id', () => {
     expect(uniqueId('b', ['b1', 'b2', 'b4'])).toBe('b3');
+  });
+
+  it('names a copy 「…（複製）」 with a free key and number prefix that still pass the settings checks', () => {
+    expect(copyName('請款單')).toBe('請款單（複製）');
+    expect(copyKey('pay', ['pay'])).toBe('pay-copy');
+    expect(copyKey('pay', ['pay', 'pay-copy', 'pay-copy-2'])).toBe('pay-copy-3');
+    expect(copyPrefix('PAY', ['PAY', 'PAY2'])).toBe('PAY3');
+    expect(copyPrefix('ABCDEF', ['ABCDEF', 'ABCDE2'])).toBe('ABCDE3');
+    const longKey = `a${'b'.repeat(39)}`;
+    const copy = { key: copyKey(longKey, [longKey]), name: copyName('名'.repeat(60)), categoryKey: 'general', numberPrefix: copyPrefix('ABCDEF', ['ABCDEF']), visibility: {} };
+    expect(copy.key).toHaveLength(40);
+    expect(parseSettings(copy)).toMatchObject({ ok: true });
   });
 });
 

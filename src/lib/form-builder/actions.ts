@@ -22,6 +22,10 @@ export async function createDefinitionAction(input: unknown) {
   return done(await builder.createDefinition(await me(), input));
 }
 
+export async function duplicateDefinitionAction(id: string) {
+  return done(await builder.duplicateDefinition(await me(), id));
+}
+
 export async function saveDraftAction(id: string, input: unknown, expectedVersion: number) {
   return done(await builder.saveDraft(await me(), id, input, expectedVersion));
 }

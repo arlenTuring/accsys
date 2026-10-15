@@ -4,7 +4,8 @@ import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import type { FlowDef } from '@/lib/approval/flow/types';
 import type { FormSchema } from '@/lib/custom-forms/schema';
-import { deleteDefinitionAction, discardDraftAction, publishDraftAction, setArchivedAction } from '@/lib/form-builder/actions';
+import { confirmDialog } from '@/app/components/dialog';
+import { deleteDefinitionAction, discardDraftAction, duplicateDefinitionAction, publishDraftAction, setArchivedAction } from '@/lib/form-builder/actions';
 import { changeSummary, hasChanges } from '@/lib/form-builder/diff';
 import type { BuilderStatus, BuilderVersion } from '@/lib/form-builder/queries';
 import { dangerBtn, smallBtn } from '../../org/org-ui';
@@ -142,22 +143,51 @@ export function PublishPanel({
                 type="button"
                 className={smallBtn}
                 disabled={pending}
-                onClick={() => {
-                  if (!window.confirm(`捨棄所有尚未發佈的修改，回到第 ${published.version} 版？`)) return;
-                  act(() => discardDraftAction(id, rowVersion), '已捨棄草稿', reload);
+                onClick={async () => {
+                  const ok = await confirmDialog({
+                    title: '捨棄草稿？',
+                    message: `捨棄所有尚未發佈的修改，回到第 ${published.version} 版。`,
+                    confirmLabel: '捨棄草稿',
+                    tone: 'danger',
+                  });
+                  if (ok) act(() => discardDraftAction(id, rowVersion), '已捨棄草稿', reload);
                 }}
               >
                 捨棄草稿，回到生效版本
               </button>
             )}
+            <button
+              type="button"
+              className={smallBtn}
+              disabled={pending}
+              onClick={() =>
+                act(
+                  async () => {
+                    if (dirty && (await save()) === null) return null;
+                    const r = await duplicateDefinitionAction(id);
+                    if (r.ok) router.push(`/admin/form-builder/${r.id}`);
+                    return r;
+                  },
+                  '已複製，正在開啟複本',
+                  () => {}
+                )
+              }
+            >
+              複製表單
+            </button>
             {status === 'published' && (
               <button
                 type="button"
                 className={dangerBtn}
                 disabled={pending}
-                onClick={() => {
-                  if (!window.confirm('暫停後選單不再出現這張表單，也不能新填；已送出的單據照常簽核。確定暫停？')) return;
-                  act(() => setArchivedAction(id, true, rowVersion), '已暫停', reload);
+                onClick={async () => {
+                  const ok = await confirmDialog({
+                    title: '暫停這張表單？',
+                    message: '暫停後選單不再出現這張表單，也不能新填；已送出的單據照常簽核。之後可以重新發佈或刪除。',
+                    confirmLabel: '暫停',
+                    tone: 'danger',
+                  });
+                  if (ok) act(() => setArchivedAction(id, true, rowVersion), '已暫停', reload);
                 }}
               >
                 暫停
@@ -168,14 +198,24 @@ export function PublishPanel({
                 重新發佈
               </button>
             )}
-            {used === 0 && (
+            {(status !== 'published' || used === 0) && (
               <button
                 type="button"
                 className={dangerBtn}
                 disabled={pending}
-                onClick={() => {
-                  if (!window.confirm(versions.length === 0 ? '刪除這張尚未發佈的表單？' : '刪除這張表單？還沒有人填寫過，所有版本會一併刪除，無法復原。')) return;
-                  act(() => deleteDefinitionAction(id, rowVersion), '已刪除', () => router.push('/admin/form-builder'));
+                onClick={async () => {
+                  const ok = await confirmDialog({
+                    title: '刪除這張表單？',
+                    message:
+                      used > 0
+                        ? `已有 ${used} 張單據。刪除後會從表單設計器與選單移除，無法復原；已送出的單據與它們使用的版本會保留，照常查閱與簽核。`
+                        : versions.length === 0
+                          ? '草稿與設定會一併刪除，無法復原。'
+                          : '還沒有人填寫過，所有版本會一併刪除，無法復原。',
+                    confirmLabel: '刪除',
+                    tone: 'danger',
+                  });
+                  if (ok) act(() => deleteDefinitionAction(id, rowVersion), '已刪除', () => router.push('/admin/form-builder'));
                 }}
               >
                 刪除表單
@@ -183,7 +223,7 @@ export function PublishPanel({
             )}
           </div>
           <p className="text-xs text-td-muted">
-            {used === 0 ? '還沒有人填寫過，可以刪除。' : `已有 ${used} 張單據，不能刪除（舊單據要保留它的版本），不再使用請暫停。`}
+            {status === 'published' && used > 0 ? `已有 ${used} 張單據；要刪除請先暫停（已送出的單據會保留）。` : '複製會建立一份內容相同的草稿（代號與編號字首自動加上編號）。'}
           </p>
         </section>
       </div>

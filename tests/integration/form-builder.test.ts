@@ -20,7 +20,9 @@ describe('form designer (/admin/form-builder)', () => {
     return r as Extract<T, { ok: true }>;
   };
   const rowVersion = async (id: string) => Number((await sql`select version from form_definitions where id = ${id}`)[0].version);
-  const settings = (key: string) => ({ key, name: '測試表單', categoryKey: 'general', numberPrefix: 'TB', visibility: {} });
+  // Number prefixes are unique across forms.
+  const prefix = () => `Z${crypto.randomUUID().replace(/[^0-9a-f]/g, '').slice(0, 5).toUpperCase()}`;
+  const settings = (key: string) => ({ key, name: '測試表單', categoryKey: 'general', numberPrefix: prefix(), visibility: {} });
   const schemaV1 = {
     version: 1,
     sections: [{ id: 'main', title: '內容', description: '', fields: [{ id: 'subject', type: 'text', label: '主旨', required: true, width: 4, maxLength: 100 }] }],
@@ -150,8 +152,38 @@ describe('form designer (/admin/form-builder)', () => {
     expect((await sql`select count(*)::int as n from form_definitions where id = ${draftOnly.id}`)[0].n).toBe(0);
   });
 
-  it('deletes a published form nobody filled in, never one with submissions, a legacy replacement or a 關聯單據 source', async () => {
-    const { createDefinition, saveDraft, publishDraft, setArchived, deleteDefinition } = await builder();
+  it('copies a form as a draft named 「…（複製）」 with its own key and number prefix', async () => {
+    const { createDefinition, duplicateDefinition, deleteDefinition } = await builder();
+    const [src] = await sql`
+      select d.id, d.key, d.number_prefix, d.category_id, v.schema
+      from form_definitions d join form_definition_versions v on v.id = d.published_version_id
+      where d.key = ${`${tag}-pub`}`;
+    expect(await duplicateDefinition({ id: ids.staff, role: 'staff', authenticatedAt: new Date() }, src.id)).toMatchObject({ ok: false, code: 'forbidden' });
+    expect(await duplicateDefinition(admin(), crypto.randomUUID())).toMatchObject({ ok: false, code: 'not_found' });
+
+    const first = ok(await duplicateDefinition(admin(), src.id));
+    expect(first).toMatchObject({ name: '測試表單（複製）', key: `${tag}-pub-copy` });
+    expect(first.numberPrefix).not.toBe(src.number_prefix);
+    const [copy] = await sql`select status, published_version_id, legacy_form_type, category_id, number_prefix, draft_schema from form_definitions where id = ${first.id}`;
+    expect(copy).toMatchObject({ status: 'draft', published_version_id: null, legacy_form_type: null, category_id: src.category_id, number_prefix: first.numberPrefix });
+    expect(copy.draft_schema).toEqual(src.schema);
+
+    const second = ok(await duplicateDefinition(admin(), src.id));
+    expect(second.key).toBe(`${tag}-pub-copy-2`);
+    expect([src.number_prefix, first.numberPrefix]).not.toContain(second.numberPrefix);
+    const [audit] = await sql`select details from audit_events where action = 'form_definition.created' and entity_id = ${second.id}`;
+    expect(audit.details).toMatchObject({ copyFrom: src.id, key: second.key });
+
+    // Form numbers count per form, so a shared prefix would repeat numbers.
+    const clash = await createDefinition(admin(), { ...settings(`${tag}-pfx`), numberPrefix: src.number_prefix });
+    expect(clash).toMatchObject({ ok: false, code: 'conflict' });
+    if (!clash.ok) expect(clash.error).toContain(src.number_prefix);
+
+    for (const c of [first, second]) ok(await deleteDefinition(admin(), c.id, await rowVersion(c.id)));
+  });
+
+  it('removes forms nobody depends on and hides paused ones that still have records', async () => {
+    const { createDefinition, saveDraft, publishDraft, setArchived, deleteDefinition, duplicateDefinition } = await builder();
     const published = async (key: string) => {
       const d = ok(await createDefinition(admin(), settings(key)));
       ok(await saveDraft(admin(), d.id, { schema: schemaV1, flow: emptyFlow() }, await rowVersion(d.id)));
@@ -159,20 +191,33 @@ describe('form designer (/admin/form-builder)', () => {
       return d.id;
     };
     const versions = async (id: string) => (await sql`select count(*)::int as n from form_definition_versions where definition_id = ${id}`)[0].n;
+    const deleted = async (id: string) => (await sql`select status, deleted_at, deleted_by_employee_id from form_definitions where id = ${id}`)[0];
+    const archive = async (id: string) => ok(await setArchived(admin(), id, true, await rowVersion(id)));
 
     // Used: the form from the publish test has a submission on version 1.
     const [used] = await sql`select id from form_definitions where key = ${`${tag}-pub`}`;
     const refused = await deleteDefinition(admin(), used.id, await rowVersion(used.id));
     expect(refused).toMatchObject({ ok: false, code: 'conflict' });
-    if (!refused.ok) expect(refused.error).toContain('暫停');
-    expect(await versions(used.id)).toBe(2);
+    if (!refused.ok) expect(refused.error).toContain('請先暫停');
     const [{ version_id: usedVersion }] = await sql`select version_id from form_submissions where definition_id = ${used.id} limit 1`;
     await expect(sql`delete from form_definition_versions where id = ${usedVersion}`).rejects.toMatchObject({ code: '23514' });
     const unused = await published(`${tag}-imm`);
     await expect(sql`update form_definition_versions set published_at = now() where definition_id = ${unused}`).rejects.toMatchObject({ code: '23514' });
     await expect(sql`delete from form_definition_versions where definition_id = ${unused}`).rejects.toMatchObject({ code: '23514' });
 
-    // A source of another form's 關聯單據 (draft included) stays until the link is removed.
+    await archive(used.id);
+    expect(ok(await deleteDefinition(admin(), used.id, await rowVersion(used.id))).hidden).toBe(true);
+    const hidden = await deleted(used.id);
+    expect(hidden).toMatchObject({ status: 'archived', deleted_by_employee_id: ids.admin });
+    expect(hidden.deleted_at).not.toBeNull();
+    expect(await versions(used.id)).toBe(2);
+    expect((await sql`select count(*)::int as n from form_submissions where definition_id = ${used.id}`)[0].n).toBe(1);
+    expect(await setArchived(admin(), used.id, false, await rowVersion(used.id))).toMatchObject({ ok: false, code: 'not_found' });
+    expect(await duplicateDefinition(admin(), used.id)).toMatchObject({ ok: false, code: 'not_found' });
+    expect(await deleteDefinition(admin(), used.id, await rowVersion(used.id))).toMatchObject({ ok: false, code: 'not_found' });
+    expect(await createDefinition(admin(), settings(`${tag}-pub`))).toMatchObject({ ok: false, code: 'conflict' });
+
+    // A published 關聯單據 source: pause first, then it is hidden; the unpublished linking form is removed.
     const sourceKey = `${tag}-src`;
     const source = await published(sourceKey);
     const linking = ok(await createDefinition(admin(), settings(`${tag}-link`)));
@@ -181,26 +226,32 @@ describe('form designer (/admin/form-builder)', () => {
     const blocked = await deleteDefinition(admin(), source, await rowVersion(source));
     expect(blocked).toMatchObject({ ok: false, code: 'conflict' });
     if (!blocked.ok) expect(blocked.error).toContain('關聯單據');
-    ok(await deleteDefinition(admin(), linking.id, await rowVersion(linking.id)));
+    await archive(source);
+    expect(ok(await deleteDefinition(admin(), source, await rowVersion(source))).hidden).toBe(true);
+    expect(ok(await deleteDefinition(admin(), linking.id, await rowVersion(linking.id))).hidden).toBe(false);
+    expect((await sql`select count(*)::int as n from form_definitions where id = ${linking.id}`)[0].n).toBe(0);
 
-    // Published migration forms that replaced a hard-coded form are only archived.
-    await sql`update form_definitions set legacy_form_type = ${`${tag}-legacy`} where id = ${source}`;
-    expect(await deleteDefinition(admin(), source, await rowVersion(source))).toMatchObject({ ok: false, code: 'conflict' });
-    await sql`update form_definitions set legacy_form_type = null where id = ${source}`;
-
-    expect(await deleteDefinition({ id: ids.staff, role: 'staff', authenticatedAt: new Date() }, source, await rowVersion(source))).toMatchObject({
+    // A published form that replaced a hard-coded form keeps its records the same way.
+    const legacy = await published(`${tag}-leg`);
+    await sql`update form_definitions set legacy_form_type = ${`${tag}-legacy`} where id = ${legacy}`;
+    expect(await deleteDefinition(admin(), legacy, await rowVersion(legacy))).toMatchObject({ ok: false, code: 'conflict' });
+    expect(await deleteDefinition({ id: ids.staff, role: 'staff', authenticatedAt: new Date() }, legacy, await rowVersion(legacy))).toMatchObject({
       ok: false,
       code: 'forbidden',
     });
-    ok(await setArchived(admin(), source, true, await rowVersion(source)));
-    ok(await deleteDefinition(admin(), source, await rowVersion(source)));
-    ok(await deleteDefinition(admin(), unused, await rowVersion(unused)));
-    for (const id of [source, unused]) {
-      expect((await sql`select count(*)::int as n from form_definitions where id = ${id}`)[0].n).toBe(0);
-      expect(await versions(id)).toBe(0);
-    }
-    const [audit] = await sql`select details from audit_events where action = 'form_definition.deleted' and entity_id = ${source}`;
-    expect(audit.details).toMatchObject({ key: sourceKey, status: 'archived', versions: 1 });
+    await archive(legacy);
+    expect(ok(await deleteDefinition(admin(), legacy, await rowVersion(legacy))).hidden).toBe(true);
+    expect((await deleted(legacy)).deleted_at).not.toBeNull();
+
+    // Published but never filled in: removed with its versions, no pause needed.
+    expect(ok(await deleteDefinition(admin(), unused, await rowVersion(unused))).hidden).toBe(false);
+    expect((await sql`select count(*)::int as n from form_definitions where id = ${unused}`)[0].n).toBe(0);
+    expect(await versions(unused)).toBe(0);
+
+    const audits = async (id: string) => (await sql`select details from audit_events where action = 'form_definition.deleted' and entity_id = ${id}`)[0].details;
+    expect(await audits(unused)).toMatchObject({ key: `${tag}-imm`, mode: 'removed', status: 'published', versions: 1 });
+    expect(await audits(used.id)).toMatchObject({ key: `${tag}-pub`, mode: 'hidden', submissions: 1 });
+    expect(await audits(source)).toMatchObject({ mode: 'hidden', submissions: 0 });
   });
 
   it('adds entry categories for admins only, with a generated key and an audit record', async () => {

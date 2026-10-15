@@ -12,7 +12,7 @@ export function MarkReadButton({ notificationId }: { notificationId: string }) {
         await markNotificationRead(notificationId);
         router.refresh();
       }}
-      className="ml-2 rounded border px-2 py-1 text-xs"
+      className="shrink-0 rounded border border-td-border bg-white px-2.5 py-1 text-xs font-semibold text-td-blue hover:bg-td-blue-light"
     >
       標示為已讀
     </button>

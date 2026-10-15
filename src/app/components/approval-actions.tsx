@@ -54,7 +54,7 @@ export function ApprovalActions({
           type="button"
           onClick={() => (reason.trim() === '' ? setError('請填寫退回原因') : run(() => onReturn(formId, reason, version)))}
           disabled={busy}
-          className="btn border border-red-300 bg-white text-red-700 hover:bg-red-50 disabled:opacity-50"
+          className="btn border border-red-200 bg-white text-red-700 hover:bg-red-50"
         >
           退回
         </button>

@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState, type DragEvent } from 'react';
+import { confirmDialog } from '@/app/components/dialog';
 import { moveDepartmentAction, saveDepartmentAction, setDepartmentActiveAction } from '@/lib/admin/org/actions';
 import type { OrgDepartmentRow, OrgDirectory } from '@/lib/admin/org/queries';
 import { ActionMessage, EmployeeSelect, InUseNote, Section, dangerBtn, employeeLabel, smallBtn, smallInput, useOrgAction } from './org-ui';
@@ -326,8 +327,10 @@ export function DepartmentsManager({ data }: { data: OrgDirectory }) {
                     type="button"
                     className={dangerBtn}
                     disabled={pending}
-                    onClick={() => {
-                      if (window.confirm(`停用部門「${editing.name}」？`)) run(() => setDepartmentActiveAction(editing.id, false), '部門已停用', () => setDraft(null));
+                    onClick={async () => {
+                      if (await confirmDialog({ title: `停用部門「${editing.name}」？`, confirmLabel: '停用', tone: 'danger' })) {
+                        run(() => setDepartmentActiveAction(editing.id, false), '部門已停用', () => setDraft(null));
+                      }
                     }}
                   >
                     停用部門
