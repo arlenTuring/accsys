@@ -29,8 +29,18 @@ export default async function MasterDataPage() {
   ]);
 
   return (
-    <main className="space-y-8 p-8">
-      <h1 className="text-2xl font-bold">主檔資料總覽</h1>
+    <main className="page-shell space-y-8">
+      <section>
+        <p className="section-title">系統管理</p>
+        <h1 className="page-title">主檔資料總覽</h1>
+        <p className="page-subtitle">
+          部門、員工、預算與供應商一覽。說明見{' '}
+          <a href="/admin/guide#master" className="font-semibold text-td-blue underline">
+            系統操作教學
+          </a>
+          。
+        </p>
+      </section>
 
       <section>
         <h2 className="text-lg font-semibold">部門（{departments?.length ?? 0}）</h2>

@@ -89,9 +89,7 @@ export function AccessRolesManager({ roles }: { roles: AccessRoleListItem[] }) {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold text-td-blue-dark">權限角色</h2>
-            <p className="mt-1 text-xs leading-5 text-td-muted">
-              權限角色決定員工能進哪些管理／財會功能。與「職務類別」不同：職務類別只用於簽核關卡與表單可填寫範圍。點角色列可展開權限細節。
-            </p>
+            <p className="mt-1 text-xs leading-5 text-td-muted">點列展開權限；右上新增。規則見系統操作教學。</p>
           </div>
           <button type="button" className="btn-primary !py-1.5" disabled={pending} onClick={() => setEditor({ kind: 'create', draft: emptyDraft() })}>
             新增角色

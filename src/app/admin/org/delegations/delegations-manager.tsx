@@ -120,7 +120,7 @@ export function DelegationsManager({ data }: { data: OrgDirectory }) {
         </form>
       </Section>
 
-      <Section title="代理設定" description="顯示生效中、尚未開始，以及 90 天內結束或撤銷的設定。">
+      <Section title="代理設定" description="生效中、未開始，及 90 天內結束／撤銷。">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="text-left text-xs text-td-muted">

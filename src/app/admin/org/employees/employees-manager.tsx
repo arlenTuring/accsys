@@ -83,7 +83,7 @@ export function EmployeesManager({
       <ActionMessage msg={msg} />
       <Section
         title={`員工資料（${data.employees.length}）`}
-        description="Workspace 同步授權前，用這裡手動新增、修改員工，或匯入 Excel。編輯時可調整系統角色與職務類別；停用與登入綁定請到「帳號與權限」頁處理，修改 Email 不會變更已綁定的 Google 帳號。基本資料與系統角色需 15 分鐘內登入過，職務需 1 小時內登入過，全部記錄稽核。"
+        description="手動維護員工與職務；停用／登入綁定請到「帳號與權限」。"
         actions={
           <button type="button" className={smallBtn} onClick={() => setAdding((v) => !v)}>
             {adding ? '取消新增' : '新增員工'}
@@ -471,7 +471,7 @@ function ExcelImport() {
   return (
     <Section
       title="匯入 Excel"
-      description="使用公司員工活頁簿的「link」工作表（與初始資料相同格式：B 員工編號、C 姓名、D 部門名稱、E 部門代碼、G 職稱）。先預覽，勾選要套用的列再匯入。部門依代碼比對、不會自動建立；空白欄位不會清除既有資料；工作表中沒有的員工不會被停用。新員工預設為一般員工、未綁定登入。"
+        description="匯入 Excel「link」工作表：先預覽再勾選套用；部門依代碼比對、不自動建立。"
     >
       <div className="flex flex-wrap items-center gap-2">
         <input ref={fileRef} type="file" aria-label="員工 Excel 檔案" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="text-sm" onChange={() => setPreview(null)} />

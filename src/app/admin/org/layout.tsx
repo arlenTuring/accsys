@@ -16,7 +16,11 @@ export default async function OrgAdminLayout({ children }: { children: ReactNode
         <p className="section-title">系統管理</p>
         <h1 className="page-title">組織與簽核設定</h1>
         <p className="page-subtitle">
-          簽核流程依這裡的部門、層級、職務、群組與代理人決定簽核人。修改需 1 小時內登入過，每次修改都會記錄稽核；正在被簽核流程使用的項目不能刪除或停用。權限角色請到「帳號與權限」。
+          維護簽核用組織資料。規則見{' '}
+          <a href="/admin/guide#org" className="font-semibold text-td-blue underline">
+            系統操作教學
+          </a>
+          。
         </p>
       </section>
       <OrgTabs />

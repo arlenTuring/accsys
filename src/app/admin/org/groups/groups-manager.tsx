@@ -14,7 +14,7 @@ export function GroupsManager({ data }: { data: OrgDirectory }) {
   return (
     <div className="space-y-4">
       <ActionMessage msg={msg} />
-      <Section title="新增員工群組" description="「員工群組」關卡會依群組成員的順序，一位簽完再換下一位。停用的員工會被略過。">
+      <Section title="新增員工群組" description="關卡依成員順序簽核；停用者略過。">
         <form
           className="grid gap-2 sm:grid-cols-[1fr_2fr_auto]"
           onSubmit={(e) => {

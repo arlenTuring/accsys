@@ -22,7 +22,7 @@ export function RolesManager({ data }: { data: OrgDirectory }) {
       <ActionMessage msg={msg} />
       <Section
         title="新增職務類別"
-        description="「職務類別」關卡會找擔任該職務的人：先找申請部門（及上層部門）的擔任者，找不到再用全公司的擔任者。同一範圍有多人時由「主要」那位簽核。"
+        description="簽核關卡找職務擔任者；同範圍以「主要」為準。"
       >
         <form
           className="grid gap-2 sm:grid-cols-[1fr_1fr_2fr_auto]"

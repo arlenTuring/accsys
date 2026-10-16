@@ -45,7 +45,7 @@ export function FlowSimulator({ data }: { data: SimulatorData }) {
 
   return (
     <div className="grid gap-5 lg:grid-cols-2">
-      <Section title="流程模擬" description="用目前的組織資料試算一張表單會由誰簽核，不會建立任何資料。調整部門主管、職務、群組或代理人後，可以在這裡確認結果。">
+      <Section title="流程模擬" description="試算簽核人，不寫入資料。">
         <div className="space-y-3 text-sm">
           <label className="block">
             <span className="text-xs font-semibold text-td-blue-dark">表單</span>

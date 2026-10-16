@@ -84,6 +84,7 @@ export const ADMIN_LINKS: RecordLink[] = [
   { label: '帳號與權限', href: '/admin/accounts' },
   { label: '組織與簽核', href: '/admin/org' },
   { label: '表單設計器', href: '/admin/form-builder' },
+  { label: '系統操作教學', href: '/admin/guide' },
 ];
 
 /** A published designer form the viewer may file (from the database). */

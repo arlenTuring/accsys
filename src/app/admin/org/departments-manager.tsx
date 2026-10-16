@@ -186,7 +186,7 @@ export function DepartmentsManager({ data }: { data: OrgDirectory }) {
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
       <Section
         title={`部門（${departments.filter((d) => d.active).length}）`}
-        description="部門主管用在「部門主管」關卡；組織層級用在「組織層級」關卡（從申請部門往上找到指定層級的主管）。可拖拉部門調整位置：拖到部門上緣／下緣放在它之前／之後，拖到中間成為它的下層；也可在編輯表單設定上層部門與排序。"
+        description="設定主管與層級；可拖拉調整上下層與排序。"
         actions={
           <div className="flex items-center gap-3">
             <label className="flex items-center gap-1.5 text-xs text-td-muted">

@@ -29,7 +29,7 @@ export function LevelsManager({ levels, inUse }: { levels: OrgLevelRow[]; inUse:
       <ActionMessage msg={msg} />
       <Section
         title="組織層級"
-        description="數字越大層級越高（例如 組 10、處 20、事業群 30、總經理室 40）。「組織層級」關卡會從申請部門往上找主管，直到指定的層級；代號建立後不能修改，因為流程以代號引用。"
+        description="數字越大層級越高；代號建立後不可改。"
       >
         <table className="w-full text-sm">
           <thead className="text-left text-xs text-td-muted">

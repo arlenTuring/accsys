@@ -71,7 +71,7 @@ function SyncStatus({ data, idMismatch }: { data: DirectoryPageData; idMismatch:
   return (
     <Section
       title="同步狀態"
-      description="由伺服器排程（systemd timer）從 Google Workspace 讀取人員清單，網站本身不持有 Workspace 憑證。同步只會撤銷停權帳號的登入綁定並更新目錄快照；建立員工、更新資料與停用帳號都要在本頁由管理員確認（需 15 分鐘內登入過，並記錄稽核）。"
+      description="排程同步目錄快照；建立／停用員工須在本頁確認。"
     >
       <dl className="grid gap-2 text-sm sm:grid-cols-3">
         <div>
@@ -139,7 +139,7 @@ function NewHires({ items, departments, jobRoles, pending, run }: { items: NewHi
   return (
     <Section
       title={`新進人員（${items.length}）`}
-      description="Workspace 中啟用、但尚未綁定任何員工的帳號。建立員工時姓名、Email、電話、職稱取自目錄；目錄的部門與主管只供參考：名稱相同的部門會預先選好，請確認後再建立，職務可一併指定（之後也可在「員工」或「職務類別」頁調整）。建立後不會自動綁定登入：本人首次以 Google 登入後，請到「帳號與登入綁定」核准。"
+      description="尚未綁定的 Workspace 帳號；建立後請到「帳號與權限」核准登入。"
     >
       {items.length === 0 ? (
         <p className="text-sm text-td-muted">沒有待處理的新進人員。</p>
@@ -291,7 +291,7 @@ function Changes({ items, pending, run }: { items: ProfileChange[]; pending: boo
   return (
     <Section
       title={`資料異動（${items.length}）`}
-      description="已綁定員工的 Workspace 資料與系統紀錄不同。勾選要套用的欄位；套用時伺服器會重新讀取目錄快照的值。目錄部門只是提示，部門與主管請到「部門」頁調整。"
+      description="勾選欄位套用目錄差額；部門／主管請到「部門」頁調整。"
       actions={
         items.length > 0 && (
           <button type="button" className={smallBtn} disabled={pending || batch.length === 0} onClick={() => run(() => adapt(applyDirectoryChangesAction(batch)), `已套用 ${batch.length} 位員工的異動`)}>
@@ -361,7 +361,7 @@ function Leavers({ items, currentEmployeeId, pending, run }: { items: LeaverWith
   return (
     <Section
       title={`離職／停權（${items.length}）`}
-      description="Workspace 已停權、封存或移除，但系統內仍可使用的員工。同步已撤銷其 Google 登入綁定；停用會再撤銷所有工作階段。停用前請先處理下列待簽關卡（例如設定代理人），員工資料與歷史表單都會保留。"
+      description="目錄已停權但系統仍啟用；停用前請先處理待簽關卡。"
     >
       {items.length === 0 ? (
         <p className="text-sm text-td-muted">沒有待處理的離職或停權人員。</p>
