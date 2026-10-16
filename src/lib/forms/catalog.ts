@@ -81,7 +81,7 @@ export const FINANCE_LINKS: RecordLink[] = [
 
 export const ADMIN_LINKS: RecordLink[] = [
   { label: '主檔資料', href: '/admin/master-data' },
-  { label: '帳號管理', href: '/admin/accounts' },
+  { label: '帳號與權限', href: '/admin/accounts' },
   { label: '組織與簽核', href: '/admin/org' },
   { label: '表單設計器', href: '/admin/form-builder' },
 ];

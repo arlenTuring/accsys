@@ -63,7 +63,7 @@ export const PERMISSIONS = {
   'org.access_roles': {
     group: 'admin',
     label: '權限角色',
-    description: '建立、修改與停用權限角色及其權限組合。',
+    description: '在帳號與權限頁建立、修改與停用權限角色及其權限組合（不依賴 Google 綁定）。',
   },
   'accounts.manage': {
     group: 'admin',

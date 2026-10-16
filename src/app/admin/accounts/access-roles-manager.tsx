@@ -5,7 +5,7 @@ import { confirmDialog } from '@/app/components/dialog';
 import { saveAccessRoleAction, setAccessRoleActiveAction } from '@/lib/admin/access-roles/actions';
 import type { AccessRoleListItem } from '@/lib/admin/access-roles/queries';
 import { permissionsByGroup, type Permission } from '@/lib/authz/permissions';
-import { ActionMessage, Section, dangerBtn, smallBtn, smallInput, useOrgAction } from '../org-ui';
+import { ActionMessage, Section, dangerBtn, smallBtn, smallInput, useOrgAction } from '../org/org-ui';
 
 type Draft = { code: string; name: string; description: string; permissions: Permission[] };
 

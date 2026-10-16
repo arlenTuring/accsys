@@ -1,7 +1,6 @@
-import { listAccessRoles } from '@/lib/admin/access-roles/queries';
-import { AccessRolesManager } from './access-roles-manager';
+import { redirect } from 'next/navigation';
 
-export default async function AccessRolesPage() {
-  const roles = await listAccessRoles();
-  return <AccessRolesManager roles={roles} />;
+/** Roles live under 帳號與權限; keep this path as a redirect for old bookmarks. */
+export default function AccessRolesRedirectPage() {
+  redirect('/admin/accounts/roles');
 }

@@ -10,7 +10,10 @@ async function me() {
 }
 
 function done<T extends object>(r: AccessRoleResult<T>): AccessRoleResult<T> {
-  if (r.ok) revalidatePath('/admin/org/access-roles');
+  if (r.ok) {
+    revalidatePath('/admin/accounts/roles');
+    revalidatePath('/admin/accounts');
+  }
   return r;
 }
 

@@ -8,7 +8,7 @@ type Sql = Awaited<ReturnType<typeof loadSql>>;
 const loadSql = async () => (await import('@/lib/db')).getSql();
 const service = () => import('@/lib/admin/access-roles/service');
 
-describe('access roles (/admin/org/access-roles)', () => {
+describe('access roles (/admin/accounts/roles)', () => {
   let sql: Sql;
   const tag = `ar${Date.now()}`;
   const ids = {} as Record<'admin' | 'staff', string>;

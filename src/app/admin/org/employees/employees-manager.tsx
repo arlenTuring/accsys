@@ -83,7 +83,7 @@ export function EmployeesManager({
       <ActionMessage msg={msg} />
       <Section
         title={`員工資料（${data.employees.length}）`}
-        description="Workspace 同步授權前，用這裡手動新增、修改員工，或匯入 Excel。編輯時可調整系統角色與職務類別；停用與登入綁定請到「帳號與登入綁定」頁處理，修改 Email 不會變更已綁定的 Google 帳號。基本資料與系統角色需 15 分鐘內登入過，職務需 1 小時內登入過，全部記錄稽核。"
+        description="Workspace 同步授權前，用這裡手動新增、修改員工，或匯入 Excel。編輯時可調整系統角色與職務類別；停用與登入綁定請到「帳號與權限」頁處理，修改 Email 不會變更已綁定的 Google 帳號。基本資料與系統角色需 15 分鐘內登入過，職務需 1 小時內登入過，全部記錄稽核。"
         actions={
           <button type="button" className={smallBtn} onClick={() => setAdding((v) => !v)}>
             {adding ? '取消新增' : '新增員工'}
