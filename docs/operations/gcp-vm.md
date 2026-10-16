@@ -15,12 +15,30 @@
 
 ClamAV 載入病毒碼約需 1.5–3 GB RAM，與 app／nginx／Postgres 同機時勿選 e2-micro／e2-small。
 
+## 一鍵建立測試 VM（本機終端）
+
+代理環境無法代你完成互動式 `gcloud auth`；請在**自己的終端**執行：
+
+```bash
+gcloud auth login
+gcloud auth application-default login
+gcloud config set project integral-cell-498905-s0
+
+# 先預覽指令
+./scripts/gcp-create-vm.sh --dry-run
+
+# 建立：靜態 IP、防火牆、e2-standard-2、資料碟、Ubuntu 24.04、自動裝 Docker
+./scripts/gcp-create-vm.sh
+```
+
+腳本預設 VM 名稱 `accsys-test`、區域 `asia-east1-b`。可用 `--name`／`--zone` 覆寫。建立後腳本會印出 SSH 與後續步驟。
+
 ## 部署前準備清單
 
 在開 VM 與改 Google Console 之前先備齊：
 
-1. **程式版本**：要部署的 git commit（建議先 merge／tag，再依該 commit build 映像）。
-2. **域名**：正式 FQDN（例：`accsys.company.com`）與 DNS A 紀錄指向靜態 IP。
+1. **程式版本**：要部署的 git commit（目前正式教學／README 在 `arlen` remote 的 `main`）。
+2. **域名**：正式 FQDN（例：`accsys.company.com`）與 DNS A 紀錄指向靜態 IP；初期測試也可用 IP + 自簽憑證，但 OAuth 仍建議用 FQDN。
 3. **TLS**：公司憑證或 Let's Encrypt 的 `fullchain.pem`／`privkey.pem`（路徑見 deployment.md）。
 4. **Google OAuth（正式 client，勿用本機 client）**：
    - Authorized JavaScript origins：`https://<FQDN>`
