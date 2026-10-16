@@ -1,6 +1,6 @@
 # ACCSYS 地端部署手冊
 
-適用：公司地端 Linux 主機（或測試 VM），Docker Engine + Compose v2。不使用任何雲端專屬服務。設定檔：`deploy/compose.prod.yml`、`deploy/nginx/templates/accsys.conf.template`、`deploy/accsys.env.example`。
+適用：公司地端 Linux 主機（或測試 VM，含 GCP Compute Engine），Docker Engine + Compose v2。不使用任何雲端專屬服務。設定檔：`deploy/compose.prod.yml`、`deploy/nginx/templates/accsys.conf.template`、`deploy/accsys.env.example`。GCP 開機規格與準備清單見 [gcp-vm.md](./gcp-vm.md)。
 
 ## 架構
 

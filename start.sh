@@ -5,6 +5,7 @@
 #   ./start.sh --seed     同上，並匯入示範假資料
 #   ./start.sh --port N   指定 port（預設 3001；被其他程式占用時自動往後找空的 port）
 #   ./start.sh --no-open  啟動後不自動開瀏覽器
+#   ./start.sh --prod     以正式建置（next build + next start）啟動；無 DevTools「N」
 #   ./start.sh --stop     關閉本專案的 Next.js 與資料庫容器
 #
 # 重複執行時會先關掉「本專案」殘留的 Next.js / 啟動腳本程序再重新啟動；
@@ -20,14 +21,16 @@ PORT="$DEFAULT_PORT"
 DO_SEED=0
 DO_OPEN=1
 DO_STOP=0
+DO_PROD=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --seed) DO_SEED=1; shift ;;
     --port) PORT="${2:?--port 需要數字}"; shift 2 ;;
     --no-open) DO_OPEN=0; shift ;;
+    --prod) DO_PROD=1; shift ;;
     --stop) DO_STOP=1; shift ;;
-    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "未知參數: $1（用 --help 查看用法）"; exit 1 ;;
   esac
 done
@@ -143,6 +146,23 @@ if [[ "$DO_OPEN" -eq 1 ]] && command -v open >/dev/null 2>&1; then
       sleep 1
     done
   ) &
+fi
+
+if [[ "$DO_PROD" -eq 1 ]]; then
+  if [[ "$DO_SEED" -eq 1 ]]; then
+    echo "❌ --prod 不可與 --seed 併用（示範資料腳本禁止在 production 執行）"
+    exit 1
+  fi
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    docker compose up -d db >/dev/null
+  fi
+  echo "🏗️  正式建置（next build）…"
+  NEXT_TELEMETRY_DISABLED=1 npm run -s build
+  echo "🚀 正式模式 http://localhost:${PORT}（ALLOW_HTTP_LOCALHOST；勿用於雲端）"
+  export ALLOW_HTTP_LOCALHOST=true
+  export APP_ORIGIN="${APP_ORIGIN:-http://localhost:${PORT}}"
+  export PORT
+  exec npm run -s start
 fi
 
 ARGS=(--port "$PORT")

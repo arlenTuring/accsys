@@ -40,7 +40,11 @@ function required(env: Env, name: string): string {
   return value;
 }
 
-export function parseAppOrigin(raw: string, nodeEnv: string | undefined): URL {
+export function parseAppOrigin(
+  raw: string,
+  nodeEnv: string | undefined,
+  allowHttpLocalhost = false,
+): URL {
   let url: URL;
   try {
     url = new URL(raw);
@@ -52,15 +56,29 @@ export function parseAppOrigin(raw: string, nodeEnv: string | undefined): URL {
   }
   const local = LOCAL_HOSTS.has(url.hostname);
   if (url.protocol !== 'https:') {
-    if (!(url.protocol === 'http:' && local && nodeEnv !== 'production')) {
+    // Plain http is only for localhost. Development always allows it; production
+    // requires an explicit opt-in so `next start` can smoke-test on a laptop
+    // before a real HTTPS deploy (never set ALLOW_HTTP_LOCALHOST on a shared host).
+    const allowLocalHttp =
+      url.protocol === 'http:' && local && (nodeEnv !== 'production' || allowHttpLocalhost);
+    if (!allowLocalHttp) {
       throw new AuthConfigError('APP_ORIGIN must use https (plain http only for localhost during development)');
     }
   }
   return url;
 }
 
+function envFlag(env: Env, name: string): boolean {
+  const v = env[name]?.trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes';
+}
+
 export function loadAuthConfig(env: Env = process.env): AuthConfig {
-  const origin = parseAppOrigin(required(env, 'APP_ORIGIN'), env.NODE_ENV);
+  const origin = parseAppOrigin(
+    required(env, 'APP_ORIGIN'),
+    env.NODE_ENV,
+    envFlag(env, 'ALLOW_HTTP_LOCALHOST'),
+  );
 
   const mode = required(env, 'AUTH_MODE');
   if (mode === 'directory') {

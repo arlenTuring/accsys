@@ -42,6 +42,19 @@ describe('loadAuthConfig', () => {
     expect(cfg.sessionCookieName).toBe('accsys_sid');
   });
 
+  it('allows http://localhost in production only with ALLOW_HTTP_LOCALHOST', () => {
+    expect(() =>
+      loadAuthConfig({ ...base, APP_ORIGIN: 'http://localhost:3001' }),
+    ).toThrow(AuthConfigError);
+    const cfg = loadAuthConfig({
+      ...base,
+      APP_ORIGIN: 'http://localhost:3001',
+      ALLOW_HTTP_LOCALHOST: 'true',
+    });
+    expect(cfg.secureCookies).toBe(false);
+    expect(cfg.sessionCookieName).toBe('accsys_sid');
+  });
+
   it('accepts the legacy single-domain variable and normalizes case', () => {
     const env: Record<string, string | undefined> = { ...base, ALLOWED_GOOGLE_DOMAINS: undefined };
     expect(loadAuthConfig({ ...env, ALLOWED_GOOGLE_DOMAIN: 'Example.COM' }).allowedDomains).toEqual(['example.com']);

@@ -237,7 +237,9 @@ npm run db:up    # 啟動本機 Postgres
 npm run db:down  # 停止本機 Postgres
 npm run dev      # 啟動開發伺服器
 npm run build    # 產生正式環境建置
-npm run start    # 啟動已建置的正式環境伺服器
+npm run start           # 啟動已建置的正式環境伺服器（雲端須 HTTPS）
+npm run start:prod-local # 本機正式建置預覽（自動 ALLOW_HTTP_LOCALHOST）
+./start.sh --prod        # 建置並以正式模式啟動（同 start:prod-local，含 DB）
 npm run lint        # ESLint 檢查
 npm run typecheck   # TypeScript（應用程式 + 測試）
 npm test            # 單元測試（= test:unit，不連 DB）
@@ -344,7 +346,9 @@ npm run test:db:down   # 刪除容器與資料
 | `deploy/backup/backup.sh`、`restore-drill.sh` | 每日 logical 備份（DB + 附件 + SHA256SUMS）與拋棄式還原演練 |
 | `deploy/systemd/` | 備份 timer |
 
-操作手冊：[部署](docs/operations/deployment.md)、[備份與還原](docs/operations/backup-restore.md)、[資安事件與金鑰輪替](docs/operations/incident-response.md)。
+操作手冊：[部署](docs/operations/deployment.md)、[GCP VM 初期測試檢核](docs/operations/gcp-vm.md)、[備份與還原](docs/operations/backup-restore.md)、[資安事件與金鑰輪替](docs/operations/incident-response.md)。
+
+本機用正式建置預覽（無 DevTools「N」）：`npm run build` 後設 `ALLOW_HTTP_LOCALHOST=true` 再 `npm run start`（僅 localhost；雲端必須 HTTPS，勿帶此旗標）。
 
 ## 開發歷程
 
