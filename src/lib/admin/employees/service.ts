@@ -3,7 +3,7 @@ import { guard, lockAsAdmin, type AccountActionError, type AdminActor, type Tx }
 import { recordAudit } from '@/lib/audit/record';
 import { isUuid } from '@/lib/authz/forms';
 import { getDb } from '@/lib/db';
-import { departments, directoryUsers, employeeIdentities, employees } from '@/lib/db/schema';
+import { accessRoles, departments, directoryUsers, employeeIdentities, employees } from '@/lib/db/schema';
 import {
   EMPLOYEE_CODE,
   parseEmployeeWorkbook,
@@ -21,8 +21,7 @@ export type EmployeeActionResult =
 
 const fail = (error: AccountActionError, detail?: string): EmployeeActionResult => ({ ok: false, error, detail });
 
-/** New employees start as staff or finance; admin is granted afterwards through the audited role change. */
-const CREATE_ROLES = ['staff', 'finance'] as const;
+/** New employees may not start as system admin; admin is granted afterwards through the audited role change. */
 const CODE = EMPLOYEE_CODE;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -96,10 +95,16 @@ export async function createEmployee(actor: AdminActor | null, input: unknown): 
   if (denied) return fail(denied);
   const fields = parseEmployeeFields(input);
   const role = (input as { role?: unknown })?.role ?? 'staff';
-  if (!fields || typeof role !== 'string' || !(CREATE_ROLES as readonly string[]).includes(role)) return fail('invalid_input');
+  if (!fields || typeof role !== 'string' || role === 'admin') return fail('invalid_input');
 
   return getDb().transaction(async (tx) => {
     if (!(await lockAsAdmin(tx, actor!.id))) return fail('forbidden');
+    const [roleRow] = await tx
+      .select({ code: accessRoles.code })
+      .from(accessRoles)
+      .where(and(eq(accessRoles.code, role), eq(accessRoles.active, true)))
+      .limit(1);
+    if (!roleRow) return fail('invalid_input');
     if (!(await departmentExists(tx, fields.departmentId))) return fail('invalid_input');
     const clash = await conflict(tx, fields);
     if (clash) return clash;
@@ -171,10 +176,16 @@ export async function createEmployeeFromDirectory(
   const code = typeof input?.employeeCode === 'string' ? input.employeeCode.trim() : '';
   const role = input.role ?? 'staff';
   if (typeof input.directoryUserId !== 'string' || !/^[0-9]{1,32}$/.test(input.directoryUserId)) return fail('invalid_input');
-  if (!CODE.test(code) || !isUuid(input.departmentId) || !(CREATE_ROLES as readonly string[]).includes(role)) return fail('invalid_input');
+  if (!CODE.test(code) || !isUuid(input.departmentId) || typeof role !== 'string' || role === 'admin') return fail('invalid_input');
 
   return getDb().transaction(async (tx) => {
     if (!(await lockAsAdmin(tx, actor!.id))) return fail('forbidden');
+    const [roleRow] = await tx
+      .select({ code: accessRoles.code })
+      .from(accessRoles)
+      .where(and(eq(accessRoles.code, role), eq(accessRoles.active, true)))
+      .limit(1);
+    if (!roleRow) return fail('invalid_input');
     const [dir] = await tx.select().from(directoryUsers).where(eq(directoryUsers.directoryUserId, input.directoryUserId));
     if (!dir) return fail('not_found');
     if (dir.suspended || dir.archived || dir.removedAt) return fail('invalid_state');

@@ -1,12 +1,13 @@
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { recordAudit } from '@/lib/audit/record';
 import { revokeEmployeeSessions } from '@/lib/auth/sessions';
+import { actorHas } from '@/lib/authz/access';
 import { isUuid } from '@/lib/authz/forms';
 import { getDb } from '@/lib/db';
-import { employeeIdentities, employees, identityLinkRequests } from '@/lib/db/schema';
+import { accessRolePermissions, accessRoles, employeeIdentities, employees, identityLinkRequests } from '@/lib/db/schema';
 import { hitRateLimit, RATE_LIMITS } from '@/lib/rate-limit';
 
-export type AdminActor = { id: string; role: string; authenticatedAt: Date };
+export type AdminActor = { id: string; role: string; permissions?: readonly string[]; authenticatedAt: Date };
 
 export type AccountActionError =
   | 'forbidden'
@@ -24,10 +25,9 @@ export type AccountActionError =
 export type AccountActionResult = { ok: true } | { ok: false; error: AccountActionError };
 
 export const RECENT_AUTH_MS = 15 * 60_000;
-const ROLES = ['staff', 'finance', 'admin'] as const;
 
 export async function guard(actor: AdminActor | null, now = Date.now()): Promise<AccountActionError | null> {
-  if (!actor || actor.role !== 'admin') return 'forbidden';
+  if (!actor || !(await actorHas(actor, 'accounts.manage'))) return 'forbidden';
   if (now - actor.authenticatedAt.getTime() > RECENT_AUTH_MS) return 'reauth_required';
   const limit = await hitRateLimit(`admin-action:${actor.id}`, RATE_LIMITS.adminActionPerEmployee);
   return limit.allowed ? null : 'rate_limited';
@@ -48,7 +48,15 @@ export async function lockAsAdmin(tx: Tx, actorId: string): Promise<boolean> {
     .select({ role: employees.role, accessEnabled: employees.accessEnabled })
     .from(employees)
     .where(eq(employees.id, actorId));
-  return me?.role === 'admin' && me.accessEnabled;
+  if (!me?.accessEnabled) return false;
+  if (me.role === 'admin') return true;
+  const [ok] = await tx
+    .select({ id: accessRoles.id })
+    .from(accessRoles)
+    .innerJoin(accessRolePermissions, eq(accessRolePermissions.roleId, accessRoles.id))
+    .where(and(eq(accessRoles.code, me.role), eq(accessRoles.active, true), eq(accessRolePermissions.permission, 'accounts.manage')))
+    .limit(1);
+  return Boolean(ok);
 }
 
 /** Binds a pending (or previously rejected) Google account to an employee. */
@@ -233,10 +241,16 @@ export async function setEmployeeRole(
   if (denied) return fail(denied);
   if (!isUuid(input?.employeeId)) return fail('invalid_input');
   if (input.employeeId === actor!.id) return fail('self_action');
-  if (!(ROLES as readonly string[]).includes(input.role)) return fail('invalid_input');
+  if (typeof input.role !== 'string' || !input.role) return fail('invalid_input');
 
   return getDb().transaction(async (tx) => {
     if (!(await lockAsAdmin(tx, actor!.id))) return fail('forbidden');
+    const [roleRow] = await tx
+      .select({ code: accessRoles.code, active: accessRoles.active })
+      .from(accessRoles)
+      .where(eq(accessRoles.code, input.role))
+      .limit(1);
+    if (!roleRow?.active) return fail('invalid_input');
     const [before] = await tx
       .select({ role: employees.role })
       .from(employees)

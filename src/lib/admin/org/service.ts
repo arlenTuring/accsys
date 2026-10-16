@@ -2,9 +2,12 @@ import { and, asc, count, eq, gte, inArray, isNull, ne, or, sql } from 'drizzle-
 import { parseFlow } from '@/lib/approval/flow/parse';
 import { flowReferences, type FlowReferences } from '@/lib/approval/flow/references';
 import { recordAudit } from '@/lib/audit/record';
+import { actorHas } from '@/lib/authz/access';
 import { isUuid } from '@/lib/authz/forms';
 import type { Db } from '@/lib/db';
 import {
+  accessRolePermissions,
+  accessRoles,
   approvalDelegations,
   departments,
   employeeGroupMembers,
@@ -38,14 +41,16 @@ import {
  * or switched off (published versions and versions of open submissions).
  */
 
-export type OrgActor = { id: string; role: string; authenticatedAt: Date } | null;
+export type OrgActor = { id: string; role: string; permissions?: readonly string[]; authenticatedAt: Date } | null;
 export type OrgFailure = { ok: false; code: ErrorCode | 'reauth_required' | 'rate_limited'; error: string };
 export type OrgResult<T extends object = object> = ({ ok: true } & T) | OrgFailure;
 
 export const ORG_RECENT_AUTH_MS = 60 * 60_000;
 
 async function guard(actor: OrgActor, requireRecentLogin = true): Promise<OrgFailure | null> {
-  if (!actor || actor.role !== 'admin') return { ok: false, code: 'forbidden', error: '只有系統管理員可以修改組織設定' };
+  if (!actor || !(await actorHas(actor, 'org.manage'))) {
+    return { ok: false, code: 'forbidden', error: '只有具「組織與簽核設定」權限的人員可以修改' };
+  }
   if (requireRecentLogin && Date.now() - actor.authenticatedAt.getTime() > ORG_RECENT_AUTH_MS) {
     return { ok: false, code: 'reauth_required', error: '修改組織設定需要 1 小時內登入過，請重新登入後再試' };
   }
@@ -61,7 +66,16 @@ async function run<T extends object>(actor: OrgActor, label: string, work: (tx: 
   return runInTransaction(`org.${label}`, async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext('accsys.org.admin'))`);
     const [me] = await tx.select({ role: employees.role, active: employees.accessEnabled }).from(employees).where(eq(employees.id, actor!.id));
-    if (me?.role !== 'admin' || !me.active) abort('forbidden', '只有系統管理員可以修改組織設定');
+    if (!me?.active) abort('forbidden', '只有具「組織與簽核設定」權限的人員可以修改');
+    if (me.role !== 'admin') {
+      const [ok] = await tx
+        .select({ id: accessRoles.id })
+        .from(accessRoles)
+        .innerJoin(accessRolePermissions, eq(accessRolePermissions.roleId, accessRoles.id))
+        .where(and(eq(accessRoles.code, me.role), eq(accessRoles.active, true), eq(accessRolePermissions.permission, 'org.manage')))
+        .limit(1);
+      if (!ok) abort('forbidden', '只有具「組織與簽核設定」權限的人員可以修改');
+    }
     return { ok: true as const, ...(await work(tx, actor!.id)) };
   });
 }

@@ -176,6 +176,13 @@
       "when": 1792086796814,
       "tag": "0024_form_soft_delete",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792109845318,
+      "tag": "0025_access_roles",
+      "breakpoints": true
     }
   ]
 }

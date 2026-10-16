@@ -16,16 +16,17 @@ import { dangerBtn, smallBtn, smallInput } from '../org/org-ui';
 import { ACCOUNT_ERRORS } from './messages';
 
 const ERRORS = ACCOUNT_ERRORS;
-const ROLE_LABELS = { staff: '一般員工', finance: '財會', admin: '系統管理員' } as const;
 
 export function AccountsManager({
   currentEmployeeId,
   requests,
   accounts,
+  roles,
 }: {
   currentEmployeeId: string;
   requests: LinkRequestRow[];
   accounts: AccountRow[];
+  roles: { code: string; name: string; isSystem: boolean }[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -179,11 +180,17 @@ export function AccountsManager({
                       disabled={pending || self}
                       onChange={(e) => run(() => setEmployeeRoleAction(a.id, e.target.value))}
                     >
-                      {Object.entries(ROLE_LABELS).map(([value, label]) => (
-                        <option key={value} value={value}>
-                          {label}
+                      {roles.map((r) => (
+                        <option key={r.code} value={r.code}>
+                          {r.name}
                         </option>
                       ))}
+                      {/* Keep the current value visible if that role was later deactivated. */}
+                      {!roles.some((r) => r.code === a.role) && (
+                        <option value={a.role}>
+                          {a.role}（已停用）
+                        </option>
+                      )}
                     </select>
                   </td>
                   <td className="py-2">

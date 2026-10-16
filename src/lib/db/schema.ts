@@ -83,6 +83,43 @@ export const departments = pgTable(
   ]
 );
 
+/**
+ * App ACL roles (權限角色). Distinct from job_roles (職務類別), which only
+ * resolve approval steps and form filing visibility. employees.role stores
+ * this table's code.
+ */
+export const accessRoles = pgTable(
+  'access_roles',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    code: text('code').notNull().unique('access_roles_code_key'),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    isSystem: boolean('is_system').notNull().default(false),
+    active: boolean('active').notNull().default(true),
+    version: integer('version').notNull().default(1),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (): PgTableExtraConfigValue[] => [
+    check('access_roles_code_check', sql`code ~ '^[a-z][a-z0-9_]{0,39}$'`),
+    check('access_roles_name_check', sql`char_length(btrim(name)) between 1 and 30`),
+  ]
+);
+
+export const accessRolePermissions = pgTable(
+  'access_role_permissions',
+  {
+    roleId: uuid('role_id').notNull(),
+    permission: text('permission').notNull(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    primaryKey({ name: 'access_role_permissions_pkey', columns: [t.roleId, t.permission] }),
+    fk('access_role_permissions_role_fkey', t.roleId, accessRoles.id).onDelete('cascade'),
+    check('access_role_permissions_permission_check', sql`permission ~ '^[a-z][a-z0-9_.]{0,63}$'`),
+  ]
+);
+
 export const employees = pgTable(
   'employees',
   {
@@ -92,6 +129,7 @@ export const employees = pgTable(
     departmentId: uuid('department_id').notNull(),
     title: text('title'),
     googleEmail: text('google_email').unique('employees_google_email_key'),
+    /** Access-role code (staff / finance / admin / custom). */
     role: text('role').notNull().default('staff'),
     isGeneralManager: boolean('is_general_manager').notNull().default(false),
     isChairman: boolean('is_chairman').notNull().default(false),
@@ -106,7 +144,7 @@ export const employees = pgTable(
   },
   (t): PgTableExtraConfigValue[] => [
     fk('employees_department_id_fkey', t.departmentId, departments.id),
-    check('employees_role_check', sql`role in ('staff', 'finance', 'admin')`),
+    fk('employees_role_access_role_fkey', t.role, accessRoles.code),
     check('employees_access_state_check', sql`access_enabled = (disabled_at is null)`),
   ]
 );

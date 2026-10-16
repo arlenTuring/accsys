@@ -9,7 +9,7 @@ export default async function MasterDataPage() {
   if (!employee) {
     redirect('/login');
   }
-  if (employee.role !== 'admin') {
+  if (!employee.permissions.includes('master_data.manage') && employee.role !== 'admin') {
     redirect('/dashboard');
   }
 

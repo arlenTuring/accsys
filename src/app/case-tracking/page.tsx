@@ -43,7 +43,7 @@ export default async function CaseTrackingPage({
   ) as Awaited<typeof searchParams>;
     const employee = await getCurrentEmployee();
   if (!employee) redirect('/login');
-  if (employee.role !== 'finance' && employee.role !== 'admin') redirect('/dashboard');
+  if (!(employee.permissions.includes('finance.cases') || employee.role === 'admin')) redirect('/dashboard');
 
   const tab: CaseBucket =
     params.tab === 'completed' ? 'completed' : params.tab === 'withdrawn' ? 'withdrawn' : 'in_progress';

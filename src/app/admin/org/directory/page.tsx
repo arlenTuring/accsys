@@ -7,6 +7,6 @@ export const dynamic = 'force-dynamic';
 
 export default async function OrgDirectoryPage() {
   const employee = await getCurrentEmployee();
-  if (!employee || employee.role !== 'admin') redirect('/dashboard');
+  if (!employee || (!employee.permissions.includes('org.directory') && employee.role !== 'admin')) redirect('/dashboard');
   return <DirectoryReview currentEmployeeId={employee.id} data={await getDirectoryPageData()} />;
 }

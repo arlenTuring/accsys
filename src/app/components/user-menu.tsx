@@ -5,7 +5,7 @@ import Link from 'next/link';
 import type { CurrentEmployee } from '@/lib/auth/current-employee';
 import { isDevLoginEnabled } from '@/lib/auth/dev-personas';
 
-const ROLE_LABELS: Record<CurrentEmployee['role'], string> = {
+const SYSTEM_ROLE_LABELS: Record<string, string> = {
   staff: '一般員工',
   finance: '財會',
   admin: '系統管理員',
@@ -20,15 +20,20 @@ export type MenuEmployee = Pick<
   | 'departmentName'
   | 'departmentCode'
   | 'role'
+  | 'permissions'
   | 'isGeneralManager'
   | 'isChairman'
->;
+> & { roleName?: string };
 
 type UserMenuProps = {
   employee: MenuEmployee;
 };
 
-function roleBadgeClass(role: CurrentEmployee['role']): string {
+function roleLabel(employee: MenuEmployee): string {
+  return employee.roleName ?? SYSTEM_ROLE_LABELS[employee.role] ?? employee.role;
+}
+
+function roleBadgeClass(role: string): string {
   if (role === 'admin') return 'bg-td-apex/20 text-td-apex';
   if (role === 'finance') return 'bg-emerald-400/20 text-emerald-100';
   return 'bg-white/15 text-white/90';
@@ -123,7 +128,7 @@ export function UserMenu({ employee }: UserMenuProps) {
               <dt className="text-td-muted">角色</dt>
               <dd className="flex flex-wrap justify-end gap-1">
                 <span className={`badge ${roleBadgeClass(employee.role)} !text-td-blue-dark`}>
-                  {ROLE_LABELS[employee.role]}
+                  {roleLabel(employee)}
                 </span>
                 {extraRoles.map((label) => (
                   <span key={label} className="badge bg-td-blue-light text-td-blue">

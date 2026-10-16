@@ -28,6 +28,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     departmentName: employee.departmentName,
     departmentCode: employee.departmentCode,
     role: employee.role,
+    permissions: employee.permissions,
     isGeneralManager: employee.isGeneralManager,
     isChairman: employee.isChairman,
   };

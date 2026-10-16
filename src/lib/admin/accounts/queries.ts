@@ -18,7 +18,7 @@ export type AccountRow = {
   employeeCode: string;
   name: string;
   departmentName: string;
-  role: 'staff' | 'finance' | 'admin';
+  role: string;
   recordEmail: string | null;
   accessEnabled: boolean;
   disabledReason: string | null;

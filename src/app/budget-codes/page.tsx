@@ -7,7 +7,7 @@ import { BudgetCodesManager } from './budget-codes-manager';
 export default async function BudgetCodesPage() {
     const employee = await getCurrentEmployee();
   if (!employee) redirect('/login');
-  if (employee.role !== 'finance' && employee.role !== 'admin') redirect('/dashboard');
+  if (!(employee.permissions.includes('finance.budget') || employee.role === 'admin')) redirect('/dashboard');
 
   const [budgetCodes, projects] = await Promise.all([getBudgetCodeList(), getProjectList()]);
 

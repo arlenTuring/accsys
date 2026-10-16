@@ -1,5 +1,7 @@
 import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { hashToken, randomToken } from '@/lib/auth/tokens';
+import { permissionsForRole } from '@/lib/authz/access';
+import type { Permission } from '@/lib/authz/permissions';
 import { getDb, type Db } from '@/lib/db';
 import { appSessions, departments, employeeIdentities, employees } from '@/lib/db/schema';
 
@@ -15,7 +17,10 @@ export type SessionEmployee = {
   departmentId: string;
   departmentCode: string;
   departmentName: string;
-  role: 'staff' | 'finance' | 'admin';
+  /** Access-role code (staff / finance / admin / custom). */
+  role: string;
+  /** Capabilities of the access role, resolved on every session lookup. */
+  permissions: Permission[];
   isGeneralManager: boolean;
   isChairman: boolean;
   sessionId: string;
@@ -84,6 +89,7 @@ export async function resolveSession(token: string | undefined | null): Promise<
   if (!row) return null;
   // Sessions without a Google identity only come from the development login.
   if (row.identityId === null && process.env.NODE_ENV === 'production') return null;
+  const permissions = await permissionsForRole(row.role);
   return {
     id: row.id,
     employeeCode: row.employeeCode,
@@ -93,7 +99,8 @@ export async function resolveSession(token: string | undefined | null): Promise<
     departmentId: row.departmentId,
     departmentCode: row.departmentCode,
     departmentName: row.departmentName,
-    role: row.role as SessionEmployee['role'],
+    role: row.role,
+    permissions,
     isGeneralManager: row.isGeneralManager,
     isChairman: row.isChairman,
     sessionId: row.sessionId,

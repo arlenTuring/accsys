@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { BrandLogo } from '@/app/components/brand-logo';
 import { UserMenu, type MenuEmployee } from '@/app/components/user-menu';
+import { ADMIN_NAV_PERMISSIONS, FINANCE_NAV_PERMISSIONS, hasAnyPermission } from '@/lib/authz/permissions';
 import {
   ADMIN_LINKS,
   FINANCE_LINKS,
@@ -168,7 +169,8 @@ function MobileMenu({
 
 export function TopNav({ employee, pendingApprovalCount = 0, categories }: TopNavProps) {
   const pathname = usePathname();
-  const showFinance = employee.role === 'finance' || employee.role === 'admin';
+  const showFinance = hasAnyPermission(employee.permissions, FINANCE_NAV_PERMISSIONS);
+  const showAdmin = hasAnyPermission(employee.permissions, ADMIN_NAV_PERMISSIONS);
 
   return (
     <header className="sticky top-0 z-40 border-b border-td-blue-dark/10 bg-td-blue-dark shadow-nav print:hidden">
@@ -219,7 +221,7 @@ export function TopNav({ employee, pendingApprovalCount = 0, categories }: TopNa
               <LinkList links={FINANCE_LINKS} />
             </NavMenu>
           )}
-          {employee.role === 'admin' && (
+          {showAdmin && (
             <NavMenu label="系統管理" active={ADMIN_LINKS.some((l) => isUnder(pathname, l.href))}>
               <LinkList links={ADMIN_LINKS} />
             </NavMenu>
@@ -229,7 +231,7 @@ export function TopNav({ employee, pendingApprovalCount = 0, categories }: TopNa
 
         <MobileMenu
           showFinance={showFinance}
-          showAdmin={employee.role === 'admin'}
+          showAdmin={showAdmin}
           pendingApprovalCount={pendingApprovalCount}
           categories={categories}
         />

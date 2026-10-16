@@ -26,7 +26,7 @@ function deleteMessage(f: FormTableRow): string {
   return `這張表單已發佈（第 ${f.publishedVersion} 版），還沒有人填寫過。刪除後選單與連結會消失，所有版本一併刪除，無法復原。`;
 }
 
-export function FormTable({ forms }: { forms: FormTableRow[] }) {
+export function FormTable({ forms, canDelete = true }: { forms: FormTableRow[]; canDelete?: boolean }) {
   const { pending, msg, run } = useOrgAction();
 
   const pause = async (f: FormTableRow) => {
@@ -82,7 +82,7 @@ export function FormTable({ forms }: { forms: FormTableRow[] }) {
                 </tr>
               )}
               {forms.map((f) => {
-                const blocker = deleteBlocker(f);
+                const blocker = !canDelete ? '需要「刪除表單」權限' : deleteBlocker(f);
                 return (
                   <tr key={f.id} className="border-b border-td-border last:border-0 hover:bg-slate-50">
                     <td className="px-4 py-3">

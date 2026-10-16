@@ -20,7 +20,7 @@ import { FORM_TABLE, FORM_TYPES, type FormType } from '@/lib/procurement/form-re
  * not found), so IDs cannot be probed.
  */
 
-export type Actor = { id: string; role: string };
+export type Actor = { id: string; role: string; permissions?: readonly string[] };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -32,8 +32,11 @@ export function isFormType(value: unknown): value is FormType {
   return typeof value === 'string' && (FORM_TYPES as readonly string[]).includes(value);
 }
 
+/** True when the actor may read any form (finance / admin / forms.read_all). */
 export function isFinanceOrAdmin(actor: Actor | null | undefined): boolean {
-  return actor?.role === 'finance' || actor?.role === 'admin';
+  if (!actor) return false;
+  if (actor.role === 'finance' || actor.role === 'admin') return true;
+  return Boolean(actor.permissions?.includes('forms.read_all'));
 }
 
 /** True when `actor` may read the form (and list/download its attachments). */

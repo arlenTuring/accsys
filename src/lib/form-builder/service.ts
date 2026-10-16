@@ -2,11 +2,14 @@ import { and, asc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import { sanitizeSimFields, simulationInputs } from '@/lib/admin/org/sim-inputs';
 import { simulateFlow, type Simulation } from '@/lib/approval/flow/simulate';
 import { recordAudit } from '@/lib/audit/record';
+import { actorHas } from '@/lib/authz/access';
 import { isUuid } from '@/lib/authz/forms';
 import { parseDefinition } from '@/lib/custom-forms/definition';
 import { publishDefinition } from '@/lib/custom-forms/publish';
 import { parseVisibility } from '@/lib/custom-forms/visibility';
 import {
+  accessRolePermissions,
+  accessRoles,
   departments,
   employees,
   formCategories,
@@ -34,14 +37,16 @@ import { parseSettings, type DefinitionSettings } from './settings';
  * are deleted only together with a form nobody ever filled in.
  */
 
-export type BuilderActor = { id: string; role: string; authenticatedAt: Date } | null;
+export type BuilderActor = { id: string; role: string; permissions?: readonly string[]; authenticatedAt: Date } | null;
 export type BuilderFailure = { ok: false; code: ErrorCode | 'reauth_required' | 'rate_limited'; error: string };
 export type BuilderResult<T extends object = object> = ({ ok: true } & T) | BuilderFailure;
 
 export const BUILDER_RECENT_AUTH_MS = 60 * 60_000;
 
 async function guard(actor: BuilderActor, requireRecentLogin = true): Promise<BuilderFailure | null> {
-  if (!actor || actor.role !== 'admin') return { ok: false, code: 'forbidden', error: '只有系統管理員可以使用表單設計器' };
+  if (!actor || !(await actorHas(actor, 'forms.design'))) {
+    return { ok: false, code: 'forbidden', error: '只有具「表單設計器」權限的人員可以使用表單設計器' };
+  }
   if (requireRecentLogin && Date.now() - actor.authenticatedAt.getTime() > BUILDER_RECENT_AUTH_MS) {
     return { ok: false, code: 'reauth_required', error: '修改表單需要 1 小時內登入過，請重新登入後再試' };
   }
@@ -49,16 +54,37 @@ async function guard(actor: BuilderActor, requireRecentLogin = true): Promise<Bu
   return limit.allowed ? null : { ok: false, code: 'rate_limited', error: '操作過於頻繁，請稍後再試' };
 }
 
-async function assertAdmin(tx: Tx, actorId: string) {
+async function assertDesigner(tx: Tx, actorId: string) {
   const [me] = await tx.select({ role: employees.role, active: employees.accessEnabled }).from(employees).where(eq(employees.id, actorId));
-  if (me?.role !== 'admin' || !me.active) abort('forbidden', '只有系統管理員可以使用表單設計器');
+  if (!me?.active) abort('forbidden', '只有具「表單設計器」權限的人員可以使用表單設計器');
+  if (me.role === 'admin') return;
+  const [ok] = await tx
+    .select({ id: accessRoles.id })
+    .from(accessRoles)
+    .innerJoin(accessRolePermissions, eq(accessRolePermissions.roleId, accessRoles.id))
+    .where(and(eq(accessRoles.code, me.role), eq(accessRoles.active, true), eq(accessRolePermissions.permission, 'forms.design')))
+    .limit(1);
+  if (!ok) abort('forbidden', '只有具「表單設計器」權限的人員可以使用表單設計器');
+}
+
+async function assertCanDelete(tx: Tx, actorId: string) {
+  const [me] = await tx.select({ role: employees.role, active: employees.accessEnabled }).from(employees).where(eq(employees.id, actorId));
+  if (!me?.active) abort('forbidden', '只有具「刪除表單」權限的人員可以刪除表單');
+  if (me.role === 'admin') return;
+  const [ok] = await tx
+    .select({ id: accessRoles.id })
+    .from(accessRoles)
+    .innerJoin(accessRolePermissions, eq(accessRolePermissions.roleId, accessRoles.id))
+    .where(and(eq(accessRoles.code, me.role), eq(accessRoles.active, true), eq(accessRolePermissions.permission, 'forms.delete')))
+    .limit(1);
+  if (!ok) abort('forbidden', '只有具「刪除表單」權限的人員可以刪除表單');
 }
 
 async function run<T extends object>(actor: BuilderActor, label: string, work: (tx: Tx, actorId: string) => Promise<T>): Promise<BuilderResult<T>> {
   const denied = await guard(actor);
   if (denied) return denied;
   return runInTransaction(`form_builder.${label}`, async (tx) => {
-    await assertAdmin(tx, actor!.id);
+    await assertDesigner(tx, actor!.id);
     return { ok: true as const, ...(await work(tx, actor!.id)) };
   });
 }
@@ -397,6 +423,7 @@ async function sourceUsers(tx: Tx, row: DefinitionRow): Promise<string[]> {
  */
 export function deleteDefinition(actor: BuilderActor, id: unknown, expectedVersion: unknown) {
   return run(actor, 'delete', async (tx, actorId) => {
+    await assertCanDelete(tx, actorId);
     const row = await lockDefinition(tx, id, expectedVersion);
     const [{ n }] = await tx
       .select({ n: sql<number>`count(*)::int` })
@@ -440,7 +467,7 @@ export async function simulateDraft(actor: BuilderActor, raw: unknown): Promise<
   const r = (raw ?? {}) as Record<string, unknown>;
   return runInTransaction('form_builder.simulate', async (tx) => {
     await tx.execute(sql`set transaction read only`);
-    await assertAdmin(tx, actor!.id);
+    await assertDesigner(tx, actor!.id);
     if (draftProblem(r.schema, r.flow)) abort('validation', '表單內容格式不正確');
     const parsed = parseDefinition(r.schema, r.flow);
     if (!parsed.ok) abort('validation', `請先修正表單問題：${parsed.errors[0]}`);

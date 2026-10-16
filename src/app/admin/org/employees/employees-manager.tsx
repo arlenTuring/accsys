@@ -48,7 +48,17 @@ const valuesOf = (e: EmployeeAdminRow): FormValues => ({
   role: e.role,
 });
 
-export function EmployeesManager({ data, currentEmployeeId }: { data: Data; currentEmployeeId: string }) {
+type AccessRoleOption = { code: string; name: string; isSystem: boolean };
+
+export function EmployeesManager({
+  data,
+  roles,
+  currentEmployeeId,
+}: {
+  data: Data;
+  roles: AccessRoleOption[];
+  currentEmployeeId: string;
+}) {
   const { pending, msg, run } = useOrgAction();
   const [filter, setFilter] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('');
@@ -84,6 +94,7 @@ export function EmployeesManager({ data, currentEmployeeId }: { data: Data; curr
           <EmployeeForm
             initial={EMPTY}
             departments={data.departments}
+            roles={roles.filter((r) => r.code !== 'admin')}
             withRole
             pending={pending}
             submitLabel="建立員工"
@@ -161,7 +172,7 @@ export function EmployeesManager({ data, currentEmployeeId }: { data: Data; curr
                       onCancel={() => setEditing(null)}
                       onSubmit={(v) => run(() => adapt(updateEmployeeAction({ employeeId: e.id, ...v })), `已更新 ${v.employeeCode.trim()}`, () => setEditing(null))}
                     />
-                    <RoleEditor employee={e} self={e.id === currentEmployeeId} pending={pending} run={run} />
+                    <RoleEditor employee={e} roles={roles} self={e.id === currentEmployeeId} pending={pending} run={run} />
                     <JobRoleEditor employee={e} departments={data.departments} jobRoles={data.jobRoles} pending={pending} run={run} />
                   </td>
                 </tr>
@@ -197,6 +208,7 @@ export function EmployeesManager({ data, currentEmployeeId }: { data: Data; curr
 function EmployeeForm({
   initial,
   departments,
+  roles = [],
   withRole = false,
   pending,
   submitLabel,
@@ -205,6 +217,7 @@ function EmployeeForm({
 }: {
   initial: FormValues;
   departments: Data['departments'];
+  roles?: AccessRoleOption[];
   withRole?: boolean;
   pending: boolean;
   submitLabel: string;
@@ -245,10 +258,13 @@ function EmployeeForm({
       {field('extension', '分機', { maxLength: 20 })}
       {withRole && (
         <label className="flex flex-col gap-0.5 text-xs text-td-muted">
-          系統角色
+          權限角色
           <select className={smallInput} value={v.role} onChange={(e) => setV({ ...v, role: e.target.value })}>
-            <option value="staff">一般員工</option>
-            <option value="finance">財會</option>
+            {roles.map((r) => (
+              <option key={r.code} value={r.code}>
+                {r.name}
+              </option>
+            ))}
           </select>
         </label>
       )}
@@ -268,21 +284,35 @@ function EmployeeForm({
 
 const bindingLabel = (b: EmployeeAdminRow['jobRoles'][number]) => `${b.jobRoleName}（${b.departmentName ?? '全公司'}${b.isPrimary ? '・主要' : ''}）`;
 
-function RoleEditor({ employee, self, pending, run }: { employee: EmployeeAdminRow; self: boolean; pending: boolean; run: Run }) {
+function RoleEditor({
+  employee,
+  roles,
+  self,
+  pending,
+  run,
+}: {
+  employee: EmployeeAdminRow;
+  roles: AccessRoleOption[];
+  self: boolean;
+  pending: boolean;
+  run: Run;
+}) {
   const [role, setRole] = useState(employee.role);
+  const labelOf = (code: string) => roles.find((r) => r.code === code)?.name ?? ROLE_LABELS[code] ?? code;
   return (
     <div className="flex flex-wrap items-center gap-2 rounded border border-td-border p-3 text-xs">
-      <span className="font-semibold text-td-muted">系統角色</span>
+      <span className="font-semibold text-td-muted">權限角色</span>
       {self ? (
-        <span className="text-td-muted">{ROLE_LABELS[employee.role] ?? employee.role}（不能變更自己的角色）</span>
+        <span className="text-td-muted">{labelOf(employee.role)}（不能變更自己的角色）</span>
       ) : (
         <>
-          <select className={smallInput} aria-label={`${employee.employeeCode} 系統角色`} value={role} onChange={(e) => setRole(e.target.value)}>
-            {Object.entries(ROLE_LABELS).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
+          <select className={smallInput} aria-label={`${employee.employeeCode} 權限角色`} value={role} onChange={(e) => setRole(e.target.value)}>
+            {roles.map((r) => (
+              <option key={r.code} value={r.code}>
+                {r.name}
               </option>
             ))}
+            {!roles.some((r) => r.code === employee.role) && <option value={employee.role}>{employee.role}（已停用）</option>}
           </select>
           <button
             type="button"
@@ -299,7 +329,7 @@ function RoleEditor({ employee, self, pending, run }: { employee: EmployeeAdminR
               ) {
                 return;
               }
-              run(() => adapt(setEmployeeRoleAction(employee.id, role)), `已將 ${employee.employeeCode} 設為${ROLE_LABELS[role]}`);
+              run(() => adapt(setEmployeeRoleAction(employee.id, role)), `已將 ${employee.employeeCode} 設為${labelOf(role)}`);
             }}
           >
             套用角色

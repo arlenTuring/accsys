@@ -1,13 +1,17 @@
 import { redirect } from 'next/navigation';
+import { hasPermission } from '@/lib/authz/permissions';
+import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getCopySources, getFormBuilderList } from '@/lib/form-builder/queries';
 import { FormTable } from './form-table';
 import { NewFormPanel } from './new-form-panel';
 
 export default async function FormBuilderListPage() {
+  const employee = await getCurrentEmployee();
   const data = await getFormBuilderList();
   if (!data) redirect('/dashboard');
   const sources = await getCopySources();
   const forms = data.forms.map(({ updatedAt, ...f }) => ({ ...f, updatedLabel: updatedAt.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }) }));
+  const canDelete = Boolean(employee && hasPermission(employee.permissions, 'forms.delete'));
   return (
     <main className="page-shell space-y-5">
       <section>
@@ -17,13 +21,13 @@ export default async function FormBuilderListPage() {
           設計表單欄位與簽核流程，發佈後就會出現在「申請表單」選單。每次發佈都會產生新版本；已送出的單據永遠依送出時的版本顯示與簽核。修改需 1 小時內登入過，所有變更都會記錄稽核。
         </p>
         <p className="page-subtitle">
-          不再使用的表單可以「暫停」（選單隱藏、不能新填，已送出的單據照常簽核），之後可重新發佈或刪除；刪除時已送出的單據會保留。「複製」會建立一份內容相同的草稿。
+          不再使用的表單可以「暫停」（選單隱藏、不能新填，已送出的單據照常簽核），之後可重新發佈或刪除；刪除時已送出的單據會保留。「複製」會建立一份內容相同的草稿。刪除需另外具備「刪除表單」權限。
         </p>
       </section>
 
       <NewFormPanel categories={data.categories} sources={sources} />
 
-      <FormTable forms={forms} />
+      <FormTable forms={forms} canDelete={canDelete} />
     </main>
   );
 }

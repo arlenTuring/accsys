@@ -40,7 +40,10 @@ export default async function DashboardPage() {
   ].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   const pendingCount = pendingQueue.length;
   const isApplicant = employee.role === 'staff' && !employee.isGeneralManager;
-  const isFinance = employee.role === 'finance' || employee.role === 'admin';
+  const isFinance =
+    employee.role === 'finance' ||
+    employee.role === 'admin' ||
+    employee.permissions.some((p) => p === 'finance.budget' || p === 'finance.cases' || p === 'finance.assets' || p === 'forms.read_all');
 
   return (
     <main className="page-shell space-y-8">
@@ -48,7 +51,7 @@ export default async function DashboardPage() {
         <p className="section-title">工作台</p>
         <h1 className="page-title">你好，{employee.name}</h1>
         <p className="page-subtitle">
-          {employee.departmentName} · {employee.title ?? ROLE_LABELS[employee.role]}
+          {employee.departmentName} · {employee.title ?? ROLE_LABELS[employee.role] ?? employee.role}
           {pendingCount > 0 ? ` · ${pendingCount} 件待您簽核` : ''}
           {unread > 0 ? ` · ${unread} 則未讀通知` : ''}
         </p>
