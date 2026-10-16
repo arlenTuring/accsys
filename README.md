@@ -183,6 +183,7 @@ SESSION_SECRET=                      # 至少 32 字元
 APP_ORIGIN=http://localhost:3001     # 固定網址；正式環境必須 https
 AUTH_MODE=manual
 ALLOWED_GOOGLE_DOMAINS=turing-drive.com
+# 登入：Google OAuth；員工 google_email 與 Workspace 信箱相符且尚未綁定時會自動綁定並登入，否則進待核准。
 SESSION_TTL_HOURS=8
 STORAGE_LOCAL_PATH=./data/attachments
 GOOGLE_CLIENT_ID=

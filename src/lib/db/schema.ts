@@ -1404,7 +1404,8 @@ export const attachments = pgTable(
  * External login identities bound to an employee. The stable key is
  * (provider, issuer, subject) -- e.g. Google's `sub` -- never the email, which
  * is only a descriptive attribute. Rows are created by an explicit binding
- * step (admin approval / bootstrap), not by matching emails.
+ * step (admin approval, or first-login bootstrap when employees.google_email
+ * matches the verified Workspace address and the employee has no active binding).
  */
 export const employeeIdentities = pgTable(
   'employee_identities',

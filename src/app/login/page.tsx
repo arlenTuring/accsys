@@ -55,7 +55,7 @@ export default async function LoginPage({
             使用 Google 帳號登入
           </a>
           <p className="text-center text-xs leading-5 text-td-muted">
-            僅限公司 Workspace 帳號（@turing-drive.com）。點擊後可選擇 Google 帳號；若瀏覽器已登入公司帳號，通常不必再輸入密碼。首次登入須由管理員核准綁定後才能進入系統。
+            僅限公司 Workspace 帳號（@turing-drive.com）。點擊後可選擇 Google 帳號；若瀏覽器已登入公司帳號，通常不必再輸入密碼。員工資料已登錄相同信箱時可直接進入；否則須管理員在「帳號與權限」核准綁定。
           </p>
         </div>
 
