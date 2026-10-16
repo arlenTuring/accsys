@@ -1,9 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
 import type { CurrentEmployee } from '@/lib/auth/current-employee';
-import { isDevLoginEnabled } from '@/lib/auth/dev-personas';
 
 const SYSTEM_ROLE_LABELS: Record<string, string> = {
   staff: '一般員工',
@@ -43,7 +41,6 @@ export function UserMenu({ employee }: UserMenuProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const initial = employee.name.slice(0, 1);
-  const showDevSwitch = isDevLoginEnabled();
 
   useEffect(() => {
     function onPointerDown(event: MouseEvent) {
@@ -140,15 +137,6 @@ export function UserMenu({ employee }: UserMenuProps) {
           </dl>
 
           <div className="border-t border-td-border px-2 py-2">
-            {showDevSwitch && (
-              <Link
-                href="/login"
-                className="block rounded-md px-3 py-2 text-sm text-td-blue hover:bg-td-blue-light"
-                onClick={() => setOpen(false)}
-              >
-                切換示範角色
-              </Link>
-            )}
             <form action="/auth/logout" method="post">
               <button
                 type="submit"

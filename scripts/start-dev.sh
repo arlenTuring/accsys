@@ -51,16 +51,15 @@ fi
 if [[ ! -f .env.local ]]; then
   echo "📝 尚未有 .env.local，從範本建立…"
   cp .env.local.example .env.local
-  # Sensible local defaults for demo login
   if grep -q '^SESSION_SECRET=replace-with' .env.local; then
     # portable sed (macOS); random per checkout, never a shared well-known value
     SECRET="$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('base64url'))")"
     sed -i.bak "s|^SESSION_SECRET=.*|SESSION_SECRET=${SECRET}|" .env.local
-    sed -i.bak "s|^DEV_LOGIN_EMAIL=.*|DEV_LOGIN_EMAIL=dev@turing-drive.com|" .env.local
-    sed -i.bak "s|^NEXT_PUBLIC_DEV_LOGIN=.*|NEXT_PUBLIC_DEV_LOGIN=true|" .env.local
+    # Keep demo persona login off by default; use Google Workspace sign-in.
+    sed -i.bak "s|^NEXT_PUBLIC_DEV_LOGIN=.*|NEXT_PUBLIC_DEV_LOGIN=false|" .env.local
     rm -f .env.local.bak
   fi
-  echo "   已寫入本機開發預設（DEV 登入已開啟）"
+  echo "   已寫入本機開發預設（請用公司 Google 帳號登入）"
 fi
 
 # P2 login settings added after older .env.local files were created (non-secret defaults).

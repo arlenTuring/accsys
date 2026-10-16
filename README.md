@@ -187,8 +187,7 @@ SESSION_TTL_HOURS=8
 STORAGE_LOCAL_PATH=./data/attachments
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
-# 本機略過 Google：只在 `next dev`、旗標為 true 且 APP_ORIGIN 為 localhost／127.0.0.1 時生效；
-# build／容器一律 404，共享環境勿開
+# 示範角色登入（預設關閉）。僅 `next dev` + 旗標 true + APP_ORIGIN 為 localhost 時可用；正式環境勿開
 DEV_LOGIN_EMAIL=
 NEXT_PUBLIC_DEV_LOGIN=false
 # Email 通知（目前程式碼已支援，尚未正式啟用寄送）
@@ -219,7 +218,7 @@ SMTP_FROM=
 
 ```bash
 cp .env.local.example .env.local
-# 編輯 SESSION_SECRET（至少 32 字元）；本機可設 NEXT_PUBLIC_DEV_LOGIN=true 與 DEV_LOGIN_EMAIL
+# 編輯 SESSION_SECRET（至少 32 字元）；並設定 GOOGLE_CLIENT_ID／GOOGLE_CLIENT_SECRET
 
 npm install
 npm run dev:all        # 啟動本機 Postgres、建立角色、套用 migrations、載入 dev 種子，再啟動 Next.js
@@ -228,7 +227,7 @@ npm run seed           # 選用：匯入部門／員工／預算編號／供應�
 
 既有的本機 DB（P1 前建立）第一次跑 `npm run dev:all` 時會自動建立角色、核對結構後登記 baseline，再套用新 migrations；結構不符會停下並列出差異，不會修改資料。之後請把 `.env.local` 的 `DATABASE_URL` 改為最小權限的 `accsys_app`（見 `.env.local.example`）。
 
-開啟 http://localhost:3000，未登入會自動導向 `/login`。`npm run dev`／`npm run start` 只綁定 127.0.0.1；需讓其他電腦連線時，應經 reverse proxy 與 HTTPS，不要直接改成 0.0.0.0。本機可開開發登入；正式環境用公司 Google 帳號登入後導向 `/dashboard`。
+開啟 http://localhost:3001，未登入會自動導向 `/login`，以「使用 Google 帳號登入」進入（公司 Workspace）。`npm run dev`／`npm run start` 只綁定 127.0.0.1；需讓其他電腦連線時，應經 reverse proxy 與 HTTPS，不要直接改成 0.0.0.0。
 
 ## 開發指令
 
