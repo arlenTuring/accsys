@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { ApprovalActions } from '@/app/components/approval-actions';
 import { AttachmentsPanel } from '@/app/components/attachments-panel';
 import { parseUploadFailed } from '@/lib/attachments/batch';
+import { loadAttachmentPanelExtras } from '@/lib/attachments/analysis-queries';
 import { getAttachments } from '@/lib/attachments/queries';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { approveInvoiceSealStep, returnInvoiceSealStep, withdrawInvoiceSealRequest } from '@/lib/invoice-seals/actions';
@@ -27,6 +28,7 @@ export default async function InvoiceSealDetailPage({
   const detail = await getInvoiceSealDetail(id);
   if (!detail) notFound();
   const [employee, attachments] = await Promise.all([getCurrentEmployee(), getAttachments('invoice_seal_request', id)]);
+  const attachmentExtras = await loadAttachmentPanelExtras(attachments.map((a) => a.id));
   const { isCurrentApprover } = sealAccess(detail, employee?.id);
 
   return (
@@ -102,7 +104,12 @@ export default async function InvoiceSealDetailPage({
       <ApprovalTimeline formType="invoice_seal_request" formId={detail.id} />
 
       <div className="print:hidden">
-        <AttachmentsPanel formType="invoice_seal_request" formId={id} attachments={attachments} />
+        <AttachmentsPanel
+          formType="invoice_seal_request"
+          formId={id}
+          attachments={attachments}
+          extras={attachmentExtras}
+        />
       </div>
 
       <SealReminderNote text="完成線上簽核流程後，請印出核准之用印申請單，連同開立依據，提供給會計，謝謝。" />

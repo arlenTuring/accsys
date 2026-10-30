@@ -1633,3 +1633,436 @@ export const idempotencyKeys = pgTable(
     index('idempotency_keys_created_at_idx').on(t.createdAt),
   ]
 );
+
+// ---------------------------------------------------------------------------
+// AI assistant (conversation + application drafts; not form-designer schemas)
+// ---------------------------------------------------------------------------
+
+export const aiConversations = pgTable(
+  'ai_conversations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ownerEmployeeId: uuid('owner_employee_id').notNull(),
+    title: text('title').notNull().default(''),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    fk('ai_conversations_owner_employee_id_fkey', t.ownerEmployeeId, employees.id),
+    index('ai_conversations_owner_updated_idx').on(t.ownerEmployeeId, t.updatedAt),
+    check('ai_conversations_title_check', sql`char_length(title) <= 120`),
+  ]
+);
+
+export const aiMessages = pgTable(
+  'ai_messages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    conversationId: uuid('conversation_id').notNull(),
+    role: text('role').notNull(),
+    clientMessageId: text('client_message_id'),
+    contentText: text('content_text').notNull().default(''),
+    blocks: jsonb('blocks').notNull().default(sql`'[]'::jsonb`),
+    toolsUsed: jsonb('tools_used').notNull().default(sql`'[]'::jsonb`),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    fk('ai_messages_conversation_id_fkey', t.conversationId, aiConversations.id),
+    check('ai_messages_role_check', sql`role in ('user', 'model', 'system')`),
+    check('ai_messages_blocks_check', sql`jsonb_typeof(blocks) = 'array'`),
+    check('ai_messages_tools_used_check', sql`jsonb_typeof(tools_used) = 'array'`),
+    uniqueIndex('ai_messages_conversation_client_message_uidx').on(t.conversationId, t.clientMessageId),
+    index('ai_messages_conversation_created_idx').on(t.conversationId, t.createdAt),
+  ]
+);
+
+export const aiApplicationDrafts = pgTable(
+  'ai_application_drafts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    conversationId: uuid('conversation_id').notNull(),
+    ownerEmployeeId: uuid('owner_employee_id').notNull(),
+    formDefinitionKey: text('form_definition_key').notNull(),
+    formVersionId: uuid('form_version_id'),
+    title: text('title').notNull().default(''),
+    data: jsonb('data').notNull().default(sql`'{}'::jsonb`),
+    version: integer('version').notNull().default(1),
+    status: text('status').notNull().default('draft'),
+    submissionId: uuid('submission_id'),
+    /** Same user turn + formKey → reuse draft (model/request retry). */
+    createIdempotencyKey: text('create_idempotency_key'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    fk('ai_application_drafts_conversation_id_fkey', t.conversationId, aiConversations.id),
+    fk('ai_application_drafts_owner_employee_id_fkey', t.ownerEmployeeId, employees.id),
+    fk('ai_application_drafts_submission_id_fkey', t.submissionId, formSubmissions.id),
+    check('ai_application_drafts_status_check', sql`status in ('draft', 'submitted', 'abandoned')`),
+    check('ai_application_drafts_data_check', sql`jsonb_typeof(data) = 'object'`),
+    check('ai_application_drafts_version_check', sql`version > 0`),
+    check('ai_application_drafts_title_check', sql`char_length(title) <= 160`),
+    uniqueIndex('ai_application_drafts_owner_create_idem_uidx')
+      .on(t.ownerEmployeeId, t.createIdempotencyKey)
+      .where(sql`create_idempotency_key is not null`),
+    index('ai_application_drafts_owner_updated_idx').on(t.ownerEmployeeId, t.updatedAt),
+    index('ai_application_drafts_conversation_idx').on(t.conversationId),
+  ]
+);
+
+/** Launcher / multi-tab dedupe of proactive assistant events. */
+export const aiAssistantEventAcks = pgTable(
+  'ai_assistant_event_acks',
+  {
+    employeeId: uuid('employee_id').notNull(),
+    eventKey: text('event_key').notNull(),
+    state: text('state').notNull().default('viewed'),
+    updatedAt: updatedAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    primaryKey({ name: 'ai_assistant_event_acks_pkey', columns: [t.employeeId, t.eventKey] }),
+    fk('ai_assistant_event_acks_employee_id_fkey', t.employeeId, employees.id),
+    check('ai_assistant_event_acks_state_check', sql`state in ('viewed', 'dismissed', 'muted')`),
+    check(
+      'ai_assistant_event_acks_event_key_check',
+      sql`char_length(event_key) >= 1 AND char_length(event_key) <= 200`
+    ),
+    index('ai_assistant_event_acks_employee_updated_idx').on(t.employeeId, t.updatedAt),
+  ]
+);
+
+export const aiProjectUsage = pgTable(
+  'ai_project_usage',
+  {
+    employeeId: uuid('employee_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    primaryKey({ name: 'ai_project_usage_pkey', columns: [t.employeeId, t.projectId] }),
+    fk('ai_project_usage_employee_id_fkey', t.employeeId, employees.id),
+    fk('ai_project_usage_project_id_fkey', t.projectId, projects.id),
+    index('ai_project_usage_employee_last_used_idx').on(t.employeeId, t.lastUsedAt),
+  ]
+);
+
+/** One nudge per form per Taipei calendar day (system-wide). */
+export const aiNudgeEvents = pgTable(
+  'ai_nudge_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    formType: text('form_type').notNull(),
+    formId: uuid('form_id').notNull(),
+    businessDate: date('business_date').notNull(),
+    actorEmployeeId: uuid('actor_employee_id').notNull(),
+    recipients: jsonb('recipients').notNull().default(sql`'[]'::jsonb`),
+    status: text('status').notNull().default('queued'),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    fk('ai_nudge_events_actor_employee_id_fkey', t.actorEmployeeId, employees.id),
+    unique('ai_nudge_events_form_day_key').on(t.formType, t.formId, t.businessDate),
+    check('ai_nudge_events_status_check', sql`status in ('queued', 'notified', 'failed')`),
+    check('ai_nudge_events_recipients_check', sql`jsonb_typeof(recipients) = 'array'`),
+    index('ai_nudge_events_form_idx').on(t.formType, t.formId),
+  ]
+);
+
+/** Ephemeral AI-chat image staging (owner-scoped; not a public URL). */
+export const aiChatStagedAttachments = pgTable(
+  'ai_chat_staged_attachments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ownerEmployeeId: uuid('owner_employee_id').notNull(),
+    conversationId: uuid('conversation_id').notNull(),
+    clientAttachmentId: text('client_attachment_id').notNull(),
+    fileName: text('file_name').notNull(),
+    mimeType: text('mime_type').notNull(),
+    fileSizeBytes: bigint('file_size_bytes', { mode: 'number' }).notNull(),
+    storagePath: text('storage_path').notNull(),
+    sha256: text('sha256').notNull(),
+    width: integer('width'),
+    height: integer('height'),
+    scanStatus: text('scan_status').notNull().default('pending'),
+    analysisStatus: text('analysis_status'),
+    analysisResult: jsonb('analysis_result').$type<Record<string, unknown> | null>(),
+    analysisCompletedAt: timestamp('analysis_completed_at', { withTimezone: true }),
+    createdAt: createdAt(),
+    purgedAt: timestamp('purged_at', { withTimezone: true }),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('ai_chat_staged_attachments_client_uidx').on(t.ownerEmployeeId, t.clientAttachmentId),
+    fk('ai_chat_staged_attachments_owner_fkey', t.ownerEmployeeId, employees.id),
+    fk('ai_chat_staged_attachments_conversation_fkey', t.conversationId, aiConversations.id),
+    check(
+      'ai_chat_staged_attachments_mime_check',
+      sql`mime_type in ('image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'application/pdf')`
+    ),
+    check(
+      'ai_chat_staged_attachments_scan_check',
+      sql`scan_status in ('pending', 'scanning', 'ready', 'failed', 'purged')`
+    ),
+    check(
+      'ai_chat_staged_attachments_size_check',
+      sql`file_size_bytes > 0 AND file_size_bytes <= 52428800`
+    ),
+    index('ai_chat_staged_attachments_conversation_idx').on(t.conversationId, t.createdAt),
+  ]
+);
+
+/** User acknowledged invoice business reminders for a staged chat file (not a security bypass). */
+export const stagedInvoiceConfirmations = pgTable(
+  'staged_invoice_confirmations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    stagedId: uuid('staged_id').notNull(),
+    draftId: uuid('draft_id'),
+    contentSha256: text('content_sha256').notNull(),
+    reminderCode: text('reminder_code').notNull(),
+    reminderSummary: text('reminder_summary').notNull(),
+    userNote: text('user_note'),
+    analysisSnapshot: jsonb('analysis_snapshot').$type<Record<string, unknown> | null>(),
+    companyProfileVersion: integer('company_profile_version'),
+    confirmedByEmployeeId: uuid('confirmed_by_employee_id').notNull(),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    fk('staged_invoice_confirmations_staged_fkey', t.stagedId, aiChatStagedAttachments.id).onDelete('cascade'),
+    fk('staged_invoice_confirmations_by_fkey', t.confirmedByEmployeeId, employees.id),
+    check(
+      'staged_invoice_confirmations_reminder_check',
+      sql`reminder_code in ('tax_id_mismatch', 'tax_id_missing', 'unclear', 'analysis_failed', 'not_invoice', 'company_unset', 'other')`
+    ),
+    index('staged_invoice_confirmations_staged_idx').on(t.stagedId, t.confirmedAt),
+  ]
+);
+
+/** Immutable approved-form PDF snapshots for reuse as attachments on other forms. */
+export const approvedDocumentSnapshots = pgTable(
+  'approved_document_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sourceFormType: text('source_form_type').notNull(),
+    sourceFormId: uuid('source_form_id').notNull(),
+    sourceFormNumber: text('source_form_number').notNull(),
+    sourceFormKey: text('source_form_key'),
+    sourceVersion: integer('source_version').notNull(),
+    approvalRoundKey: text('approval_round_key').notNull(),
+    approvedAt: timestamp('approved_at', { withTimezone: true }).notNull(),
+    contentHash: text('content_hash').notNull(),
+    rendererVersion: text('renderer_version').notNull(),
+    storagePath: text('storage_path').notNull(),
+    fileName: text('file_name').notNull(),
+    fileSizeBytes: bigint('file_size_bytes', { mode: 'number' }).notNull(),
+    generatedByEmployeeId: uuid('generated_by_employee_id').notNull(),
+    generatedAt: timestamp('generated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('approved_document_snapshots_source_round_uidx').on(
+      t.sourceFormType,
+      t.sourceFormId,
+      t.sourceVersion,
+      t.approvalRoundKey
+    ),
+    fk('approved_document_snapshots_generated_by_fkey', t.generatedByEmployeeId, employees.id),
+    check('approved_document_snapshots_hash_check', sql`char_length(content_hash) = 64`),
+    check('approved_document_snapshots_size_check', sql`file_size_bytes > 0`),
+    index('approved_document_snapshots_source_idx').on(t.sourceFormType, t.sourceFormId),
+  ]
+);
+
+/** Links a draft to an approved PDF snapshot (idempotent per draft+snapshot). */
+export const aiDraftSnapshotAttachments = pgTable(
+  'ai_draft_snapshot_attachments',
+  {
+    draftId: uuid('draft_id').notNull(),
+    snapshotId: uuid('snapshot_id').notNull(),
+    attachedByEmployeeId: uuid('attached_by_employee_id').notNull(),
+    attachedAt: timestamp('attached_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    primaryKey({ name: 'ai_draft_snapshot_attachments_pkey', columns: [t.draftId, t.snapshotId] }),
+    fk('ai_draft_snapshot_attachments_draft_fkey', t.draftId, aiApplicationDrafts.id),
+    fk('ai_draft_snapshot_attachments_snapshot_fkey', t.snapshotId, approvedDocumentSnapshots.id),
+    fk('ai_draft_snapshot_attachments_by_fkey', t.attachedByEmployeeId, employees.id),
+  ]
+);
+
+/** Chat-staged files copied onto a draft (durable until submit copies to form attachments). */
+export const aiDraftFileAttachments = pgTable(
+  'ai_draft_file_attachments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    draftId: uuid('draft_id').notNull(),
+    fileName: text('file_name').notNull(),
+    mimeType: text('mime_type').notNull(),
+    fileSizeBytes: bigint('file_size_bytes', { mode: 'number' }).notNull(),
+    storagePath: text('storage_path').notNull(),
+    sha256: text('sha256').notNull(),
+    sourceStagedId: uuid('source_staged_id'),
+    attachedByEmployeeId: uuid('attached_by_employee_id').notNull(),
+    attachedAt: timestamp('attached_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('ai_draft_file_attachments_path_uidx').on(t.storagePath),
+    fk('ai_draft_file_attachments_draft_fkey', t.draftId, aiApplicationDrafts.id).onDelete('cascade'),
+    fk('ai_draft_file_attachments_by_fkey', t.attachedByEmployeeId, employees.id),
+    check(
+      'ai_draft_file_attachments_size_check',
+      sql`file_size_bytes > 0 AND file_size_bytes <= 52428800`
+    ),
+    index('ai_draft_file_attachments_draft_idx').on(t.draftId, t.attachedAt),
+  ]
+);
+
+// ---------------------------------------------------------------------------
+// Company profile + attachment preview / analysis / upload sessions
+// ---------------------------------------------------------------------------
+
+export const companyProfiles = pgTable(
+  'company_profiles',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    code: text('code').notNull(),
+    legalName: text('legal_name').notNull(),
+    taxId: text('tax_id').notNull(),
+    address: text('address'),
+    nameAliases: jsonb('name_aliases').$type<string[]>().notNull().default([]),
+    active: boolean('active').notNull().default(true),
+    version: integer('version').notNull().default(1),
+    updatedByEmployeeId: uuid('updated_by_employee_id'),
+    updatedAt: updatedAt(),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('company_profiles_code_uidx').on(t.code),
+    check('company_profiles_tax_id_check', sql`char_length(btrim(tax_id)) BETWEEN 8 AND 10`),
+    fk('company_profiles_updated_by_fkey', t.updatedByEmployeeId, employees.id),
+  ]
+);
+
+export const attachmentDerivatives = pgTable(
+  'attachment_derivatives',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    attachmentId: uuid('attachment_id').notNull(),
+    kind: text('kind').notNull(),
+    mimeType: text('mime_type').notNull(),
+    storagePath: text('storage_path').notNull(),
+    fileSizeBytes: bigint('file_size_bytes', { mode: 'number' }).notNull(),
+    sourceSha256: text('source_sha256').notNull(),
+    rendererVersion: text('renderer_version').notNull(),
+    pageFrom: integer('page_from'),
+    pageTo: integer('page_to'),
+    width: integer('width'),
+    height: integer('height'),
+    status: text('status').notNull().default('ready'),
+    error: text('error'),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('attachment_derivatives_path_uidx').on(t.storagePath),
+    fk('attachment_derivatives_attachment_fkey', t.attachmentId, attachments.id).onDelete('cascade'),
+    check('attachment_derivatives_kind_check', sql`kind in ('preview_image', 'preview_pdf', 'page_image', 'thumbnail')`),
+    check('attachment_derivatives_status_check', sql`status in ('pending', 'ready', 'failed')`),
+    index('attachment_derivatives_attachment_idx').on(t.attachmentId, t.kind),
+  ]
+);
+
+export const attachmentAnalyses = pgTable(
+  'attachment_analyses',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    attachmentId: uuid('attachment_id').notNull(),
+    kind: text('kind').notNull(),
+    status: text('status').notNull(),
+    model: text('model'),
+    rulesVersion: text('rules_version').notNull(),
+    companyProfileId: uuid('company_profile_id'),
+    companyProfileVersion: integer('company_profile_version'),
+    result: jsonb('result').$type<Record<string, unknown>>().notNull(),
+    error: text('error'),
+    createdAt: createdAt(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    fk('attachment_analyses_attachment_fkey', t.attachmentId, attachments.id).onDelete('cascade'),
+    fk('attachment_analyses_company_fkey', t.companyProfileId, companyProfiles.id),
+    check('attachment_analyses_kind_check', sql`kind in ('invoice_check', 'document_type')`),
+    check(
+      'attachment_analyses_status_check',
+      sql`status in ('pending', 'running', 'ready', 'failed', 'skipped')`
+    ),
+    index('attachment_analyses_attachment_idx').on(t.attachmentId, t.kind, t.createdAt),
+  ]
+);
+
+export const attachmentConfirmations = pgTable(
+  'attachment_confirmations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    attachmentId: uuid('attachment_id').notNull(),
+    draftId: uuid('draft_id'),
+    formType: text('form_type'),
+    formId: uuid('form_id'),
+    analysisId: uuid('analysis_id'),
+    contentSha256: text('content_sha256').notNull(),
+    companyProfileVersion: integer('company_profile_version'),
+    reminderCode: text('reminder_code').notNull(),
+    reminderSummary: text('reminder_summary').notNull(),
+    userNote: text('user_note'),
+    corrections: jsonb('corrections').$type<Record<string, unknown> | null>(),
+    confirmedByEmployeeId: uuid('confirmed_by_employee_id').notNull(),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    fk('attachment_confirmations_attachment_fkey', t.attachmentId, attachments.id).onDelete('cascade'),
+    fk('attachment_confirmations_analysis_fkey', t.analysisId, attachmentAnalyses.id),
+    fk('attachment_confirmations_by_fkey', t.confirmedByEmployeeId, employees.id),
+    check(
+      'attachment_confirmations_reminder_check',
+      sql`reminder_code in ('tax_id_mismatch', 'tax_id_missing', 'unclear', 'analysis_failed', 'not_invoice', 'company_unset', 'other')`
+    ),
+    index('attachment_confirmations_attachment_idx').on(t.attachmentId),
+  ]
+);
+
+export const attachmentUploadSessions = pgTable(
+  'attachment_upload_sessions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ownerEmployeeId: uuid('owner_employee_id').notNull(),
+    purpose: text('purpose').notNull(),
+    formType: text('form_type'),
+    formId: uuid('form_id'),
+    conversationId: uuid('conversation_id'),
+    clientUploadId: text('client_upload_id').notNull(),
+    fileName: text('file_name').notNull(),
+    declaredMime: text('declared_mime'),
+    declaredSizeBytes: bigint('declared_size_bytes', { mode: 'number' }).notNull(),
+    chunkSizeBytes: integer('chunk_size_bytes').notNull(),
+    totalChunks: integer('total_chunks').notNull(),
+    receivedChunks: integer('received_chunks').notNull().default(0),
+    tempStoragePrefix: text('temp_storage_prefix').notNull(),
+    status: text('status').notNull().default('receiving'),
+    assembledSha256: text('assembled_sha256'),
+    createdAt: createdAt(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('attachment_upload_sessions_client_uidx').on(t.ownerEmployeeId, t.clientUploadId),
+    fk('attachment_upload_sessions_owner_fkey', t.ownerEmployeeId, employees.id),
+    check('attachment_upload_sessions_purpose_check', sql`purpose in ('form', 'ai_chat', 'draft')`),
+    check(
+      'attachment_upload_sessions_status_check',
+      sql`status in ('receiving', 'assembling', 'ready', 'failed', 'expired', 'purged')`
+    ),
+    check(
+      'attachment_upload_sessions_size_check',
+      sql`declared_size_bytes > 0 AND chunk_size_bytes > 0 AND total_chunks > 0`
+    ),
+    index('attachment_upload_sessions_owner_idx').on(t.ownerEmployeeId, t.createdAt),
+  ]
+);

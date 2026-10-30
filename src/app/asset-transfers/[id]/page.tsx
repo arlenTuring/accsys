@@ -9,6 +9,7 @@ import { WithdrawButton } from '@/app/requests/[id]/withdraw-button';
 import { approveAssetTransferStep, returnAssetTransferStep, withdrawAssetTransfer } from '@/lib/asset-transfers/actions';
 import { ASSET_TRANSFER_TYPE_LABELS, type AssetTransferType } from '@/lib/asset-transfers/constants';
 import { getAssetTransferDetail } from '@/lib/asset-transfers/queries';
+import { loadAttachmentPanelExtras } from '@/lib/attachments/analysis-queries';
 import { parseUploadFailed } from '@/lib/attachments/batch';
 import { getAttachments } from '@/lib/attachments/queries';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
@@ -42,6 +43,7 @@ export default async function AssetTransferDetailPage({
   if (!detail) notFound();
   const base = `/asset-transfers/${id}`;
   const [employee, attachments] = await Promise.all([getCurrentEmployee(), getAttachments('asset_transfer', id)]);
+  const attachmentExtras = await loadAttachmentPanelExtras(attachments.map((a) => a.id));
 
   const currentStep =
     detail.status === 'pending_approval' && detail.currentStepOrder !== null
@@ -171,7 +173,12 @@ export default async function AssetTransferDetailPage({
       <ApprovalTimeline formType="asset_transfer" formId={detail.id} />
 
       <div className="print:hidden">
-        <AttachmentsPanel formType="asset_transfer" formId={id} attachments={attachments} />
+        <AttachmentsPanel
+          formType="asset_transfer"
+          formId={id}
+          attachments={attachments}
+          extras={attachmentExtras}
+        />
       </div>
 
       {isCurrentApprover && (

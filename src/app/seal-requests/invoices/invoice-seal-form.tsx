@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Field, FieldRow, Info, Req, inputCls } from '@/app/components/form-fields';
 import { AddRowButton, TrashButton, cellInputCls, tdCls, thCls } from '@/app/components/line-item-table';
 import { PendingFilesField } from '@/app/components/pending-files-field';
+import { attachmentFieldLabel } from '@/lib/attachments/policy';
 import { reviseInvoiceSealRequest, submitInvoiceSealRequest } from '@/lib/invoice-seals/actions';
 import {
   BUSINESS_TAX_RATE,
@@ -270,7 +271,7 @@ export function InvoiceSealForm({
             </p>
           )}
         </Field>
-        <Field label="開立依據(一個檔案上限2MB，可上傳多個檔案)" required hint="合約或報價單">
+        <Field label={attachmentFieldLabel('開立依據')} required hint="合約或報價單">
           <PendingFilesField files={files} onChange={setFiles} existingCount={existingAttachments} />
         </Field>
       </FieldRow>

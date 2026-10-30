@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Field, FieldRow, Info, Req, inputCls, readOnlyCls } from '@/app/components/form-fields';
 import { AddRowButton, TrashButton, cellInputCls, tdCls, thCls } from '@/app/components/line-item-table';
 import { PendingFilesField } from '@/app/components/pending-files-field';
+import { attachmentFieldLabel } from '@/lib/attachments/policy';
 import { centsToNumber, toCents, type Cents } from '@/lib/money';
 import { reviseTravelExpense, submitTravelExpense } from '@/lib/travel-expenses/actions';
 import { TRAVEL_COST_CATEGORIES, TRAVEL_CURRENCIES } from '@/lib/travel-expenses/constants';
@@ -497,7 +498,7 @@ export function TravelExpenseForm({
           )}
         </Field>
         <Field
-          label="附件(一個檔案上限2MB，可上傳多個檔案)"
+          label={attachmentFieldLabel()}
           required
           hint="請上傳相關費用報支附件 (以悠遊卡等搭乘大眾交通工具者，請檢附購票證明；國外差旅請附上機票、登機證、購票證明/收據)"
         >

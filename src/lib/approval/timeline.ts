@@ -83,8 +83,12 @@ function toNodes(steps: StepLike[], names: Map<string, string>, live: { status: 
  * steps before each resubmission). Returns null when the viewer may not read
  * the form.
  */
-export async function getApprovalTimeline(formType: FormType, formId: string): Promise<ApprovalTimelineData | null> {
-  const actor = await getCurrentEmployee();
+export async function getApprovalTimeline(
+  formType: FormType,
+  formId: string,
+  actorOverride?: { id: string; role: string; permissions?: readonly string[] } | null
+): Promise<ApprovalTimelineData | null> {
+  const actor = actorOverride === undefined ? await getCurrentEmployee() : actorOverride;
   if (!(await canReadForm(actor, formType, formId))) return null;
   const db = getDb();
 

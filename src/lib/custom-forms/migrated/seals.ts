@@ -18,7 +18,7 @@ import type { MigratedForm } from './types';
 
 const opts = (list: readonly { code: string; label: string }[]) => list.map((o) => ({ value: o.code, label: o.label }));
 
-const ATTACHMENT_LABEL = '附件(一個檔案上限2MB，可上傳多個檔案)';
+const ATTACHMENT_LABEL = '附件';
 
 function timingFields() {
   return [
@@ -321,7 +321,7 @@ export const INVOICE_SEAL_FORM: MigratedForm = {
         title: '附件',
         description: '',
         fields: [
-          { id: 'attachments', type: 'attachments', label: '開立依據(一個檔案上限2MB，可上傳多個檔案)', help: '合約或報價單', required: true, width: 4 },
+          { id: 'attachments', type: 'attachments', label: '開立依據', help: '合約或報價單', required: true, width: 4 },
           reminder('完成線上簽核流程後，請印出核准之用印申請單，連同開立依據，提供給會計，謝謝。'),
         ],
       },

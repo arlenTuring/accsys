@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getExpenseRequestDetail } from '@/lib/expense-requests/queries';
 import { withdrawExpenseRequest } from '@/lib/expense-requests/actions';
+import { loadAttachmentPanelExtras } from '@/lib/attachments/analysis-queries';
 import { getAttachments } from '@/lib/attachments/queries';
 import { ApprovalTimeline } from '@/app/components/approval-timeline';
 import { AttachmentsPanel } from '@/app/components/attachments-panel';
@@ -25,8 +26,9 @@ export default async function ExpenseRequestDetailPage({
   const detail = await getExpenseRequestDetail(id);
   if (!detail) notFound();
 
-    const employee = await getCurrentEmployee();
+  const employee = await getCurrentEmployee();
   const attachments = await getAttachments('expense_request', id);
+  const attachmentExtras = await loadAttachmentPanelExtras(attachments.map((a) => a.id));
 
   const currentStep =
     detail.status === 'pending_approval' && detail.currentStepOrder !== null
@@ -97,7 +99,12 @@ export default async function ExpenseRequestDetailPage({
 
       <ApprovalTimeline formType="expense_request" formId={detail.id} />
 
-      <AttachmentsPanel formType="expense_request" formId={id} attachments={attachments} />
+      <AttachmentsPanel
+        formType="expense_request"
+        formId={id}
+        attachments={attachments}
+        extras={attachmentExtras}
+      />
 
       {canSelfEdit && (
         <section className="flex gap-3">

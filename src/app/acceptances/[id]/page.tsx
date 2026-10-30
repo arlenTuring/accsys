@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getAcceptanceDetail } from '@/lib/acceptances/queries';
+import { loadAttachmentPanelExtras } from '@/lib/attachments/analysis-queries';
 import { getAttachments } from '@/lib/attachments/queries';
 import { ApprovalTimeline } from '@/app/components/approval-timeline';
 import { AttachmentsPanel } from '@/app/components/attachments-panel';
@@ -28,6 +29,7 @@ export default async function AcceptanceDetailPage({
 
     const employee = await getCurrentEmployee();
   const attachments = await getAttachments('acceptance', id);
+  const attachmentExtras = await loadAttachmentPanelExtras(attachments.map((a) => a.id));
   const canEditPropertyTag = employee?.role === 'finance' || employee?.role === 'admin';
 
   const currentStep =
@@ -97,7 +99,12 @@ export default async function AcceptanceDetailPage({
 
       <ApprovalTimeline formType="acceptance" formId={detail.id} />
 
-      <AttachmentsPanel formType="acceptance" formId={id} attachments={attachments} />
+      <AttachmentsPanel
+        formType="acceptance"
+        formId={id}
+        attachments={attachments}
+        extras={attachmentExtras}
+      />
 
       {canSelfEdit && (
         <section className="flex gap-3">

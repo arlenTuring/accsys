@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Field, FieldRow, inputCls } from '@/app/components/form-fields';
 import { PendingFilesField } from '@/app/components/pending-files-field';
+import { attachmentFieldLabel } from '@/lib/attachments/policy';
 import { reviseGeneralSealRequest, submitGeneralSealRequest } from '@/lib/general-seals/actions';
 import { GENERAL_DOCUMENT_TYPES, GENERAL_SEAL_OPTIONS } from '@/lib/general-seals/constants';
 import { parseGeneralSealInput, type GeneralSealInput } from '@/lib/general-seals/validate';
@@ -103,7 +104,7 @@ export function GeneralSealForm({
 
       <FieldRow cols={2}>
         <SealCheckboxes options={GENERAL_SEAL_OPTIONS} value={seals} onChange={setSeals} />
-        <Field label="附件(一個檔案上限2MB，可上傳多個檔案)" required hint="請上傳要用印的文件">
+        <Field label={attachmentFieldLabel()} required hint="請上傳要用印的文件">
           <PendingFilesField files={files} onChange={setFiles} existingCount={existingAttachments} />
         </Field>
       </FieldRow>

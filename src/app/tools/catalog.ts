@@ -18,6 +18,14 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     badge: '可用',
   },
   {
+    id: 'ai-chat',
+    href: '/tools/ai-chat',
+    title: 'AI 助手',
+    description: '待簽核與進度、自然語言查詢與建單協助；正式送出仍走系統權限與表單驗證。',
+    status: 'ready',
+    badge: '助手',
+  },
+  {
     id: 'coming-soon',
     href: '#',
     title: '更多工具',

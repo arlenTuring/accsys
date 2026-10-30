@@ -4,6 +4,11 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { inputCls, Req } from '@/app/components/form-fields';
 import { PendingFilesField } from '@/app/components/pending-files-field';
+import {
+  DraftAttachedFiles,
+  type DraftAttachedFile,
+} from '@/app/tools/ai-chat/draft-attached-files';
+import { attachmentFieldLabel, normalizeAttachmentFieldLabel } from '@/lib/attachments/policy';
 import { reviseCustomForm, submitCustomForm, type SubmitResult } from '@/lib/custom-forms/actions';
 import type { PickerOptions } from '@/lib/custom-forms/queries';
 import {
@@ -32,7 +37,18 @@ export type CustomFormMode =
   | { kind: 'create' }
   | { kind: 'update' | 'resubmit'; id: string; version: number; existingAttachmentCount: number }
   /** Designer preview: can be filled in, has no submit button. */
-  | { kind: 'preview' };
+  | { kind: 'preview' }
+  /** AI assistant draft panel: save/submit via provided callbacks (not createSubmission directly). */
+  | {
+      kind: 'ai_draft';
+      draftId: string;
+      expectedVersion: number;
+      /** Chat→draft copies already on this draft (shown inside 附件). */
+      attachedFiles?: DraftAttachedFile[];
+      saveState?: 'idle' | 'saving' | 'saved' | 'error';
+      onSave: (data: Record<string, unknown>, expectedVersion: number) => Promise<void>;
+      onSubmitDocument: (data: Record<string, unknown>, expectedVersion: number, files: File[]) => Promise<void>;
+    };
 
 type Values = Record<string, unknown>;
 
@@ -395,6 +411,8 @@ export function FieldInput({
       );
     case 'date':
       return <input type="date" min={minDay} value={str} onChange={(e) => onChange(e.target.value)} className={white} {...a11y} />;
+    case 'datetime':
+      return <input type="datetime-local" value={str} onChange={(e) => onChange(e.target.value)} className={white} {...a11y} />;
     case 'select':
       return (
         <select value={str} onChange={(e) => onChange(e.target.value)} className={white} {...a11y}>
@@ -574,11 +592,25 @@ export function CustomForm({
       return;
     }
     setErrors({});
-    if (check.value.attachmentsRequired && files.length + existing === 0) {
+    const draftAttached =
+      mode.kind === 'ai_draft' ? (mode.attachedFiles?.length ?? 0) : 0;
+    if (check.value.attachmentsRequired && files.length + existing + draftAttached === 0) {
       setError('請上傳附件');
       return;
     }
     if (mode.kind === 'preview') return;
+    if (mode.kind === 'ai_draft') {
+      setSubmitting(true);
+      try {
+        await mode.onSubmitDocument(values, mode.expectedVersion, files);
+      } catch (err) {
+        setSubmitting(false);
+        setError(err instanceof Error ? err.message : '送出失敗');
+        return;
+      }
+      setSubmitting(false);
+      return;
+    }
     const fd = new FormData();
     fd.set(
       'payload',
@@ -599,6 +631,16 @@ export function CustomForm({
     }
     const failed = result.attachmentErrors.length;
     router.push(`/f/${formKey}/${result.submissionId}${failed > 0 ? `?uploadFailed=${failed}` : ''}`);
+  };
+
+  const onAiDraftSave = async () => {
+    if (mode.kind !== 'ai_draft') return;
+    setError(null);
+    try {
+      await mode.onSave(values, mode.expectedVersion);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '儲存失敗');
+    }
   };
 
   return (
@@ -646,13 +688,30 @@ export function CustomForm({
                   ) : (
                     <>
                       <p id={`field-${f.id}`} className="text-sm font-semibold text-td-blue-dark">
-                        {f.label}
+                        {f.type === 'attachments'
+                          ? attachmentFieldLabel(
+                              normalizeAttachmentFieldLabel(f.label).replace(/[（(].*$/, '').trim() || '附件'
+                            )
+                          : f.label}
                         {required.has(f.id) && <Req />}
                       </p>
                       {f.help && <p className="mt-1 text-xs text-td-muted">{f.help}</p>}
                       <div className="mt-2">
                         {f.type === 'attachments' ? (
-                          <PendingFilesField files={files} onChange={setFiles} existingCount={existing} maxFiles={f.maxFiles ?? undefined} />
+                          <div className="space-y-3">
+                            {mode.kind === 'ai_draft' && (
+                              <DraftAttachedFiles
+                                draftId={mode.draftId}
+                                files={mode.attachedFiles ?? []}
+                              />
+                            )}
+                            <PendingFilesField
+                              files={files}
+                              onChange={setFiles}
+                              existingCount={existing + (mode.kind === 'ai_draft' ? (mode.attachedFiles?.length ?? 0) : 0)}
+                              maxFiles={f.maxFiles ?? undefined}
+                            />
+                          </div>
                         ) : (
                           <FieldInput
                             field={f}
@@ -677,7 +736,27 @@ export function CustomForm({
           </div>
         </section>
       ))}
-      {mode.kind !== 'preview' && (
+      {mode.kind === 'ai_draft' && (
+        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-td-border px-5 py-4">
+          {error && <p className="mr-auto text-sm text-red-600">{error}</p>}
+          <span className="mr-auto text-xs text-td-muted">
+            {mode.saveState === 'saving'
+              ? '儲存中…'
+              : mode.saveState === 'saved'
+                ? '已儲存'
+                : mode.saveState === 'error'
+                  ? '儲存失敗'
+                  : '草稿會與對話同步'}
+          </span>
+          <button type="button" onClick={onAiDraftSave} className="btn-secondary" disabled={submitting || mode.saveState === 'saving'}>
+            儲存草稿
+          </button>
+          <button type="button" onClick={onSubmit} className="btn-primary" disabled={submitting || mode.saveState === 'saving'}>
+            {submitting ? '送出中…' : '送出單據'}
+          </button>
+        </div>
+      )}
+      {mode.kind !== 'preview' && mode.kind !== 'ai_draft' && (
         <div className="flex flex-wrap items-center justify-end gap-3 border-t border-td-border px-5 py-4">
           {error && <p className="mr-auto text-sm text-red-600">{error}</p>}
           <button type="button" onClick={() => router.back()} className="btn-secondary" disabled={submitting}>

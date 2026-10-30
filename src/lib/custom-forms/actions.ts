@@ -12,7 +12,9 @@ import { fail, type ActionResult, type Failure } from '@/lib/workflow/tx';
 // the session; every rule and the transaction live in service.ts. Files are
 // stored after the form commits (a failed file is reported, the form stays).
 
-export type SubmitResult = { ok: true; submissionId: string; key: string; attachmentErrors: string[] } | Failure;
+export type SubmitResult =
+  | { ok: true; submissionId: string; formNumber?: string; key: string; attachmentErrors: string[]; replayed?: boolean }
+  | Failure;
 
 const FORM = 'custom';
 
@@ -49,7 +51,14 @@ export async function submitCustomForm(key: string, formData: FormData): Promise
       ? []
       : await storeSealFiles(actor, FORM, result.submissionId, req.files);
   refresh();
-  return { ok: true, submissionId: result.submissionId, key, attachmentErrors };
+  return {
+    ok: true,
+    submissionId: result.submissionId,
+    formNumber: result.formNumber,
+    key,
+    attachmentErrors,
+    replayed: result.replayed,
+  };
 }
 
 export async function reviseCustomForm(key: string, id: string, mode: 'update' | 'resubmit', formData: FormData): Promise<SubmitResult> {

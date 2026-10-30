@@ -50,8 +50,9 @@ server {
     ssl_session_timeout 1d;
     ssl_session_tickets off;
 
-    # Server Actions accept up to 11 MB (next.config.ts).
-    client_max_body_size 12m;
+    # Align with ATTACHMENT_MAX_BYTES / next.config serverActions bodySizeLimit (default 50–55 MB).
+    # Prefer chunked upload API for large files; this ceiling is a hard proxy guard.
+    client_max_body_size 55m;
     client_header_timeout 15s;
     client_body_timeout 30s;
     send_timeout 60s;

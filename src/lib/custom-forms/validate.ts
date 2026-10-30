@@ -50,6 +50,8 @@ export type ValidationResult = { ok: true; value: NormalizedSubmission } | { ok:
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
+/** Local wall time (Asia/Taipei) without timezone suffix — lexicographic order matches chronological order. */
+const DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE = /^[0-9+\-() #]{6,30}$/;
 const TAX_ID = /^\d{8}$/;
@@ -127,7 +129,7 @@ function checkRules(field: FieldDef, v: unknown, values: Record<string, unknown>
     }
     const other = values[r.check.field];
     if (other === null || other === undefined || other === '') continue;
-    if (field.type === 'date') {
+    if (field.type === 'date' || field.type === 'datetime') {
       if (!compare(v as string, r.check.op, String(other))) bad(r.message);
     } else {
       const a = Number(v);
@@ -141,6 +143,14 @@ function isValidDate(s: string): boolean {
   if (!DATE.test(s)) return false;
   const d = new Date(`${s}T00:00:00Z`);
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
+export function isValidDateTime(s: string): boolean {
+  if (!DATETIME.test(s)) return false;
+  const [datePart, timePart] = s.split('T');
+  if (!isValidDate(datePart)) return false;
+  const [hh, mm] = timePart.split(':').map(Number);
+  return hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59;
 }
 
 const blank = (v: unknown) => v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
@@ -438,6 +448,9 @@ function value(
     case 'date':
       if (typeof v !== 'string' || !isValidDate(v)) bad('日期格式不正確');
       if (field.notBeforeToday && (v as string) < today) bad('不可早於今天');
+      return v;
+    case 'datetime':
+      if (typeof v !== 'string' || !isValidDateTime(v)) bad('日期時間格式不正確');
       return v;
     case 'select':
     case 'radio':

@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { AttachmentsPanel } from '@/app/components/attachments-panel';
 import { WithdrawButton } from '@/app/requests/[id]/withdraw-button';
+import { loadAttachmentPanelExtras } from '@/lib/attachments/analysis-queries';
 import { parseUploadFailed } from '@/lib/attachments/batch';
 import { getAttachments } from '@/lib/attachments/queries';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
@@ -46,6 +47,7 @@ export default async function ExpenseClaimDetailPage({
   const config = EDITIONS[edition];
   const base = `${FORM_ROUTE_PREFIX[config.formType]}/${id}`;
   const [employee, attachments] = await Promise.all([getCurrentEmployee(), getAttachments(config.formType, id)]);
+  const attachmentExtras = await loadAttachmentPanelExtras(attachments.map((a) => a.id));
 
   const currentStep =
     detail.status === 'pending_approval' && detail.currentStepOrder !== null
@@ -175,7 +177,12 @@ export default async function ExpenseClaimDetailPage({
       <ApprovalTimeline formType={config.formType} formId={id} />
 
       <div className="print:hidden">
-        <AttachmentsPanel formType={config.formType} formId={id} attachments={attachments} />
+        <AttachmentsPanel
+          formType={config.formType}
+          formId={id}
+          attachments={attachments}
+          extras={attachmentExtras}
+        />
       </div>
 
       <p className="rounded-card border border-td-border bg-white/80 px-5 py-4 text-sm text-td-blue-dark">

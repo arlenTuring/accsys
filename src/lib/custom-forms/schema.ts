@@ -116,6 +116,7 @@ export type FieldDef = FieldBase &
     | { type: 'number'; min: number | null; max: number | null; decimals: number; default?: number }
     | { type: 'money'; max: number | null }
     | { type: 'date'; notBeforeToday: boolean }
+    | { type: 'datetime' }
     | { type: 'select' | 'radio'; options: FieldOption[]; default?: string }
     | { type: 'checkboxes'; options: FieldOption[]; minSelected: number; maxSelected: number | null }
     | { type: 'boolean'; trueLabel: string; falseLabel: string }
@@ -229,6 +230,7 @@ export const FIELD_TYPES: readonly FieldType[] = [
   'number',
   'money',
   'date',
+  'datetime',
   'select',
   'radio',
   'checkboxes',
@@ -284,6 +286,7 @@ const CONDITION_FIELD_TYPES: readonly FieldType[] = [
   'number',
   'money',
   'date',
+  'datetime',
   'select',
   'radio',
   'checkboxes',
@@ -413,7 +416,7 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
   const comparable = (type: FieldType | ColumnType, fieldId: unknown): boolean => {
     const other = typeof fieldId === 'string' ? earlierDefs.get(fieldId) : undefined;
     if (!other) return false;
-    if (type === 'date') return other.type === 'date';
+    if (type === 'date' || type === 'datetime') return other.type === type;
     return other.type === 'number' || other.type === 'money' || (other.type === 'table' && other.totalColumn !== null);
   };
 
@@ -529,7 +532,7 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
 
   const rules = (v: unknown, type: FieldType, name: string): FieldRule[] => {
     const isText = type === 'text' || type === 'textarea';
-    if (type !== 'date' && type !== 'number' && type !== 'money' && !isText) {
+    if (type !== 'date' && type !== 'datetime' && type !== 'number' && type !== 'money' && !isText) {
       errors.push(`${name}：此元件不能設定檢查規則`);
       return [];
     }
@@ -559,7 +562,9 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
         } else if (c.kind === 'compare') {
           const op = RULE_COMPARE_OPS.find((o) => o === c.op);
           if (!op) errors.push(`${at}：比較方式不正確`);
-          if (!comparable(type, c.field)) errors.push(`${at}：只能和排在前面的${type === 'date' ? '日期' : '數字、金額或明細合計'}欄位比較`);
+          if (!comparable(type, c.field)) {
+            errors.push(`${at}：只能和排在前面的${type === 'date' || type === 'datetime' ? '日期或日期時間' : '數字、金額或明細合計'}欄位比較`);
+          }
           check = { kind: 'compare', op: op ?? 'gte', field: typeof c.field === 'string' ? c.field : '' };
         } else {
           errors.push(`${at}：規則類型不正確`);
@@ -731,6 +736,9 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
       }
       case 'date':
         def = { ...base, type, notBeforeToday: bool(v.notBeforeToday) };
+        break;
+      case 'datetime':
+        def = { ...base, type };
         break;
       case 'select':
       case 'radio': {

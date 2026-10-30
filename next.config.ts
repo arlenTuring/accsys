@@ -11,10 +11,17 @@ const nextConfig: NextConfig = {
     '/docs/[file]': ['./assets/docs/*.pdf'],
   },
   experimental: {
+    // Next 16.4 defaults this to "security", which stops `next dev` under Cursor
+    // agents with an upgrade nudge. Keep upgrades intentional (package.json /
+    // CI), not an interactive interrupt during local start.
+    agentUpgrade: false,
+    // proxy.ts clones the request body (default 10MB). Without this, large
+    // uploads are truncated → JSON parse 500. (Do not also set middlewareClientMaxBodySize.)
+    proxyClientMaxBodySize: '55mb',
     serverActions: {
-      // Attachments are up to 10 MB (plus multipart overhead); keep the reverse
-      // proxy's client_max_body_size in line with this.
-      bodySizeLimit: '11mb',
+      // Unified attachment policy default is 50 MB/file. Prefer chunked upload
+      // API for large files; keep reverse-proxy client_max_body_size aligned.
+      bodySizeLimit: '55mb',
     },
   },
   async headers() {

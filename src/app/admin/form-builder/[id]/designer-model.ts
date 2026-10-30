@@ -17,6 +17,7 @@ export function condFieldOf(f: FieldDef, options: PickerOptions): CondField | nu
     case 'table':
       return f.totalColumn ? { id: f.id, label: `${f.label}（合計）`, kind: 'number', options: [] } : null;
     case 'date':
+    case 'datetime':
       return { id: f.id, label: f.label, kind: 'date', options: [] };
     case 'select':
     case 'radio':

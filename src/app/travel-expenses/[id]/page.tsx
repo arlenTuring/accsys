@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { AttachmentsPanel } from '@/app/components/attachments-panel';
 import { WithdrawButton } from '@/app/requests/[id]/withdraw-button';
 import { parseUploadFailed } from '@/lib/attachments/batch';
+import { loadAttachmentPanelExtras } from '@/lib/attachments/analysis-queries';
 import { getAttachments } from '@/lib/attachments/queries';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { approveTravelExpenseStep, returnTravelExpenseStep, withdrawTravelExpense } from '@/lib/travel-expenses/actions';
@@ -40,6 +41,7 @@ export default async function TravelExpenseDetailPage({
   const detail = await getTravelExpenseDetail(id);
   if (!detail) notFound();
   const [employee, attachments] = await Promise.all([getCurrentEmployee(), getAttachments('travel_expense', id)]);
+  const attachmentExtras = await loadAttachmentPanelExtras(attachments.map((a) => a.id));
 
   const currentStep =
     detail.status === 'pending_approval' && detail.currentStepOrder !== null
@@ -205,7 +207,12 @@ export default async function TravelExpenseDetailPage({
       <ApprovalTimeline formType="travel_expense" formId={detail.id} />
 
       <div className="print:hidden">
-        <AttachmentsPanel formType="travel_expense" formId={id} attachments={attachments} />
+        <AttachmentsPanel
+          formType="travel_expense"
+          formId={id}
+          attachments={attachments}
+          extras={attachmentExtras}
+        />
       </div>
 
       <p className="rounded-card border border-td-border bg-white/80 px-5 py-4 text-sm text-td-blue-dark">

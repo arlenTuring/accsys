@@ -3,6 +3,7 @@ import { notFound, redirect } from 'next/navigation';
 import { ApprovalActions } from '@/app/components/approval-actions';
 import { ApprovalTimeline } from '@/app/components/approval-timeline';
 import { AttachmentsPanel } from '@/app/components/attachments-panel';
+import { loadAttachmentPanelExtras } from '@/lib/attachments/analysis-queries';
 import { STATUS_BADGE, STATUS_LABELS } from '@/app/components/form-labels';
 import { PrintButton } from '@/app/components/print-button';
 import { WithdrawButton } from '@/app/requests/[id]/withdraw-button';
@@ -93,6 +94,7 @@ export default async function DesignerFormDetailPage({
   // Notifications and approval lists link to /f/_/<id>.
   if (detail.key !== key) redirect(`/f/${detail.key}/${id}`);
   const attachments = await getAttachments('custom', id);
+  const attachmentExtras = await loadAttachmentPanelExtras(attachments.map((a) => a.id));
   const headerFields = allFields(detail.schema).filter((f) => f.showInHeader && !isDisplayOnly(f) && f.id in detail.data);
   const hasAttachmentField = allFields(detail.schema).some((f) => f.type === 'attachments');
 
@@ -184,7 +186,13 @@ export default async function DesignerFormDetailPage({
 
       {((hasAttachmentField && detail.canAttach) || attachments.length > 0) && (
         <div className="print:hidden">
-          <AttachmentsPanel formType="custom" formId={detail.id} attachments={attachments} canUpload={hasAttachmentField && detail.canAttach} />
+          <AttachmentsPanel
+            formType="custom"
+            formId={detail.id}
+            attachments={attachments}
+            extras={attachmentExtras}
+            canUpload={hasAttachmentField && detail.canAttach}
+          />
         </div>
       )}
 

@@ -57,7 +57,12 @@ export async function uploadAttachmentFor(
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (bytes.length !== file.size || bytes.length === 0) return { ok: false, error: '檔案內容不完整' };
   const mime = sniffAllowedType(bytes);
-  if (!mime) return { ok: false, error: '僅接受 PDF、PNG、JPEG 檔案（以檔案內容判斷）' };
+  if (!mime) {
+    return {
+      ok: false,
+      error: '僅接受 PDF、JPEG、PNG、WebP、HEIC／HEIF、DOCX／XLSX／PPTX（以檔案內容判斷）',
+    };
+  }
 
   const id = randomUUID();
   const finalKey = `${formType}/${formId}/${randomUUID()}`;
@@ -111,6 +116,15 @@ export async function uploadAttachmentFor(
   const status = await settleScan(id, finalKey, verdict);
   if (status === 'infected') return { ok: false, error: '檔案未通過安全掃描，已拒絕' };
   if (status === 'scan_failed') return { ok: false, error: '檔案安全掃描失敗，已暫存待重新掃描，目前無法下載' };
+
+  // Background: preview derivatives + invoice check (must not block upload success).
+  void import('@/lib/attachments/derivatives')
+    .then((m) => m.ensurePreviewDerivative(id))
+    .catch((err) => console.warn('[attachments] derivative:', (err as Error).message));
+  void import('@/lib/attachments/invoice-check')
+    .then((m) => m.runInvoiceCheckForAttachment(id))
+    .catch((err) => console.warn('[attachments] invoice-check:', (err as Error).message));
+
   return { ok: true, attachmentId: id, scanStatus: status };
 }
 

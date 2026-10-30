@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { ApprovalActions } from '@/app/components/approval-actions';
 import { AttachmentsPanel } from '@/app/components/attachments-panel';
 import { parseUploadFailed } from '@/lib/attachments/batch';
+import { loadAttachmentPanelExtras } from '@/lib/attachments/analysis-queries';
 import { getAttachments } from '@/lib/attachments/queries';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import {
@@ -48,6 +49,7 @@ export default async function ContractSealDetailPage({
   const detail = await getContractSealDetail(id);
   if (!detail) notFound();
   const [employee, attachments] = await Promise.all([getCurrentEmployee(), getAttachments('contract_seal_request', id)]);
+  const attachmentExtras = await loadAttachmentPanelExtras(attachments.map((a) => a.id));
   const { isCurrentApprover } = sealAccess(detail, employee?.id);
   const needsLegal = LEGAL_REVIEW_DOCUMENT_TYPES.includes(detail.documentType as ContractDocumentType);
 
@@ -119,7 +121,12 @@ export default async function ContractSealDetailPage({
       <ApprovalTimeline formType="contract_seal_request" formId={detail.id} />
 
       <div className="print:hidden">
-        <AttachmentsPanel formType="contract_seal_request" formId={id} attachments={attachments} />
+        <AttachmentsPanel
+          formType="contract_seal_request"
+          formId={id}
+          attachments={attachments}
+          extras={attachmentExtras}
+        />
       </div>
 
       <SealReminderNote text="完成線上簽核流程後，請印出核准之用印申請單，連同原始附件提供給相關單位用印/簽名，用印/簽名完成之文件，請交至管理部歸檔，謝謝。" />

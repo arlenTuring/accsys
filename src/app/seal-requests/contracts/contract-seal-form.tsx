@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Field, FieldRow, inputCls } from '@/app/components/form-fields';
 import { PendingFilesField } from '@/app/components/pending-files-field';
+import { attachmentFieldLabel } from '@/lib/attachments/policy';
 import { reviseContractSealRequest, submitContractSealRequest } from '@/lib/contract-seals/actions';
 import {
   CONTRACT_DOCUMENT_TYPES,
@@ -287,7 +288,7 @@ export function ContractSealForm({
       <LendSealFields value={lending} onChange={setLending} />
 
       <FieldRow cols={2}>
-        <Field label="附件(一個檔案上限2MB，可上傳多個檔案)" required hint="請上傳用印文件；合約、協議書、意向書另附法律顧問確認完成信件">
+        <Field label={attachmentFieldLabel()} required hint="請上傳用印文件；合約、協議書、意向書另附法律顧問確認完成信件">
           <PendingFilesField files={files} onChange={setFiles} existingCount={existingAttachments} />
         </Field>
         <SealReminderBlock text="完成線上簽核流程後，請印出核准之用印申請單，連同原始附件提供給相關單位用印/簽名，用印/簽名完成之文件，請交至管理部歸檔，謝謝。" />

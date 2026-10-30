@@ -14,6 +14,10 @@ describe('isPublicPath', () => {
     expect(isPublicPath('/auth/callback')).toBe(true);
   });
 
+  it('treats admin guide static assets as public', () => {
+    expect(isPublicPath('/admin-guide/07-accounts-binding.png')).toBe(true);
+  });
+
   it('treats the dashboard as protected', () => {
     expect(isPublicPath('/dashboard')).toBe(false);
   });
@@ -27,5 +31,7 @@ describe('isPublicPath', () => {
     expect(isPublicPath('/auth')).toBe(false);
     expect(isPublicPath('/login-admin')).toBe(false);
     expect(isPublicPath('/loginx/secret')).toBe(false);
+    expect(isPublicPath('/admin-guide')).toBe(false);
+    expect(isPublicPath('/admin-guidebook/x')).toBe(false);
   });
 });

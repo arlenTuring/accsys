@@ -191,7 +191,7 @@ function expenseClaimForm(edition: ExpenseEdition): MigratedForm {
             {
               id: 'attachments',
               type: 'attachments',
-              label: '附件(一個檔案上限2MB，可上傳多個檔案)',
+              label: '附件',
               help: '請上傳相關費用報支附件',
               required: true,
               width: 4,

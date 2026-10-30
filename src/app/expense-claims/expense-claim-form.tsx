@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Field, FieldRow, Info, Req, inputCls, readOnlyCls } from '@/app/components/form-fields';
 import { AddRowButton, TrashButton, cellInputCls, tdCls, thCls } from '@/app/components/line-item-table';
 import { PendingFilesField } from '@/app/components/pending-files-field';
+import { attachmentFieldLabel } from '@/lib/attachments/policy';
 import { reviseExpenseClaim, submitExpenseClaim } from '@/lib/expense-claims/actions';
 import {
   MAX_EXPENSE_CLAIM_LINES,
@@ -408,7 +409,7 @@ export function ExpenseClaimForm({
       </FieldRow>
 
       <FieldRow cols={2}>
-        <Field label="附件(一個檔案上限2MB，可上傳多個檔案)" required hint="請上傳相關費用報支附件">
+        <Field label={attachmentFieldLabel()} required hint="請上傳相關費用報支附件">
           <PendingFilesField files={files} onChange={setFiles} existingCount={existingAttachments} />
         </Field>
         <div className="px-5 py-5">

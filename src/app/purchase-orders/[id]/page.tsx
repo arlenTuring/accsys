@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { replacementFor } from '@/lib/custom-forms/legacy';
 import { getPurchaseOrderDetail } from '@/lib/purchase-orders/queries';
+import { loadAttachmentPanelExtras } from '@/lib/attachments/analysis-queries';
 import { getAttachments } from '@/lib/attachments/queries';
 import { ApprovalTimeline } from '@/app/components/approval-timeline';
 import { AttachmentsPanel } from '@/app/components/attachments-panel';
@@ -32,6 +33,7 @@ export default async function PurchaseOrderDetailPage({
     replacementFor('acceptance'),
     replacementFor('expense_request'),
   ]);
+  const attachmentExtras = await loadAttachmentPanelExtras(attachments.map((a) => a.id));
 
   const currentStep =
     detail.status === 'pending_approval' && detail.currentStepOrder !== null
@@ -100,7 +102,12 @@ export default async function PurchaseOrderDetailPage({
 
       <ApprovalTimeline formType="purchase_order" formId={detail.id} />
 
-      <AttachmentsPanel formType="purchase_order" formId={id} attachments={attachments} />
+      <AttachmentsPanel
+        formType="purchase_order"
+        formId={id}
+        attachments={attachments}
+        extras={attachmentExtras}
+      />
 
       {detail.status === 'approved' &&
         (acceptanceReplaced ? (

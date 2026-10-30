@@ -20,6 +20,7 @@ export const FIELD_TYPE_LABELS: Record<FieldType, string> = {
   number: '數字',
   money: '金額',
   date: '日期',
+  datetime: '日期時間',
   select: '下拉選單',
   radio: '單選',
   checkboxes: '複選',
@@ -37,7 +38,7 @@ export const FIELD_TYPE_LABELS: Record<FieldType, string> = {
 };
 
 export const FIELD_GROUPS: { title: string; types: FieldType[] }[] = [
-  { title: '基本輸入', types: ['text', 'textarea', 'number', 'money', 'date', 'select', 'radio', 'checkboxes', 'boolean'] },
+  { title: '基本輸入', types: ['text', 'textarea', 'number', 'money', 'date', 'datetime', 'select', 'radio', 'checkboxes', 'boolean'] },
   { title: '組織與主檔', types: ['employee', 'department', 'budget_code', 'project', 'supplier', 'asset'] },
   { title: '組合', types: ['table', 'source'] },
   { title: '附件與說明', types: ['attachments', 'notice'] },
@@ -125,6 +126,8 @@ export function newField(type: FieldType, takenIds: Iterable<string>): FieldDef 
       return { ...base, type, max: null };
     case 'date':
       return { ...base, type, notBeforeToday: false };
+    case 'datetime':
+      return { ...base, type };
     case 'select':
     case 'radio':
       return { ...base, type, options };

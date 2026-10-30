@@ -39,6 +39,8 @@ export function fieldText(field: FieldDef, v: unknown, labels: Record<string, st
       return money(v, currencyOf(field, data));
     case 'date':
       return day(v);
+    case 'datetime':
+      return typeof v === 'string' && v ? v.replace('T', ' ').replaceAll('-', '/') : '—';
     case 'select':
     case 'radio':
       return field.options.find((o) => o.value === v)?.label ?? (v ? String(v) : '—');

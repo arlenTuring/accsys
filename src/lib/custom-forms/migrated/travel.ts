@@ -143,7 +143,7 @@ export const TRAVEL_EXPENSE_FORM: MigratedForm = {
           {
             id: 'attachments',
             type: 'attachments',
-            label: '附件(一個檔案上限2MB，可上傳多個檔案)',
+            label: '附件',
             help: '請上傳相關費用報支附件（以悠遊卡等搭乘大眾交通工具者，請檢附購票證明；國外差旅請附上機票、登機證、購票證明/收據）',
             required: true,
             width: 4,

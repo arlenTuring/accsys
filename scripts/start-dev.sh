@@ -172,8 +172,16 @@ echo ""
 echo "✅ 啟動 Next.js → http://localhost:${PORT}"
 echo "   登入頁:     http://localhost:${PORT}/login"
 echo "   工具區:     http://localhost:${PORT}/tools"
+echo "   AI 助手:   http://localhost:${PORT}/tools/ai-chat"
 echo "   PDF 編輯:   http://localhost:${PORT}/tools/pdf-editor"
 echo "   停止 DB:    npm run db:down"
 echo ""
 
-exec npm run dev -- -p "$PORT"
+# Next.js 16.4+ may open an interactive upgrade menu in a TTY and block the
+# server (including "Preparing upgrade…"). Local start should stay non-blocking;
+# upgrades remain available via `npx next upgrade`.
+if [[ -z "${NEXT_ALLOW_UPGRADE_PROMPT:-}" ]]; then
+  export TERM=dumb
+fi
+
+exec npm run dev -- -H 127.0.0.1 -p "$PORT"

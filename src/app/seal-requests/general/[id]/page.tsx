@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation';
 import { ApprovalActions } from '@/app/components/approval-actions';
 import { AttachmentsPanel } from '@/app/components/attachments-panel';
+import { loadAttachmentPanelExtras } from '@/lib/attachments/analysis-queries';
 import { parseUploadFailed } from '@/lib/attachments/batch';
 import { getAttachments } from '@/lib/attachments/queries';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
@@ -23,6 +24,7 @@ export default async function GeneralSealDetailPage({
   const detail = await getGeneralSealDetail(id);
   if (!detail) notFound();
   const [employee, attachments] = await Promise.all([getCurrentEmployee(), getAttachments('general_seal_request', id)]);
+  const attachmentExtras = await loadAttachmentPanelExtras(attachments.map((a) => a.id));
   const { isCurrentApprover } = sealAccess(detail, employee?.id);
 
   return (
@@ -68,7 +70,12 @@ export default async function GeneralSealDetailPage({
       <ApprovalTimeline formType="general_seal_request" formId={detail.id} />
 
       <div className="print:hidden">
-        <AttachmentsPanel formType="general_seal_request" formId={id} attachments={attachments} />
+        <AttachmentsPanel
+          formType="general_seal_request"
+          formId={id}
+          attachments={attachments}
+          extras={attachmentExtras}
+        />
       </div>
 
       <SealReminderNote text="完成線上簽核流程後，請印出核准之用印申請單，連同原始附件提供給相關單位用印/簽名，謝謝。" />
