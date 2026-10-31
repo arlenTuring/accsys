@@ -72,6 +72,7 @@ describe('migrated forms are ordinary designer forms', () => {
         'acceptance',
         'expense_request',
         'standalone_expense_request',
+        'business_trip',
       ].sort()
     );
   });

@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { extractInvoiceFromText } from './invoice-check';
+import { describe, expect, it, vi } from 'vitest';
+import { extractInvoiceFromText, runInvoiceCheckOnBytes } from './invoice-check';
+
+vi.mock('@/lib/company/service', () => ({ getActiveCompanyProfile: async () => null }));
 
 describe('extractInvoiceFromText', () => {
   it('extracts buyer and seller without confusing them', () => {
@@ -19,5 +21,19 @@ describe('extractInvoiceFromText', () => {
     const r = extractInvoiceFromText('RECEIPT 收據 NO_BUYER');
     expect(r.documentKind).toBe('receipt');
     expect(r.buyerTaxId).toBeNull();
+  });
+});
+
+describe('runInvoiceCheckOnBytes', () => {
+  it('does not send an Office file to the model, and says so', async () => {
+    const vision = await import('@/lib/attachments/invoice-vision');
+    const spy = vi.spyOn(vision, 'extractInvoiceWithVision');
+    const r = await runInvoiceCheckOnBytes({
+      bytes: new Uint8Array([0x50, 0x4b, 0x03, 0x04]),
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    expect(spy).not.toHaveBeenCalled();
+    expect(r.overallStatus).toBe('analysis_failed');
+    expect(r.summary).toContain('PDF 或照片');
   });
 });

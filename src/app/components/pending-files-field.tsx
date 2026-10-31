@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { BATCH_FILE_MAX_BYTES, BATCH_TOTAL_MAX_BYTES } from '@/lib/attachments/batch';
-import { optimizeImageForUpload } from '@/lib/attachments/client-image-optimize';
 import { formatBytesLabel } from '@/lib/attachments/policy';
 import { MAX_ATTACHMENTS_PER_FORM } from '@/lib/attachments/validate';
 
@@ -77,14 +76,11 @@ export function PendingFilesField({
     setBusy(true);
     try {
       const next = [...files];
-      let optimizedCount = 0;
-      for (const raw of incomingList) {
-        if (!ALLOWED_EXT.test(raw.name)) {
-          setError(`「${raw.name}」格式不支援（PDF／JPEG／PNG／WebP／HEIC／Office）`);
+      for (const f of incomingList) {
+        if (!ALLOWED_EXT.test(f.name)) {
+          setError(`「${f.name}」格式不支援（PDF／JPEG／PNG／WebP／HEIC／Office）`);
           continue;
         }
-        const { file: f, optimized } = await optimizeImageForUpload(raw);
-        if (optimized) optimizedCount += 1;
         if (f.size > BATCH_FILE_MAX_BYTES) {
           setError(`「${f.name}」超過 ${formatBytesLabel(BATCH_FILE_MAX_BYTES)} 上限（${fmtFileSize(f.size)}）`);
           continue;
@@ -99,9 +95,6 @@ export function PendingFilesField({
         return;
       }
       onChange(next);
-      if (optimizedCount > 0) {
-        setNote(`已自動降低 ${optimizedCount} 張照片解析度以節省儲存空間`);
-      }
     } finally {
       setBusy(false);
       if (inputRef.current) inputRef.current.value = '';
@@ -195,7 +188,7 @@ export function PendingFilesField({
       <p className="mt-1 text-xs text-td-muted">
         格式：PDF、JPEG、PNG、WebP、HEIC／HEIF、DOCX／XLSX／PPTX（單檔{' '}
         {formatBytesLabel(BATCH_FILE_MAX_BYTES)} 以內，每張表單最多 {maxFiles} 個；單次合計{' '}
-        {formatBytesLabel(BATCH_TOTAL_MAX_BYTES)}）。大圖會在上傳前自動降低解析度。
+        {formatBytesLabel(BATCH_TOTAL_MAX_BYTES)}）。檔案以原檔保存。
       </p>
     </>
   );

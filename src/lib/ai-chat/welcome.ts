@@ -24,8 +24,8 @@ export type WelcomeSummary = {
 export async function buildWelcomeSummary(conversationId: string): Promise<WelcomeSummary> {
   const inbox = await loadAssistantInbox(8);
   const fetchedAt = inbox.fetchedAt;
-  const pendingCount = inbox.pendingApprovals.length + (inbox.hasMorePending ? 1 : 0);
-  const inProgressCount = inbox.myInProgress.length + (inbox.hasMoreMine ? 1 : 0);
+  const pendingCount = inbox.pendingTotal;
+  const inProgressCount = inbox.mineTotal;
 
   if (inbox.loadError) {
     return {
@@ -47,15 +47,7 @@ export async function buildWelcomeSummary(conversationId: string): Promise<Welco
     };
   }
 
-  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
-  const progressTodayCount = inbox.myInProgress.filter((i) => {
-    if (!i.waitingSinceIso) return false;
-    try {
-      return new Date(i.waitingSinceIso).toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' }) === today;
-    } catch {
-      return false;
-    }
-  }).length;
+  const progressTodayCount = inbox.progressToday;
 
   const timeLabel = new Date(fetchedAt).toLocaleString('zh-TW', {
     timeZone: 'Asia/Taipei',
@@ -66,16 +58,17 @@ export async function buildWelcomeSummary(conversationId: string): Promise<Welco
   });
 
   let text: string;
-  if (pendingCount === 0 && inProgressCount === 0) {
+  if (pendingCount === 0 && inProgressCount === 0 && progressTodayCount === 0) {
     text = `你好，目前沒有待簽核或進行中的單據。（資料時間 ${timeLabel}）`;
   } else {
     const parts: string[] = [];
     if (pendingCount > 0) parts.push(`你目前有 ${pendingCount} 張單待簽核`);
     if (inProgressCount > 0) {
       let mine = `你送出的 ${inProgressCount} 張單仍在處理`;
-      if (progressTodayCount > 0) mine += `，其中 ${progressTodayCount} 張今天有新進度`;
+      if (inbox.returnedTotal > 0) mine += `，其中 ${inbox.returnedTotal} 張被退回待補件`;
       parts.push(mine);
     }
+    if (progressTodayCount > 0) parts.push(`今天有 ${progressTodayCount} 張單有新進度`);
     text = `${parts.join('；')}。（資料時間 ${timeLabel}）`;
   }
 

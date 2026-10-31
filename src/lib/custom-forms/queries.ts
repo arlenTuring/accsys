@@ -29,6 +29,7 @@ import { expectedPaymentDateOf, paymentBatchOf, type PaymentBatch } from './paym
 import { ruleHolds, sourceOptions, type SourceOption } from './source';
 import type { TableValue } from './validate';
 import { canFile, parseVisibility } from './visibility';
+import { projectUsableBy } from '@/lib/projects/access';
 
 const FORM = 'custom' as const;
 
@@ -189,7 +190,9 @@ export async function getPickerOptions(schema: FormSchema, sourceCtx?: SourceCon
       ? db.select({ id: departments.id, name: departments.name }).from(departments).where(eq(departments.active, true)).orderBy(asc(departments.sortOrder), asc(departments.name))
       : [],
     types.has('budget_code') ? budgetCodeLabels() : [],
-    types.has('project') ? db.select({ id: projects.id, code: projects.code, name: projects.name }).from(projects).orderBy(asc(projects.code)) : [],
+    types.has('project')
+      ? db.select({ id: projects.id, code: projects.code, name: projects.name }).from(projects).where(projectUsableBy(sourceCtx?.applicantId)).orderBy(asc(projects.code))
+      : [],
     types.has('supplier') ? db.select({ id: suppliers.id, label: suppliers.name }).from(suppliers).orderBy(asc(suppliers.name)) : [],
     types.has('asset') ? assetOptions() : [],
     link && sourceCtx ? sourceOptions(db, sourceCtx, link, sourceCtx.applicantId, sourceCtx.current ?? undefined) : [],
@@ -425,7 +428,7 @@ async function followUpsOf(
 }
 
 /** Ids referenced by reference fields and employee / asset table columns, resolved to display names. */
-async function referenceLabels(fields: FieldDef[], data: Record<string, unknown>): Promise<Record<string, string>> {
+export async function referenceLabels(fields: FieldDef[], data: Record<string, unknown>): Promise<Record<string, string>> {
   const ids = {
     employee: [] as string[],
     department: [] as string[],

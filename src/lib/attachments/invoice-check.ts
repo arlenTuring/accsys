@@ -32,6 +32,8 @@ export type InvoicePageResult = {
   compareDetail: string;
   evidence: InvoiceFieldEvidence[];
   notes?: string;
+  /** Vision model's confidence that the buyer tax id field was legible. */
+  buyerConfidence?: 'high' | 'medium' | 'low' | 'none';
 };
 
 export type InvoiceCheckResult = {
@@ -43,6 +45,8 @@ export type InvoiceCheckResult = {
   pages: InvoicePageResult[];
   /** True when vision model was used (not just binary text sniff). */
   usedVision?: boolean;
+  /** Company profile version the buyer tax id was compared against. */
+  companyProfileVersion?: number | null;
 };
 
 /** Deterministic extractor for fixture PDFs / text that embed TEST markers. */
@@ -97,7 +101,7 @@ function finalizePage(
     companyTaxId: company?.taxId,
     companyConfigured: Boolean(company),
     extractedBuyerTaxId: page.buyerTaxId,
-    confidence: page.notes?.includes('不清楚') ? 'low' : page.buyerTaxId ? 'high' : 'medium',
+    confidence: page.buyerConfidence ?? (page.notes?.includes('不清楚') ? 'low' : page.buyerTaxId ? 'high' : 'medium'),
     documentKind: page.documentKind,
     analysisOk: true,
     analysisDone: true,
@@ -143,6 +147,19 @@ export async function runInvoiceCheckOnBytes(input: {
     };
   }
 
+  // The model reads pictures and PDFs only; an Office file would just be refused.
+  if (!input.forceText && !input.mimeType.startsWith('image/') && input.mimeType !== 'application/pdf') {
+    return {
+      complete: false,
+      pagesAnalysed: 0,
+      pagesTotal: null,
+      pages: [],
+      overallStatus: 'analysis_failed',
+      summary: '此格式不做 AI 發票檢查；需要比對統編時，請改傳 PDF 或照片',
+      usedVision: false,
+    };
+  }
+
   let page: InvoicePageResult | null = null;
   let usedVision = false;
 
@@ -164,10 +181,7 @@ export async function runInvoiceCheckOnBytes(input: {
 
     const isImage = input.mimeType.startsWith('image/');
     if (isImage || !sniffUseful) {
-      const vision = await extractInvoiceWithVision({
-        bytes: input.bytes,
-        mimeType: input.mimeType.startsWith('image/') ? input.mimeType : 'image/jpeg',
-      });
+      const vision = await extractInvoiceWithVision({ bytes: input.bytes, mimeType: input.mimeType });
       if (vision.ok) {
         usedVision = true;
         const v = vision.data;
@@ -184,6 +198,7 @@ export async function runInvoiceCheckOnBytes(input: {
           currency: v.currency,
           compareStatus: 'analysis_pending',
           compareDetail: '',
+          buyerConfidence: v.confidence === 'none' && !v.buyerTaxId ? 'medium' : v.confidence,
           evidence: [
             ...(v.buyerTaxId
               ? [
@@ -236,6 +251,7 @@ export async function runInvoiceCheckOnBytes(input: {
     overallStatus: page.compareStatus,
     summary: page.compareDetail || page.notes || '已完成檢查',
     usedVision,
+    companyProfileVersion: company?.version ?? null,
   };
 }
 

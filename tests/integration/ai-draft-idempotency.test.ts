@@ -8,11 +8,8 @@ import { resolveAdminDatabaseUrl } from './test-database-url';
  */
 
 const adminUrl = (() => {
-  try {
-    return resolveAdminDatabaseUrl();
-  } catch {
-    return null;
-  }
+  const resolved = resolveAdminDatabaseUrl(process.env);
+  return resolved.ok ? resolved.url : null;
 })();
 
 describe.skipIf(!adminUrl)('ai draft create idempotency', () => {

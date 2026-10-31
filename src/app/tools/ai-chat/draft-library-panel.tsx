@@ -18,6 +18,7 @@ export function DraftLibraryPanel({ onOpenDraft }: Props) {
       status: string;
       version: number;
       updatedAt: string;
+      summary: string;
     }>
   >([]);
   const [total, setTotal] = useState(0);
@@ -97,8 +98,10 @@ export function DraftLibraryPanel({ onOpenDraft }: Props) {
                 }
               >
                 <div className="text-sm font-medium text-td-blue-dark">{item.title}</div>
+                {item.summary && <div className="text-xs text-td-blue-dark">{item.summary}</div>}
                 <div className="text-xs text-td-muted">
-                  {item.formKey} · {item.status} · v{item.version}
+                  {item.formKey} · {item.status} · v{item.version} · 更新於{' '}
+                  {new Date(item.updatedAt).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                 </div>
               </button>
               {item.status === 'draft' && (

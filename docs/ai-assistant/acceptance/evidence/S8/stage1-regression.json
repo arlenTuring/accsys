@@ -1,0 +1,1028 @@
+{
+  "when": "2026-10-31T07:09:24.169Z",
+  "results": [
+    {
+      "case": "A1",
+      "variant": 1,
+      "conversationId": "f09914bb-9b7e-4ccf-8ffd-6c3f79896a07",
+      "turnId": "fd4abb90-6782-496d-98b5-f053fd229d10",
+      "message": "幫我建立 2026 年 11 月 4 日到台中拜訪客戶的公出申請，上午九點到下午六點，掛在測試專案 A，原因是設備驗收。",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您建立「公出差旅申請單」草稿，填寫內容如下：\n\n* **出差起始時間**：2026-11-04 09:00\n* **出差結束時間**：2026-11-04 18:00\n* **出差地點**：台中\n* **出差事由**：拜訪客戶，進行設備驗收\n* **關聯專案**：T-PRJ-A 測試專案 A\n\n目前必填欄位均已填寫完畢。請您確認內容無誤後，於系統畫面右側進行送出。",
+      "calls": [
+        "r0:get_form_spec",
+        "r1:create_application_draft"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "0f35c60b-8d2e-4f3f-ada8-3ba3c8aa980a",
+          "formKey": "business-trip",
+          "version": 1,
+          "data": {
+            "purpose": "拜訪客戶，進行設備驗收",
+            "location": "台中",
+            "projectId": "30000000-0000-0000-0000-00000000000a",
+            "tripEndAt": "2026-11-04T18:00",
+            "tripStartAt": "2026-11-04T09:00"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A2",
+      "variant": 1,
+      "conversationId": "f09914bb-9b7e-4ccf-8ffd-6c3f79896a07",
+      "turnId": "7d9ff84e-a2ae-4a32-a427-83a9b08bc4fa",
+      "message": "結束時間改晚上七點",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您更新「公出差旅申請單」草稿：\n\n* **出差結束時間**：2026-11-04 19:00\n\n目前必填欄位均已齊備，請於畫面右側確認無誤後即可送出。",
+      "calls": [
+        "r0:update_application_draft"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "0f35c60b-8d2e-4f3f-ada8-3ba3c8aa980a",
+          "formKey": "business-trip",
+          "version": 2,
+          "data": {
+            "purpose": "拜訪客戶，進行設備驗收",
+            "location": "台中",
+            "projectId": "30000000-0000-0000-0000-00000000000a",
+            "tripEndAt": "2026-11-04T19:00",
+            "tripStartAt": "2026-11-04T09:00"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A8",
+      "variant": 1,
+      "conversationId": "f09914bb-9b7e-4ccf-8ffd-6c3f79896a07",
+      "turnId": "6f70899f-b3c3-4059-a648-f855f2408a78",
+      "message": "地點改成台中市西屯區",
+      "askedFirst": false,
+      "fault": true,
+      "ok": true,
+      "why": "ok",
+      "reply": "更新失敗，系統後端儲存時發生錯誤，地點尚未變更（目前仍維持為「台中」）。請稍後再試一次，或直接在畫面右側手動修改地點。",
+      "calls": [
+        "r0:update_application_draft"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "0f35c60b-8d2e-4f3f-ada8-3ba3c8aa980a",
+          "formKey": "business-trip",
+          "version": 2,
+          "data": {
+            "purpose": "拜訪客戶，進行設備驗收",
+            "location": "台中",
+            "projectId": "30000000-0000-0000-0000-00000000000a",
+            "tripEndAt": "2026-11-04T19:00",
+            "tripStartAt": "2026-11-04T09:00"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A8-retry",
+      "variant": 1,
+      "conversationId": "f09914bb-9b7e-4ccf-8ffd-6c3f79896a07",
+      "turnId": "43290795-d66f-41f7-9c73-b7309c2889c5",
+      "message": "剛剛沒存成功的話，再試一次",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您更新「公出差旅申請單」草稿：\n\n* **出差地點**：台中市西屯區\n\n目前必填欄位均已齊備，請於畫面右側確認內容無誤後即可送出。",
+      "calls": [
+        "r0:update_application_draft"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "0f35c60b-8d2e-4f3f-ada8-3ba3c8aa980a",
+          "formKey": "business-trip",
+          "version": 3,
+          "data": {
+            "purpose": "拜訪客戶，進行設備驗收",
+            "location": "台中市西屯區",
+            "projectId": "30000000-0000-0000-0000-00000000000a",
+            "tripEndAt": "2026-11-04T19:00",
+            "tripStartAt": "2026-11-04T09:00"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A3",
+      "variant": 1,
+      "conversationId": "9540e0ce-f0a6-448f-95ee-1e21ad64092f",
+      "turnId": "75116db4-499a-4439-8a39-b65e33ad5c47",
+      "message": "幫我開一張公出申請，11 月 6 日要去新竹",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您建立「公出差旅申請單」草稿。\n\n- **已填入**：\n  - 出差地點：新竹\n\n- **尚缺必填項目**：\n  - 出差起始時間（2026-11-06）\n  - 出差結束時間（2026-11-06）\n  - 出差事由\n\n請透過下方卡片直接填寫補充，或直接回覆我時間與事由。",
+      "calls": [
+        "r0:get_form_spec",
+        "r1:create_application_draft",
+        "r2:propose_field_form"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "4a10f3d0-ad8b-475f-949f-7ee5c7134f2c",
+          "formKey": "business-trip",
+          "version": 1,
+          "data": {
+            "location": "新竹"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A4",
+      "variant": 1,
+      "conversationId": "dbe4c0fd-3042-484f-811f-4b3e629e499a",
+      "turnId": "518c209f-7e7a-4f0a-849a-709a3dae75d3",
+      "message": "幫我建立 11 月 10 日到高雄的公出申請，上午 9 點到下午 5 點，原因是客戶會議，掛在測試專案",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您建立「公出差旅申請單」草稿，已填入資訊如下：\n\n* **出差起始時間**：2026-11-10 09:00\n* **出差結束時間**：2026-11-10 17:00\n* **出差地點**：高雄\n* **出差事由**：客戶會議\n\n---\n\n**待確認事項**：\n「測試專案」比對到多個相符項目，請點選您要關聯的專案：",
+      "calls": [
+        "r0:get_form_spec",
+        "r1:create_application_draft",
+        "r2:propose_choices"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "b82d284d-6383-42f7-b133-4a58231f3868",
+          "formKey": "business-trip",
+          "version": 1,
+          "data": {
+            "purpose": "客戶會議",
+            "location": "高雄",
+            "tripEndAt": "2026-11-10T17:00",
+            "tripStartAt": "2026-11-10T09:00"
+          }
+        }
+      ]
+    },
+    {
+      "case": "setup",
+      "variant": 1,
+      "conversationId": "0339853b-16ab-452f-a8e7-088dc86e228c",
+      "turnId": "7cdcc301-4793-43b2-b672-f3551b62ab6f",
+      "message": "幫我開一張差旅報支單：出差 2026-11-04 到 2026-11-04，事由台中設備驗收。",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您建立「出差報告暨旅費報支單」草稿。\n\n### 已儲存欄位\n* **出差起始日**：2026-11-04\n* **出差結束日**：2026-11-04\n* **出差事由**：台中設備驗收\n\n---\n\n### 尚缺必填項目\n1. **本人核准之公出差旅單編號**：請從下方選擇器點選要關聯與附加的已核准公出單。\n2. **預算來源**：請提供預算科目或所屬專案／部門。\n3. **同行者名字及核准之公出差旅單編號**：若無同行者請填「無」。\n4. **出差報告明細**：出差地、時間區段及行程說明。\n5. **出差旅費結算明細**：費用類別（如交通費、膳雜費等）、摘要與金額。",
+      "calls": [
+        "r0:get_form_spec",
+        "r1:create_application_draft",
+        "r2:propose_approved_document_picker"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "a2e7f849-da80-4596-b055-fc9c75bb6d1a",
+          "formKey": "travel-expense",
+          "version": 1,
+          "data": {
+            "purpose": "台中設備驗收",
+            "tripEndDate": "2026-11-04",
+            "tripStartDate": "2026-11-04"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A5",
+      "variant": 1,
+      "conversationId": "0339853b-16ab-452f-a8e7-088dc86e228c",
+      "turnId": "983e9918-34da-47a4-917a-c6d79075af49",
+      "message": "新增交通費 300 元，再加停車費 120 元",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您的「出差報告暨旅費報支單」草稿新增 2 筆旅費結算明細：\n\n### 已儲存明細（出差旅費結算）\n1. **交通費**：2026-11-04｜新臺幣 300 元（類別：交通費）\n2. **停車費**：2026-11-04｜新臺幣 120 元（類別：其他）\n* **目前合計**：新臺幣 420 元\n\n---\n\n### 尚缺必填項目\n1. **本人核准之公出差旅單編號**（可關聯並附加已核准公出單 PDF）\n2. **預算來源**（專案或部門預算科目）\n3. **同行者名字及核准之公出差旅單編號**（若無同行者請填「無」）\n4. **出差報告**（日期、出差地、行程說明、出差時間區段）",
+      "calls": [
+        "r0:update_application_draft"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "a2e7f849-da80-4596-b055-fc9c75bb6d1a",
+          "formKey": "travel-expense",
+          "version": 2,
+          "data": {
+            "purpose": "台中設備驗收",
+            "costItems": {
+              "rows": [
+                {
+                  "_rid": "ba85165b",
+                  "amount": "300.00",
+                  "mileage": null,
+                  "summary": "交通費",
+                  "category": "交通費",
+                  "currency": "TWD",
+                  "toStation": null,
+                  "twdAmount": "300.00",
+                  "expenseDate": "2026-11-04",
+                  "fromStation": null,
+                  "exchangeRate": 1
+                },
+                {
+                  "_rid": "e180b814",
+                  "amount": "120.00",
+                  "mileage": null,
+                  "summary": "停車費",
+                  "category": "其他",
+                  "currency": "TWD",
+                  "toStation": null,
+                  "twdAmount": "120.00",
+                  "expenseDate": "2026-11-04",
+                  "fromStation": null,
+                  "exchangeRate": 1
+                }
+              ],
+              "total": "420.00"
+            },
+            "tripEndDate": "2026-11-04",
+            "tripStartDate": "2026-11-04"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A6",
+      "variant": 1,
+      "conversationId": "0339853b-16ab-452f-a8e7-088dc86e228c",
+      "turnId": "fa0f1e29-7315-463e-9834-c654e8652d04",
+      "message": "把停車費改成 150 元",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已更新「出差報告暨旅費報支單」草稿中的停車費金額：\n\n### 已儲存明細（出差旅費結算）\n1. **交通費**：2026-11-04｜新臺幣 300 元（類別：交通費）\n2. **停車費**：2026-11-04｜新臺幣 150 元（類別：其他）\n* **最新合計**：新臺幣 450 元\n\n---\n\n### 尚缺必填項目\n1. **本人核准之公出差旅單編號**\n2. **預算來源**（專案或部門預算科目）\n3. **同行者名字及核准之公出差旅單編號**（無同行者請填「無」）\n4. **出差報告**（日期、出差地、行程說明、出差時間區段）",
+      "calls": [
+        "r0:update_application_draft"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "a2e7f849-da80-4596-b055-fc9c75bb6d1a",
+          "formKey": "travel-expense",
+          "version": 3,
+          "data": {
+            "purpose": "台中設備驗收",
+            "costItems": {
+              "rows": [
+                {
+                  "_rid": "ba85165b",
+                  "amount": "300.00",
+                  "mileage": null,
+                  "summary": "交通費",
+                  "category": "交通費",
+                  "currency": "TWD",
+                  "toStation": null,
+                  "twdAmount": "300.00",
+                  "expenseDate": "2026-11-04",
+                  "fromStation": null,
+                  "exchangeRate": 1
+                },
+                {
+                  "_rid": "e180b814",
+                  "amount": "150.00",
+                  "mileage": null,
+                  "summary": "停車費",
+                  "category": "其他",
+                  "currency": "TWD",
+                  "toStation": null,
+                  "twdAmount": "150.00",
+                  "expenseDate": "2026-11-04",
+                  "fromStation": null,
+                  "exchangeRate": 1
+                }
+              ],
+              "total": "450.00"
+            },
+            "tripEndDate": "2026-11-04",
+            "tripStartDate": "2026-11-04"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A7",
+      "variant": 1,
+      "conversationId": "0339853b-16ab-452f-a8e7-088dc86e228c",
+      "turnId": "e5afea49-ccd5-4605-bdfb-80247ddd199a",
+      "message": "刪掉交通費",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您從「出差報告暨旅費報支單」草稿中刪除交通費明細。\n\n### 目前出差旅費結算明細\n1. **停車費**：2026-11-04｜新臺幣 150 元（類別：其他）\n* **最新合計**：新臺幣 150 元\n\n---\n\n### 尚缺必填項目\n1. **預算來源**（請提供專案簡稱或部門預算科目）\n2. **本人核准之公出差旅單編號**\n3. **同行者名字及核准之公出差旅單編號**（無同行者請填「無」）\n4. **出差報告**（日期、出差地、行程說明、出差時間區段）",
+      "calls": [
+        "r0:update_application_draft"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "a2e7f849-da80-4596-b055-fc9c75bb6d1a",
+          "formKey": "travel-expense",
+          "version": 4,
+          "data": {
+            "purpose": "台中設備驗收",
+            "costItems": {
+              "rows": [
+                {
+                  "_rid": "e180b814",
+                  "amount": "150.00",
+                  "mileage": null,
+                  "summary": "停車費",
+                  "category": "其他",
+                  "currency": "TWD",
+                  "toStation": null,
+                  "twdAmount": "150.00",
+                  "expenseDate": "2026-11-04",
+                  "fromStation": null,
+                  "exchangeRate": 1
+                }
+              ],
+              "total": "150.00"
+            },
+            "tripEndDate": "2026-11-04",
+            "tripStartDate": "2026-11-04"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A1",
+      "variant": 2,
+      "conversationId": "e4db4a50-20d9-4e57-bcdd-300647f938b1",
+      "turnId": "76ddb140-9b12-4b7d-a396-f2c79bfdcecd",
+      "message": "11/4（三）要去台中客戶那邊做設備驗收，早上 9 點出發、傍晚 6 點結束，專案是測試專案 A，幫我開公出單。",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您建立「公出差旅申請單」草稿，填入內容如下：\n\n* **出差起始時間**：2026-11-04 09:00\n* **出差結束時間**：2026-11-04 18:00\n* **出差地點**：台中客戶處\n* **出差事由**：設備驗收\n* **關聯專案**：T-PRJ-A 測試專案 A\n\n目前必填欄位皆已齊全，請確認內容無誤後，於畫面右側按下「送出單據」進行簽核流程。",
+      "calls": [
+        "r0:get_form_spec",
+        "r1:create_application_draft"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "0727d136-77f8-486f-b146-0b9c1f33f9c8",
+          "formKey": "business-trip",
+          "version": 1,
+          "data": {
+            "purpose": "設備驗收",
+            "location": "台中客戶處",
+            "projectId": "30000000-0000-0000-0000-00000000000a",
+            "tripEndAt": "2026-11-04T18:00",
+            "tripStartAt": "2026-11-04T09:00"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A2",
+      "variant": 2,
+      "conversationId": "e4db4a50-20d9-4e57-bcdd-300647f938b1",
+      "turnId": "2f09e8e5-b893-4e76-a8b9-6035600db159",
+      "message": "回程晚一點，改成 19:00 結束",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您更新「公出差旅申請單」草稿：\n\n* **出差結束時間**：2026-11-04 19:00\n\n目前必填欄位皆已齊全，確認無誤後請於畫面右側按下「送出單據」。",
+      "calls": [
+        "r0:update_application_draft"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "0727d136-77f8-486f-b146-0b9c1f33f9c8",
+          "formKey": "business-trip",
+          "version": 2,
+          "data": {
+            "purpose": "設備驗收",
+            "location": "台中客戶處",
+            "projectId": "30000000-0000-0000-0000-00000000000a",
+            "tripEndAt": "2026-11-04T19:00",
+            "tripStartAt": "2026-11-04T09:00"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A3",
+      "variant": 2,
+      "conversationId": "34de5dc3-4915-4150-8a7b-545dfc091e3c",
+      "turnId": "80b22e5c-7152-4859-ae88-e7430e429f59",
+      "message": "下週五我要出差到新竹，先幫我建公出單",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您建立「公出差旅申請單」草稿，已填入：\n- **出差地點**：新竹\n\n下週五日期為 **2026 年 11 月 6 日**。目前尚缺以下必填欄位，請在下方卡片填寫或直接回覆告知：\n1. **出差起始時間**（如 2026-11-06 09:00）\n2. **出差結束時間**（如 2026-11-06 18:00）\n3. **出差事由**",
+      "calls": [
+        "r0:get_form_spec",
+        "r1:create_application_draft",
+        "r2:propose_field_form"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "7340b840-321a-4a84-bd4d-063fe1a90fe1",
+          "formKey": "business-trip",
+          "version": 1,
+          "data": {
+            "location": "新竹"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A4",
+      "variant": 2,
+      "conversationId": "e2781be3-5938-416c-9b7d-751a4423f643",
+      "turnId": "c2b73667-7314-45d8-af87-6ece950d5655",
+      "message": "11/10 去高雄開客戶會議，9:00-17:00，專案是測試那個，幫我開公出單",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您建立「公出差旅申請單」草稿，已填入資訊如下：\n\n- **出差起始時間**：2026-11-10 09:00\n- **出差結束時間**：2026-11-10 17:00\n- **出差地點**：高雄\n- **出差事由**：開客戶會議\n\n目前必填欄位已齊全。另外，查詢到多筆與「測試」相符的專案，請點選您要關聯的專案，或如不需關聯亦可直接在系統右側確認後送出單據。",
+      "calls": [
+        "r0:get_form_spec",
+        "r0:search_projects",
+        "r1:create_application_draft",
+        "r2:propose_choices"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "eac87f5f-bde9-410a-a044-f1467af1f86f",
+          "formKey": "business-trip",
+          "version": 1,
+          "data": {
+            "purpose": "開客戶會議",
+            "location": "高雄",
+            "tripEndAt": "2026-11-10T17:00",
+            "tripStartAt": "2026-11-10T09:00"
+          }
+        }
+      ]
+    },
+    {
+      "case": "setup",
+      "variant": 2,
+      "conversationId": "77e16776-f4aa-4b3d-a075-eda47c068da8",
+      "turnId": "6339ec7c-3237-4299-bd87-ee5dc2164764",
+      "message": "幫我開一張差旅報支單：出差 2026-11-04 到 2026-11-04，事由台中設備驗收。",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您建立「出差報告暨旅費報支單」草稿。\n\n**已儲存資料：**\n- **出差起始日**：2026-11-04\n- **出差結束日**：2026-11-04\n- **出差事由**：台中設備驗收\n\n**尚缺必填項目：**\n1. **本人核准之公出差旅單編號**（您可以直接利用下方的選擇器選取已核准的公出單帶入）\n2. **預算來源**\n3. **同行者名字及核准之公出差旅單編號**（若無同行者請填「無」）\n4. **出差報告明細**（出差地、時間區段、行程說明）\n5. **出差旅費結算明細**（各項費用與金額）\n\n請透過下方選擇器選取公出單，或提供上述資訊以便繼續為您補齊草稿。",
+      "calls": [
+        "r0:get_form_spec",
+        "r1:create_application_draft",
+        "r2:propose_approved_document_picker"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "af837793-e2d9-41c0-9fb3-0334a04176ca",
+          "formKey": "travel-expense",
+          "version": 1,
+          "data": {
+            "purpose": "台中設備驗收",
+            "tripEndDate": "2026-11-04",
+            "tripStartDate": "2026-11-04"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A5",
+      "variant": 2,
+      "conversationId": "77e16776-f4aa-4b3d-a075-eda47c068da8",
+      "turnId": "f18c744c-0fef-4e0c-b04f-273cec56b024",
+      "message": "明細加兩筆：11/4 高鐵交通費 300、同一天停車費 120",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您在「出差報告暨旅費報支單」草稿中新增 2 筆旅費明細：\n\n**已儲存明細（出差旅費結算）：**\n1. **2026-11-04**｜交通費｜高鐵交通費｜新臺幣 300 元\n2. **2026-11-04**｜其他｜停車費｜新臺幣 120 元\n- **旅費合計**：新臺幣 420 元\n\n---\n\n**尚缺必填項目：**\n1. **預算來源**\n2. **本人核准之公出差旅單編號**\n3. **同行者名字及核准之公出差旅單編號**（若無同行者請填「無」）\n4. **出差報告**（日期、出差地、時間區段、行程說明）\n\n請問這趟出差是否有同行者與對應的公出單編號？預算來源與出差報告內容為何？",
+      "calls": [
+        "r0:update_application_draft"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "af837793-e2d9-41c0-9fb3-0334a04176ca",
+          "formKey": "travel-expense",
+          "version": 2,
+          "data": {
+            "purpose": "台中設備驗收",
+            "costItems": {
+              "rows": [
+                {
+                  "_rid": "a94d3e1c",
+                  "amount": "300.00",
+                  "mileage": null,
+                  "summary": "高鐵交通費",
+                  "category": "交通費",
+                  "currency": "TWD",
+                  "toStation": null,
+                  "twdAmount": "300.00",
+                  "expenseDate": "2026-11-04",
+                  "fromStation": null,
+                  "exchangeRate": 1
+                },
+                {
+                  "_rid": "8b33f3f8",
+                  "amount": "120.00",
+                  "mileage": null,
+                  "summary": "停車費",
+                  "category": "其他",
+                  "currency": "TWD",
+                  "toStation": null,
+                  "twdAmount": "120.00",
+                  "expenseDate": "2026-11-04",
+                  "fromStation": null,
+                  "exchangeRate": 1
+                }
+              ],
+              "total": "420.00"
+            },
+            "tripEndDate": "2026-11-04",
+            "tripStartDate": "2026-11-04"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A6",
+      "variant": 2,
+      "conversationId": "77e16776-f4aa-4b3d-a075-eda47c068da8",
+      "turnId": "a5befe42-d483-4094-93b8-e967c7487517",
+      "message": "停車費寫錯了，應該是 150",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您更新「出差報告暨旅費報支單」草稿中的停車費金額：\n\n**已更新明細（出差旅費結算）：**\n1. **2026-11-04**｜交通費｜高鐵交通費｜新臺幣 300 元\n2. **2026-11-04**｜其他｜停車費｜新臺幣 **150** 元\n- **旅費合計**：新臺幣 450 元\n\n---\n\n**尚缺必填項目：**\n1. **預算來源**\n2. **本人核准之公出差旅單編號**\n3. **同行者名字及核准之公出差旅單編號**（若無同行者請填「無」）\n4. **出差報告**（日期、出差地、時間區段、行程說明）",
+      "calls": [
+        "r0:update_application_draft"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "af837793-e2d9-41c0-9fb3-0334a04176ca",
+          "formKey": "travel-expense",
+          "version": 3,
+          "data": {
+            "purpose": "台中設備驗收",
+            "costItems": {
+              "rows": [
+                {
+                  "_rid": "a94d3e1c",
+                  "amount": "300.00",
+                  "mileage": null,
+                  "summary": "高鐵交通費",
+                  "category": "交通費",
+                  "currency": "TWD",
+                  "toStation": null,
+                  "twdAmount": "300.00",
+                  "expenseDate": "2026-11-04",
+                  "fromStation": null,
+                  "exchangeRate": 1
+                },
+                {
+                  "_rid": "8b33f3f8",
+                  "amount": "150.00",
+                  "mileage": null,
+                  "summary": "停車費",
+                  "category": "其他",
+                  "currency": "TWD",
+                  "toStation": null,
+                  "twdAmount": "150.00",
+                  "expenseDate": "2026-11-04",
+                  "fromStation": null,
+                  "exchangeRate": 1
+                }
+              ],
+              "total": "450.00"
+            },
+            "tripEndDate": "2026-11-04",
+            "tripStartDate": "2026-11-04"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A7",
+      "variant": 2,
+      "conversationId": "77e16776-f4aa-4b3d-a075-eda47c068da8",
+      "turnId": "554529e6-cfa9-4fc6-bd3d-f4ee4104647c",
+      "message": "交通費那筆不要了",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您刪除高鐵交通費明細。\n\n**目前明細（出差旅費結算）：**\n1. **2026-11-04**｜其他｜停車費｜新臺幣 150 元\n- **旅費合計**：新臺幣 150 元\n\n---\n\n**尚缺必填項目：**\n1. **預算來源**\n2. **本人核准之公出差旅單編號**\n3. **同行者名字及核准之公出差旅單編號**（若無同行者請填「無」）\n4. **出差報告**（日期、出差地、時間區段、行程說明）",
+      "calls": [
+        "r0:update_application_draft"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "af837793-e2d9-41c0-9fb3-0334a04176ca",
+          "formKey": "travel-expense",
+          "version": 4,
+          "data": {
+            "purpose": "台中設備驗收",
+            "costItems": {
+              "rows": [
+                {
+                  "_rid": "8b33f3f8",
+                  "amount": "150.00",
+                  "mileage": null,
+                  "summary": "停車費",
+                  "category": "其他",
+                  "currency": "TWD",
+                  "toStation": null,
+                  "twdAmount": "150.00",
+                  "expenseDate": "2026-11-04",
+                  "fromStation": null,
+                  "exchangeRate": 1
+                }
+              ],
+              "total": "150.00"
+            },
+            "tripEndDate": "2026-11-04",
+            "tripStartDate": "2026-11-04"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A1",
+      "variant": 3,
+      "conversationId": "20d5a125-fac8-4b5c-a77c-454516e5013d",
+      "turnId": "e30fedf5-38cd-445c-9a20-96f7a7c8668a",
+      "message": "請幫我申請公出：日期 2026-11-04，時間 09:00 到 18:00，地點台中（拜訪客戶），事由設備驗收，專案 T-PRJ-A。",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您建立「公出差旅申請單」草稿，填寫內容如下：\n\n* **出差時間**：2026-11-04 09:00 至 2026-11-04 18:00\n* **出差地點**：台中（拜訪客戶）\n* **出差事由**：設備驗收\n* **關聯專案**：T-PRJ-A 測試專案 A\n\n目前必填欄位已齊全。請在畫面右側確認資料無誤後，親自點擊「送出」完成申請。",
+      "calls": [
+        "r0:get_form_spec",
+        "r1:create_application_draft"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "6bfa8190-b017-4dfc-80ae-a556b24dd7df",
+          "formKey": "business-trip",
+          "version": 1,
+          "data": {
+            "purpose": "設備驗收",
+            "location": "台中（拜訪客戶）",
+            "projectId": "30000000-0000-0000-0000-00000000000a",
+            "tripEndAt": "2026-11-04T18:00",
+            "tripStartAt": "2026-11-04T09:00"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A2",
+      "variant": 3,
+      "conversationId": "20d5a125-fac8-4b5c-a77c-454516e5013d",
+      "turnId": "8a81c208-8eb9-4ecd-b4e4-5a26a13ea372",
+      "message": "把出差結束時間調整為當天下午 7 點",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您將「公出差旅申請單」的**出差結束時間**調整為 **2026-11-04 19:00**。\n\n目前必填欄位皆已齊全，請至右側確認內容無誤後點擊「送出」完成申請。",
+      "calls": [
+        "r0:update_application_draft"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "6bfa8190-b017-4dfc-80ae-a556b24dd7df",
+          "formKey": "business-trip",
+          "version": 2,
+          "data": {
+            "purpose": "設備驗收",
+            "location": "台中（拜訪客戶）",
+            "projectId": "30000000-0000-0000-0000-00000000000a",
+            "tripEndAt": "2026-11-04T19:00",
+            "tripStartAt": "2026-11-04T09:00"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A3",
+      "variant": 3,
+      "conversationId": "9b48f586-c2b6-4824-8ef0-f4463ed9c4ff",
+      "turnId": "3ece837a-26b3-4193-a77f-5da582f456dc",
+      "message": "建立公出申請，地點新竹，日期 2026/11/6，其他晚點再說",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您建立「公出差旅申請單」草稿。\n\n* **已填入**：\n  * 出差地點：新竹\n\n目前系統要求的日期時間格式需包含具體時間（YYYY-MM-DDTHH:mm），因此 2026/11/06 尚未寫入。\n\n* **尚缺必填欄位**：\n  1. 出差起始時間（例如：2026-11-06T09:00）\n  2. 出差結束時間（例如：2026-11-06T18:00）\n  3. 出差事由\n\n您可以在右側畫面補填，或隨時告訴我起始/結束時間與出差事由，我再協助您更新草稿。",
+      "calls": [
+        "r0:get_form_spec",
+        "r1:create_application_draft"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "0f01402b-8225-4311-983c-58ac08a95e59",
+          "formKey": "business-trip",
+          "version": 1,
+          "data": {
+            "location": "新竹"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A4",
+      "variant": 3,
+      "conversationId": "1b841163-9edf-4b63-ac48-2c3a3a4be3d5",
+      "turnId": "f7beb820-1f8a-4f9d-9f5f-d577abba8cd8",
+      "message": "公出申請：2026-11-10 09:00 至 17:00，高雄，客戶會議，專案：測試",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您建立「公出差旅申請單」草稿。\n\n**已填入欄位：**\n- **出差起始時間**：2026-11-10 09:00\n- **出差結束時間**：2026-11-10 17:00\n- **出差地點**：高雄\n- **出差事由**：客戶會議\n\n**待確認項目：**\n- **關聯專案**：「測試」有多筆相符的專案，請從下方選項點選以完成設定。必填欄位已齊全，確認專案後即可在右側檢視並送出單據。",
+      "calls": [
+        "r0:get_form_spec",
+        "r1:create_application_draft",
+        "r2:propose_choices"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "82a93836-dfa1-4c09-8a25-fb5f358ddb9b",
+          "formKey": "business-trip",
+          "version": 1,
+          "data": {
+            "purpose": "客戶會議",
+            "location": "高雄",
+            "tripEndAt": "2026-11-10T17:00",
+            "tripStartAt": "2026-11-10T09:00"
+          }
+        }
+      ]
+    },
+    {
+      "case": "setup",
+      "variant": 3,
+      "conversationId": "30c74fa9-5edf-4f5c-9760-dd6a87e6f8ca",
+      "turnId": "ec4d6a85-07a0-4fdf-b81d-e9c8a09f895d",
+      "message": "幫我開一張差旅報支單：出差 2026-11-04 到 2026-11-04，事由台中設備驗收。",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您建立「**出差報告暨旅費報支單**」草稿。\n\n### 已儲存欄位\n* **出差起始日**：2026-11-04\n* **出差結束日**：2026-11-04\n* **出差事由**：台中設備驗收\n\n---\n\n### 尚缺必填項目\n1. **預算來源**\n2. **本人核准之公出差旅單編號**（您可以直接點擊下方的選擇器選取已核准的單據，系統將為您填入單號並附加 PDF）\n3. **同行者名字及核准之公出差旅單編號**（若無同行者請填「無」）\n4. **出差報告明細**（行程、地點、時間區段）\n5. **出差旅費結算明細**（各項花費項目、金額）",
+      "calls": [
+        "r0:get_form_spec",
+        "r1:create_application_draft",
+        "r2:propose_approved_document_picker"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "a1a5adac-3c00-41e7-80e6-277b56764a1d",
+          "formKey": "travel-expense",
+          "version": 1,
+          "data": {
+            "purpose": "台中設備驗收",
+            "tripEndDate": "2026-11-04",
+            "tripStartDate": "2026-11-04"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A5",
+      "variant": 3,
+      "conversationId": "30c74fa9-5edf-4f5c-9760-dd6a87e6f8ca",
+      "turnId": "b2c14073-7e90-4c3e-bc67-5e393a79d71e",
+      "message": "報支項目幫我記上交通費三百元和停車費一百二十元，日期都是 11/4",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您在「出差旅費結算」新增 2 筆明細：\n\n* **2026-11-04 交通費**：新臺幣 300 元\n* **2026-11-04 停車費**（類別：交通費）：新臺幣 120 元\n* **目前合計**：新臺幣 420 元\n\n---\n\n### 尚缺必填項目\n1. **預算來源**\n2. **本人核准之公出差旅單編號**\n3. **同行者名字及核准之公出差旅單編號**（若無請填「無」）\n4. **出差報告明細**（日期、出差地、行程說明、出差時間區段）",
+      "calls": [
+        "r0:update_application_draft"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "a1a5adac-3c00-41e7-80e6-277b56764a1d",
+          "formKey": "travel-expense",
+          "version": 2,
+          "data": {
+            "purpose": "台中設備驗收",
+            "costItems": {
+              "rows": [
+                {
+                  "_rid": "3a842a31",
+                  "amount": "300.00",
+                  "mileage": null,
+                  "summary": "交通費",
+                  "category": "交通費",
+                  "currency": "TWD",
+                  "toStation": null,
+                  "twdAmount": "300.00",
+                  "expenseDate": "2026-11-04",
+                  "fromStation": null,
+                  "exchangeRate": 1
+                },
+                {
+                  "_rid": "f292fb37",
+                  "amount": "120.00",
+                  "mileage": null,
+                  "summary": "停車費",
+                  "category": "交通費",
+                  "currency": "TWD",
+                  "toStation": null,
+                  "twdAmount": "120.00",
+                  "expenseDate": "2026-11-04",
+                  "fromStation": null,
+                  "exchangeRate": 1
+                }
+              ],
+              "total": "420.00"
+            },
+            "tripEndDate": "2026-11-04",
+            "tripStartDate": "2026-11-04"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A6",
+      "variant": 3,
+      "conversationId": "30c74fa9-5edf-4f5c-9760-dd6a87e6f8ca",
+      "turnId": "5bad242b-c9b6-43c3-8673-6110b0835fbf",
+      "message": "停車那筆金額更正為一百五十元",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您更新「出差旅費結算」明細：\n\n* **停車費**：金額已更正為 **新臺幣 150 元**\n* **目前結算明細**：\n  1. 2026-11-04 交通費：300 元\n  2. 2026-11-04 停車費：150 元\n* **最新合計**：新臺幣 450 元\n\n---\n\n### 尚缺必填項目\n1. **預算來源**\n2. **本人核准之公出差旅單編號**\n3. **同行者名字及核准之公出差旅單編號**（若無請填「無」）\n4. **出差報告明細**（日期、出差地、行程說明、出差時間區段）",
+      "calls": [
+        "r0:update_application_draft"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "a1a5adac-3c00-41e7-80e6-277b56764a1d",
+          "formKey": "travel-expense",
+          "version": 3,
+          "data": {
+            "purpose": "台中設備驗收",
+            "costItems": {
+              "rows": [
+                {
+                  "_rid": "3a842a31",
+                  "amount": "300.00",
+                  "mileage": null,
+                  "summary": "交通費",
+                  "category": "交通費",
+                  "currency": "TWD",
+                  "toStation": null,
+                  "twdAmount": "300.00",
+                  "expenseDate": "2026-11-04",
+                  "fromStation": null,
+                  "exchangeRate": 1
+                },
+                {
+                  "_rid": "f292fb37",
+                  "amount": "150.00",
+                  "mileage": null,
+                  "summary": "停車費",
+                  "category": "交通費",
+                  "currency": "TWD",
+                  "toStation": null,
+                  "twdAmount": "150.00",
+                  "expenseDate": "2026-11-04",
+                  "fromStation": null,
+                  "exchangeRate": 1
+                }
+              ],
+              "total": "450.00"
+            },
+            "tripEndDate": "2026-11-04",
+            "tripStartDate": "2026-11-04"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A7",
+      "variant": 3,
+      "conversationId": "30c74fa9-5edf-4f5c-9760-dd6a87e6f8ca",
+      "turnId": "f21ed402-2fe7-40de-ad57-1bd9721edef0",
+      "message": "把交通費的明細移除",
+      "askedFirst": false,
+      "fault": false,
+      "ok": true,
+      "why": "ok",
+      "reply": "已為您移除「交通費（300 元）」的明細項目。\n\n### 目前出差旅費結算明細\n* **2026-11-04 停車費**：新臺幣 150 元\n* **最新合計**：新臺幣 150 元\n\n---\n\n### 尚缺必填項目\n1. **預算來源**\n2. **本人核准之公出差旅單編號**\n3. **同行者名字及核准之公出差旅單編號**（若無請填「無」）\n4. **出差報告明細**（日期、出差地、行程說明、出差時間區段）",
+      "calls": [
+        "r0:update_application_draft"
+      ],
+      "exhausted": false,
+      "drafts": [
+        {
+          "id": "a1a5adac-3c00-41e7-80e6-277b56764a1d",
+          "formKey": "travel-expense",
+          "version": 4,
+          "data": {
+            "purpose": "台中設備驗收",
+            "costItems": {
+              "rows": [
+                {
+                  "_rid": "f292fb37",
+                  "amount": "150.00",
+                  "mileage": null,
+                  "summary": "停車費",
+                  "category": "交通費",
+                  "currency": "TWD",
+                  "toStation": null,
+                  "twdAmount": "150.00",
+                  "expenseDate": "2026-11-04",
+                  "fromStation": null,
+                  "exchangeRate": 1
+                }
+              ],
+              "total": "150.00"
+            },
+            "tripEndDate": "2026-11-04",
+            "tripStartDate": "2026-11-04"
+          }
+        }
+      ]
+    },
+    {
+      "case": "A3-submit",
+      "variant": 1,
+      "ok": true,
+      "why": "validation",
+      "draftId": "4a10f3d0-ad8b-475f-949f-7ee5c7134f2c"
+    },
+    {
+      "case": "A3-submit",
+      "variant": 2,
+      "ok": true,
+      "why": "validation",
+      "draftId": "7340b840-321a-4a84-bd4d-063fe1a90fe1"
+    },
+    {
+      "case": "A3-submit",
+      "variant": 3,
+      "ok": true,
+      "why": "validation",
+      "draftId": "0f01402b-8225-4311-983c-58ac08a95e59"
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import { getDb } from '@/lib/db';
 import { aiProjectUsage, formSubmissions, projects } from '@/lib/db/schema';
+import { projectUsableBy } from '@/lib/projects/access';
 
 export type ProjectOption = {
   id: string;
@@ -31,7 +32,7 @@ export async function listRecentProjectsForEmployee(
     })
     .from(aiProjectUsage)
     .innerJoin(projects, eq(projects.id, aiProjectUsage.projectId))
-    .where(eq(aiProjectUsage.employeeId, employeeId))
+    .where(and(eq(aiProjectUsage.employeeId, employeeId), projectUsableBy(employeeId)))
     .orderBy(desc(aiProjectUsage.lastUsedAt))
     .limit(limit);
 
@@ -64,7 +65,8 @@ export async function listRecentProjectsForEmployee(
           eq(formSubmissions.applicantEmployeeId, employeeId),
           eq(formSubmissions.filedByEmployeeId, employeeId)
         ),
-        sql`${formSubmissions.projectId} is not null`
+        sql`${formSubmissions.projectId} is not null`,
+        projectUsableBy(employeeId)
       )
     )
     .orderBy(desc(formSubmissions.createdAt))
@@ -94,6 +96,7 @@ export async function listRecentProjectsForEmployee(
       createdAt: projects.createdAt,
     })
     .from(projects)
+    .where(projectUsableBy(employeeId))
     .orderBy(desc(projects.createdAt))
     .limit(limit * 2);
 
@@ -115,6 +118,8 @@ export async function listRecentProjectsForEmployee(
 
 export async function searchProjectsPaged(input: {
   query: string;
+  /** Only projects this employee may use are returned. */
+  employeeId: string;
   limit?: number;
   offset?: number;
 }): Promise<{ projects: Array<{ id: string; code: string; name: string; kind: string | null }>; hasMore: boolean }> {
@@ -128,7 +133,7 @@ export async function searchProjectsPaged(input: {
   const rows = await db
     .select({ id: projects.id, code: projects.code, name: projects.name, kind: projects.kind })
     .from(projects)
-    .where(or(ilike(projects.code, pattern), ilike(projects.name, pattern)))
+    .where(and(or(ilike(projects.code, pattern), ilike(projects.name, pattern)), projectUsableBy(input.employeeId)))
     .orderBy(projects.code)
     .limit(limit + 1)
     .offset(offset);

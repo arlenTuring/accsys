@@ -1,6 +1,8 @@
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
+import { revalidatePath } from 'next/cache';
+import { recordAudit } from '@/lib/audit/record';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
-import * as customActions from '@/lib/custom-forms/actions';
+import * as customService from '@/lib/custom-forms/service';
 import { parseDefinition } from '@/lib/custom-forms/definition';
 import { getPickerOptions } from '@/lib/custom-forms/queries';
 import { allFields, isDisplayOnly, type FormSchema } from '@/lib/custom-forms/schema';
@@ -9,11 +11,13 @@ import { canFile, parseVisibility } from '@/lib/custom-forms/visibility';
 import { getDb } from '@/lib/db';
 import {
   aiApplicationDrafts,
+  aiConversationDraftLinks,
   aiConversations,
   employeeJobRoles,
   employees,
   formDefinitionVersions,
   formDefinitions,
+  formSubmissions,
   jobRoles,
 } from '@/lib/db/schema';
 import { taipeiToday } from '@/lib/taipei-date';
@@ -31,6 +35,9 @@ export type ApplicationDraft = {
   status: 'draft' | 'submitted' | 'abandoned';
   submissionId: string | null;
   createIdempotencyKey: string | null;
+  /** 補件: the returned submission this draft revises. */
+  resubmitOfSubmissionId: string | null;
+  resubmitBaseVersion: number | null;
   updatedAt: Date;
 };
 
@@ -68,6 +75,7 @@ export async function getDraftForOwner(
   return mapDraft(row);
 }
 
+/** Drafts of a conversation: those it created plus those linked into it from elsewhere. */
 export async function listConversationDrafts(
   conversationId: string,
   ownerEmployeeId: string
@@ -79,13 +87,67 @@ export async function listConversationDrafts(
     .from(aiApplicationDrafts)
     .where(
       and(
-        eq(aiApplicationDrafts.conversationId, conversationId),
-        eq(aiApplicationDrafts.ownerEmployeeId, ownerEmployeeId)
+        eq(aiApplicationDrafts.ownerEmployeeId, ownerEmployeeId),
+        or(
+          eq(aiApplicationDrafts.conversationId, conversationId),
+          inArray(
+            aiApplicationDrafts.id,
+            db
+              .select({ id: aiConversationDraftLinks.draftId })
+              .from(aiConversationDraftLinks)
+              .where(eq(aiConversationDraftLinks.conversationId, conversationId))
+          )
+        )
       )
     )
     .orderBy(desc(aiApplicationDrafts.updatedAt))
     .limit(10);
   return rows.map(mapDraft);
+}
+
+/** True when the owner's draft belongs to, or was linked into, this conversation. */
+export async function isDraftInConversation(draftId: string, conversationId: string, ownerEmployeeId: string): Promise<boolean> {
+  const draft = await getDraftForOwner(draftId, ownerEmployeeId);
+  if (!draft) return false;
+  if (draft.conversationId === conversationId) return true;
+  const [link] = await getDb()
+    .select({ id: aiConversationDraftLinks.draftId })
+    .from(aiConversationDraftLinks)
+    .where(and(eq(aiConversationDraftLinks.conversationId, conversationId), eq(aiConversationDraftLinks.draftId, draftId)))
+    .limit(1);
+  return Boolean(link);
+}
+
+/**
+ * Continue the owner's draft in another of the owner's conversations. Both
+ * must belong to the same employee; only open drafts can be linked. Audited.
+ */
+export async function bindDraftToConversation(input: {
+  conversationId: string;
+  draftId: string;
+  ownerEmployeeId: string;
+}): Promise<{ ok: true; draft: ApplicationDraft; linked: boolean } | { ok: false; error: 'not_found' | 'not_editable' }> {
+  await assertConversationOwner(input.conversationId, input.ownerEmployeeId);
+  const draft = await getDraftForOwner(input.draftId, input.ownerEmployeeId);
+  if (!draft) return { ok: false, error: 'not_found' };
+  if (draft.status !== 'draft') return { ok: false, error: 'not_editable' };
+  if (draft.conversationId === input.conversationId) return { ok: true, draft, linked: false };
+  const db = getDb();
+  const inserted = await db
+    .insert(aiConversationDraftLinks)
+    .values({ conversationId: input.conversationId, draftId: input.draftId, ownerEmployeeId: input.ownerEmployeeId })
+    .onConflictDoNothing()
+    .returning({ id: aiConversationDraftLinks.draftId });
+  if (inserted.length > 0) {
+    await recordAudit(db, {
+      actorEmployeeId: input.ownerEmployeeId,
+      action: 'ai_draft.linked',
+      entityType: 'ai_application_draft',
+      entityId: input.draftId,
+      details: { conversationId: input.conversationId, originConversationId: draft.conversationId },
+    });
+  }
+  return { ok: true, draft, linked: inserted.length > 0 };
 }
 
 export async function listDraftLibrary(input: {
@@ -151,6 +213,8 @@ export function mapDraft(row: {
   status: string;
   submissionId: string | null;
   createIdempotencyKey?: string | null;
+  resubmitOfSubmissionId?: string | null;
+  resubmitBaseVersion?: number | null;
   updatedAt: Date;
 }): ApplicationDraft {
   return {
@@ -165,6 +229,8 @@ export function mapDraft(row: {
     status: row.status as ApplicationDraft['status'],
     submissionId: row.submissionId,
     createIdempotencyKey: row.createIdempotencyKey ?? null,
+    resubmitOfSubmissionId: row.resubmitOfSubmissionId ?? null,
+    resubmitBaseVersion: row.resubmitBaseVersion ?? null,
     updatedAt: row.updatedAt,
   };
 }
@@ -399,8 +465,9 @@ export async function loadDraftFormContext(draftId: string, ownerEmployeeId: str
   if (!draft) return null;
 
   const published = await resolvePublishedForm(draft.formDefinitionKey, ownerEmployeeId);
+  // A correction stays on the version the submission was filed under.
   const versionMismatch =
-    Boolean(draft.formVersionId && published?.versionId && draft.formVersionId !== published.versionId);
+    !draft.resubmitOfSubmissionId && Boolean(draft.formVersionId && published?.versionId && draft.formVersionId !== published.versionId);
 
   // Prefer pinned version schema for editing; submit path re-checks published.
   const db = getDb();
@@ -499,13 +566,30 @@ export async function loadDraftFormContext(draftId: string, ownerEmployeeId: str
  * Formal submit: validate draft, require matching published version, call createSubmission.
  * Idempotency key is derived from draft id + version so retries collapse.
  */
+/** 補件: revise the returned submission in place, under its own number. */
+async function resubmitDraft(draft: ApplicationDraft, actorId: string, newFileCount: number) {
+  const submissionId = draft.resubmitOfSubmissionId!;
+  const [before] = await getDb()
+    .select({ formNumber: formSubmissions.formNumber })
+    .from(formSubmissions)
+    .where(eq(formSubmissions.id, submissionId))
+    .limit(1);
+  const done = await customService.reviseSubmission({ id: actorId }, submissionId, 'resubmit', {
+    data: draft.data,
+    expectedVersion: draft.resubmitBaseVersion ?? -1,
+    newFileCount,
+  });
+  if (!done.ok) return { ok: false as const, message: done.error };
+  return { ok: true as const, submissionId, formNumber: before?.formNumber ?? '', replayed: false };
+}
+
 export async function submitApplicationDraft(input: {
   draftId: string;
   ownerEmployeeId: string;
   expectedVersion: number;
   files?: File[];
 }): Promise<
-  | { ok: true; submissionId: string; formNumber: string; formKey: string; replayed?: boolean }
+  | { ok: true; submissionId: string; formNumber: string; formKey: string; replayed?: boolean; copyFailures?: number }
   | { ok: false; error: string; code?: string; draft?: ApplicationDraft }
 > {
   const employee = await getCurrentEmployee();
@@ -518,7 +602,6 @@ export async function submitApplicationDraft(input: {
   if (draft.status === 'submitted' && draft.submissionId) {
     // Idempotent: already submitted.
     const db = getDb();
-    const { formSubmissions } = await import('@/lib/db/schema');
     const [sub] = await db
       .select({ formNumber: formSubmissions.formNumber })
       .from(formSubmissions)
@@ -537,17 +620,19 @@ export async function submitApplicationDraft(input: {
     return { ok: false, error: '草稿已被更新，請重新確認後再送出。', code: 'version_conflict', draft };
   }
 
-  const published = await resolvePublishedForm(draft.formDefinitionKey, input.ownerEmployeeId);
-  if (!published) {
-    return { ok: false, error: '此表單目前不可填寫或已下架。', code: 'form_unavailable' };
-  }
-  if (draft.formVersionId && draft.formVersionId !== published.versionId) {
-    return {
-      ok: false,
-      error: '表單已發布新版本。請重新整理草稿後再確認送出。',
-      code: 'form_version_changed',
-      draft,
-    };
+  if (!draft.resubmitOfSubmissionId) {
+    const published = await resolvePublishedForm(draft.formDefinitionKey, input.ownerEmployeeId);
+    if (!published) {
+      return { ok: false, error: '此表單目前不可填寫或已下架。', code: 'form_unavailable' };
+    }
+    if (draft.formVersionId && draft.formVersionId !== published.versionId) {
+      return {
+        ok: false,
+        error: '表單已發布新版本。請重新整理草稿後再確認送出。',
+        code: 'form_version_changed',
+        draft,
+      };
+    }
   }
 
   const ctx = await loadDraftFormContext(draft.id, input.ownerEmployeeId);
@@ -559,44 +644,38 @@ export async function submitApplicationDraft(input: {
   }
 
   const files = input.files ?? [];
-  const fd = new FormData();
-  const idempotencyKey = `ai-draft:${draft.id}:v${draft.version}`;
-  fd.set('payload', JSON.stringify({ data: draft.data, idempotencyKey }));
-  for (const f of files) fd.append('files', f);
+  const { listDraftSnapshots } = await import('./attach-approved');
+  const { listDraftFiles, readDraftFileBytes } = await import('./attach-staged');
+  const snaps = await listDraftSnapshots(draft.id, input.ownerEmployeeId);
+  const draftFiles = await listDraftFiles(draft.id, input.ownerEmployeeId);
 
-  const result = await customActions.submitCustomForm(draft.formDefinitionKey, fd);
+  // Files already on the draft count towards a required 附件 field: they are
+  // copied onto the submission right after it exists.
+  const newFiles = files.length + snaps.length + draftFiles.length;
+  const result = draft.resubmitOfSubmissionId
+    ? await resubmitDraft(draft, employee.id, newFiles)
+    : await customService.createSubmission({ id: employee.id }, draft.formDefinitionKey, {
+        data: draft.data,
+        idempotencyKey: `ai-draft:${draft.id}:v${draft.version}`,
+        fileCount: newFiles,
+      });
   if (!result.ok) {
-    return { ok: false, error: result.error, code: 'submit_failed' };
-  }
-
-  // Copy linked approved PDF snapshots + chat-staged draft files onto the formal submission.
-  if (!result.replayed) {
-    try {
-      const { listDraftSnapshots } = await import('./attach-approved');
-      const { readSnapshotBytes } = await import('./approved-pdf');
-      const { listDraftFiles, readDraftFileBytes } = await import('./attach-staged');
-      const { uploadAttachmentFor } = await import('@/lib/attachments/service');
-      const actor = { id: input.ownerEmployeeId, role: employee.role };
-      const snaps = await listDraftSnapshots(draft.id, input.ownerEmployeeId);
-      for (const s of snaps) {
-        const file = await readSnapshotBytes(s.snapshotId);
-        if (!file) continue;
-        const blob = new File([new Uint8Array(file.bytes)], s.fileName, { type: 'application/pdf' });
-        await uploadAttachmentFor(actor, 'custom', result.submissionId, blob);
-      }
-      const draftFiles = await listDraftFiles(draft.id, input.ownerEmployeeId);
-      for (const meta of draftFiles) {
-        const file = await readDraftFileBytes(draft.id, meta.id);
-        if (!file) continue;
-        const blob = new File([new Uint8Array(file.bytes)], file.fileName, { type: file.mimeType });
-        await uploadAttachmentFor(actor, 'custom', result.submissionId, blob);
-      }
-    } catch (err) {
-      console.error('[ai-chat] copy draft attachments failed', err);
-      // Submission already created; surface as soft warning via audit only.
+    // A double click on 重新送出: the first request won and already marked the draft.
+    const now = await getDraftForOwner(draft.id, input.ownerEmployeeId);
+    if (now?.status === 'submitted' && now.submissionId) {
+      return { ok: true, submissionId: now.submissionId, formNumber: '', formKey: now.formDefinitionKey, replayed: true };
     }
+    return { ok: false, error: 'error' in result ? result.error : result.message, code: 'submit_failed' };
+  }
+  try {
+    revalidatePath('/approvals');
+    revalidatePath('/f', 'layout');
+  } catch {
+    // No request scope (scripts): nothing to revalidate.
   }
 
+  // Mark the draft first: once the formal submission exists the draft must not
+  // look editable, even if copying attachments below fails.
   const db = getDb();
   await db
     .update(aiApplicationDrafts)
@@ -612,11 +691,51 @@ export async function submitApplicationDraft(input: {
       )
     );
 
+  // Copy linked approved PDF snapshots + draft files onto the formal submission.
+  let copyFailures = 0;
+  if (!result.replayed) {
+    const { readSnapshotBytes } = await import('./approved-pdf');
+    const { readEditOutput } = await import('./file-edits');
+    const { uploadAttachmentFor } = await import('@/lib/attachments/service');
+    const actor = { id: input.ownerEmployeeId, role: employee.role };
+    const put = async (file: File) => {
+      try {
+        const r = await uploadAttachmentFor(actor, 'custom', result.submissionId, file);
+        if (!r.ok) copyFailures += 1;
+      } catch (err) {
+        copyFailures += 1;
+        console.error('[ai-chat] copy draft attachment failed', err instanceof Error ? err.message : err);
+      }
+    };
+    for (const f of files) await put(f);
+    for (const s of snaps) {
+      const file = await readSnapshotBytes(s.snapshotId);
+      if (file) await put(new File([new Uint8Array(file.bytes)], s.fileName, { type: 'application/pdf' }));
+      else copyFailures += 1;
+    }
+    for (const meta of draftFiles) {
+      const file = await readDraftFileBytes(draft.id, meta.id);
+      if (!file) {
+        copyFailures += 1;
+        continue;
+      }
+      // Copies, so later edits of the draft cannot change what was submitted.
+      const edited = file.activeEditId ? await readEditOutput(file.activeEditId, input.ownerEmployeeId) : null;
+      if (edited) {
+        const ext = edited.mimeType === 'image/png' ? 'png' : 'jpg';
+        const name = `${file.fileName.replace(/\.[^.]+$/, '')}（編輯版）.${ext}`;
+        await put(new File([new Uint8Array(edited.bytes)], name, { type: edited.mimeType }));
+      }
+      await put(new File([new Uint8Array(file.bytes)], file.fileName, { type: file.mimeType }));
+    }
+  }
+
   return {
     ok: true,
     submissionId: result.submissionId,
     formNumber: result.formNumber ?? '',
     formKey: draft.formDefinitionKey,
     replayed: result.replayed,
+    copyFailures,
   };
 }

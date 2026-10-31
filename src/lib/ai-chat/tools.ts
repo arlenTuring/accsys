@@ -1,5 +1,8 @@
+import { createHash } from 'node:crypto';
+import { eq } from 'drizzle-orm';
 import { getCurrentEmployee, type CurrentEmployee } from '@/lib/auth/current-employee';
-import { getMyApprovalQueueAll } from '@/lib/approvals/queue';
+import { getDb } from '@/lib/db';
+import { formSubmissions } from '@/lib/db/schema';
 import { getBudgetCodeList } from '@/lib/budget-codes/queries';
 import { getCaseOverview } from '@/lib/cases/queries';
 import { getFilableDefinitions } from '@/lib/custom-forms/queries';
@@ -10,19 +13,18 @@ import { getMyPurchaseOrders } from '@/lib/purchase-orders/queries';
 import { getMyRequests, getPurchaseRequestDetail } from '@/lib/purchase-requests/queries';
 import { getFormApprovalSnapshot, formatWaitingDuration } from './approval-snapshot';
 import type { AiMessageBlock } from './blocks';
-import {
-  createApplicationDraft,
-  describeDraftFields,
-  getDraftForOwner,
-  loadDraftFormContext,
-  patchApplicationDraft,
-} from './drafts';
+import { buildChangeConfirmCard, buildFieldFormCard, buildTripCarryOverCard } from './block-actions';
+import { getDraftForOwner, isDraftInConversation, loadDraftFormContext } from './drafts';
+import { draftStatus, type FillRequest } from './draft-fill';
+import { createDraftWithFill, fillDraft, formSpec, loadFilableForm, type DraftFillResult, type FillOptions } from './draft-work';
 import { attachApprovedSnapshotToDraft } from './attach-approved';
 import { attachStagedFilesToDraft } from './attach-staged';
 import { getOrCreateApprovedPdfSnapshot } from './approved-pdf';
 import { draftOpenResource, type OpenResourceEvent } from './open-resource';
+import { loadAssistantInbox } from './inbox';
 import { previewNudge } from './nudge';
 import { listRecentProjectsForEmployee, searchProjectsPaged } from './projects';
+import { startResubmission } from './resubmit';
 import { searchMyCustomSubmissions } from './submissions-search';
 
 /** Only these names may be executed. Anything else is rejected. */
@@ -41,12 +43,16 @@ export const AI_CHAT_ALLOWED_TOOLS = [
   'get_purchase_request_detail',
   'get_case_overview',
   'get_form_approval_status',
+  'get_form_spec',
   'create_application_draft',
   'describe_application_draft',
-  'patch_application_draft',
+  'update_application_draft',
   'propose_choices',
   'propose_project_picker',
+  'propose_field_form',
+  'propose_draft_changes',
   'propose_nudge',
+  'start_resubmission',
   'search_my_submissions',
   'propose_approved_document_picker',
   'attach_approved_document_pdf',
@@ -56,15 +62,58 @@ export const AI_CHAT_ALLOWED_TOOLS = [
 export type AiToolContext = {
   conversationId: string;
   ownerEmployeeId: string;
+  /**
+   * Resolved session employee for this turn (set by the server-side turn
+   * runner). Falls back to the request session when absent.
+   */
+  actor?: import('@/lib/auth/current-employee').CurrentEmployee;
   /** User turn clientMessageId — used for create_application_draft idempotency. */
   turnId?: string | null;
   /** Ready staged attachment IDs from this user turn (for attach_staged_files_to_draft). */
   recentStagedIds?: string[];
+  /** Test-only draft write fault injection (ignored in production). */
+  fill?: FillOptions;
 };
 
 export type AiChatToolName = (typeof AI_CHAT_ALLOWED_TOOLS)[number];
 
 const ALLOWED = new Set<string>(AI_CHAT_ALLOWED_TOOLS);
+
+const SET_SCHEMA = {
+  type: 'ARRAY',
+  description: '要寫入的欄位。value 一律用字串：日期時間 YYYY-MM-DDTHH:mm（台北時間）、日期 YYYY-MM-DD、金額數字、選項用選項文字、人員／專案等參照用名稱或代碼（後端比對，不唯一會回傳候選）。複選用 values。',
+  items: {
+    type: 'OBJECT',
+    properties: {
+      field: { type: 'STRING', description: '欄位 id' },
+      value: { type: 'STRING' },
+      values: { type: 'ARRAY', items: { type: 'STRING' } },
+    },
+    required: ['field'],
+  },
+} as const;
+
+const ROWS_SCHEMA = {
+  type: 'ARRAY',
+  description: '明細列操作。add 新增一列；update／delete 需 row_id（工作狀態或上次回傳的 row_id）。只送要改的列與欄，其他列不受影響；合計由系統計算。',
+  items: {
+    type: 'OBJECT',
+    properties: {
+      op: { type: 'STRING', enum: ['add', 'update', 'delete'] },
+      table: { type: 'STRING', description: '明細欄位 id' },
+      row_id: { type: 'STRING' },
+      cells: {
+        type: 'ARRAY',
+        items: {
+          type: 'OBJECT',
+          properties: { column: { type: 'STRING', description: '明細欄 id' }, value: { type: 'STRING' } },
+          required: ['column', 'value'],
+        },
+      },
+    },
+    required: ['op', 'table'],
+  },
+} as const;
 
 export const AI_CHAT_TOOL_DECLARATIONS = [
   {
@@ -163,28 +212,32 @@ export const AI_CHAT_TOOL_DECLARATIONS = [
     },
   },
   {
+    name: 'get_form_spec',
+    description:
+      '取得某張可填表單的完整欄位規格（欄位 id、型別、必填、合法選項、日期格式、明細欄、參照欄位）。建立草稿前若不知道欄位 id 就先呼叫；工作狀態已附目前草稿的規格時不必再呼叫。',
+    parameters: {
+      type: 'OBJECT',
+      properties: { form_key: { type: 'STRING', description: '表單 key，例如 business-trip、travel-expense' } },
+      required: ['form_key'],
+    },
+  },
+  {
     name: 'create_application_draft',
     description:
-      '建立申請草稿（非正式送件）。使用者明確要建單或確認表單種類後呼叫；右側會開啟可編輯草稿。',
+      '建立一張「新的」申請草稿並同時寫入已知欄位（非正式送件）。只在使用者要新的一張時呼叫；要修改既有草稿請用 update_application_draft。回傳已儲存的欄位、被拒絕的值（含原因與候選）、尚缺必填。',
     parameters: {
       type: 'OBJECT',
       properties: {
-        form_key: {
-          type: 'STRING',
-          description: '已發布可填表單 key，例如 travel-expense、department-expense',
-        },
-        initial_data_json: {
-          type: 'STRING',
-          description: '可選：已知欄位的 JSON 物件字串（勿填入未確認數字）',
-        },
+        form_key: { type: 'STRING', description: '已發布可填表單 key' },
+        set: SET_SCHEMA,
+        rows: ROWS_SCHEMA,
       },
       required: ['form_key'],
     },
   },
   {
     name: 'describe_application_draft',
-    description:
-      '讀取草稿目前版本、已填資料與可寫欄位 id／型別。更新草稿前必先呼叫，以取得 expected_version 與正確欄位 id。',
+    description: '讀取草稿目前版本、已填資料、明細 row_id、尚缺必填與欄位規格。工作狀態沒有列出的草稿才需要呼叫。',
     parameters: {
       type: 'OBJECT',
       properties: {
@@ -194,23 +247,19 @@ export const AI_CHAT_TOOL_DECLARATIONS = [
     },
   },
   {
-    name: 'patch_application_draft',
+    name: 'update_application_draft',
     description:
-      '把已知欄位寫入右側草稿（權威狀態）。不可只在對話文字宣稱已更新；必須呼叫此工具。表格欄位值為 {rows:[...], total:null}。金額不清楚時不要填。',
+      '修改既有草稿：set 只寫入列出的欄位，其他欄位不變；clear 清空欄位；rows 對明細逐列新增／修改／刪除。expected_version 用工作狀態或上次回傳的 version。回傳已儲存欄位、被拒絕的值、尚缺必填與最新 version。',
     parameters: {
       type: 'OBJECT',
       properties: {
         draft_id: { type: 'STRING', description: '草稿 UUID' },
-        expected_version: {
-          type: 'NUMBER',
-          description: 'describe_application_draft 回傳的 version；不符會衝突',
-        },
-        patch_json: {
-          type: 'STRING',
-          description: '要合併的欄位 JSON，例如 {"tripStartDate":"2026-10-27","reportItems":{"rows":[{...}],"total":null}}',
-        },
+        expected_version: { type: 'NUMBER', description: '草稿目前 version' },
+        set: SET_SCHEMA,
+        clear: { type: 'ARRAY', items: { type: 'STRING' }, description: '要清空的欄位 id' },
+        rows: ROWS_SCHEMA,
       },
-      required: ['draft_id', 'expected_version', 'patch_json'],
+      required: ['draft_id', 'expected_version'],
     },
   },
   {
@@ -220,12 +269,17 @@ export const AI_CHAT_TOOL_DECLARATIONS = [
       type: 'OBJECT',
       properties: {
         prompt: { type: 'STRING', description: '問題文字' },
-        options_json: {
-          type: 'STRING',
-          description: 'JSON 陣列：[{id,label,value}]，最多 8 項',
+        options: {
+          type: 'ARRAY',
+          description: '最多 8 項；使用者點選後，label 會當作使用者的回覆送出（表單 key 則直接建立該表單草稿）',
+          items: {
+            type: 'OBJECT',
+            properties: { id: { type: 'STRING' }, label: { type: 'STRING' }, value: { type: 'STRING' } },
+            required: ['id', 'label', 'value'],
+          },
         },
       },
-      required: ['prompt', 'options_json'],
+      required: ['prompt', 'options'],
     },
   },
   {
@@ -239,6 +293,44 @@ export const AI_CHAT_TOOL_DECLARATIONS = [
         field_id: { type: 'STRING', description: '可選：草稿欄位 id' },
       },
       required: ['prompt'],
+    },
+  },
+  {
+    name: 'propose_field_form',
+    description:
+      '在對話中顯示可直接填寫的小表單卡片（日期時間、人員、選項、文字等），用於補填缺少或有歧義的欄位。卡片由後端依表單規格產生；使用者送出後走與 update_application_draft 相同的驗證與版本檢查。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        draft_id: { type: 'STRING' },
+        field_ids: { type: 'ARRAY', items: { type: 'STRING' }, description: '要請使用者填的欄位 id（最多 8 個）' },
+        prompt: { type: 'STRING' },
+      },
+      required: ['draft_id', 'field_ids', 'prompt'],
+    },
+  },
+  {
+    name: 'propose_draft_changes',
+    description:
+      '要覆蓋已有值或一次改多個欄位時，先顯示「修改差異確認」卡片（原值 → 新值），使用者按確認才寫入；不會先寫 DB。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        draft_id: { type: 'STRING' },
+        set: SET_SCHEMA,
+        prompt: { type: 'STRING' },
+      },
+      required: ['draft_id', 'set', 'prompt'],
+    },
+  },
+  {
+    name: 'start_resubmission',
+    description:
+      '為自己被退回的單據開補件草稿（沿用原單號與原內容），之後用 update_application_draft 修改。先用 search_my_submissions（status=returned）找到單據。不會送出。',
+    parameters: {
+      type: 'OBJECT',
+      properties: { form_id: { type: 'STRING', description: 'search_my_submissions 回傳的 formId' } },
+      required: ['form_id'],
     },
   },
   {
@@ -362,13 +454,17 @@ const TOOL_LABELS: Record<AiChatToolName, string> = {
   get_purchase_request_detail: '請購明細',
   get_case_overview: '案件概況',
   get_form_approval_status: '簽核進度',
+  get_form_spec: '表單欄位',
   create_application_draft: '建立草稿',
   describe_application_draft: '讀取草稿',
-  patch_application_draft: '更新草稿',
+  update_application_draft: '更新草稿',
   propose_choices: '選項',
   propose_project_picker: '專案選取',
+  propose_field_form: '補填卡片',
+  propose_draft_changes: '修改確認',
   propose_nudge: '催簽確認',
   search_my_submissions: '查詢我的單據',
+  start_resubmission: '開補件草稿',
   propose_approved_document_picker: '選擇核准單據',
   attach_approved_document_pdf: '附加核准 PDF',
   attach_staged_files_to_draft: '附加聊天附件到草稿',
@@ -392,6 +488,106 @@ function requireUuid(args: Record<string, unknown> | undefined, key: string) {
   return s;
 }
 
+function stringList(v: unknown): string[] | undefined {
+  return Array.isArray(v) ? v.map((x) => String(x)) : undefined;
+}
+
+/** Tool arguments → fill request. Only plain structured values; no JSON-in-string. */
+function fillRequestFrom(args: Record<string, unknown> | undefined): FillRequest {
+  const rec = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
+  const set = (Array.isArray(args?.set) ? args.set : [])
+    .map(rec)
+    .filter((x): x is Record<string, unknown> => Boolean(x && typeof x.field === 'string'))
+    .slice(0, 60)
+    .map((x) => ({ field: String(x.field), value: x.value, values: stringList(x.values) }));
+  const rows = (Array.isArray(args?.rows) ? args.rows : [])
+    .map(rec)
+    .filter((x): x is Record<string, unknown> => Boolean(x && typeof x.table === 'string' && ['add', 'update', 'delete'].includes(String(x.op))))
+    .slice(0, 60)
+    .map((x) => ({
+      op: x.op as 'add' | 'update' | 'delete',
+      table: String(x.table),
+      row_id: typeof x.row_id === 'string' ? x.row_id : undefined,
+      cells: (Array.isArray(x.cells) ? x.cells : [])
+        .map(rec)
+        .filter((c): c is Record<string, unknown> => Boolean(c && typeof c.column === 'string'))
+        .map((c) => ({ column: String(c.column), value: c.value })),
+    }));
+  return { set, clear: stringList(args?.clear)?.slice(0, 60), rows };
+}
+
+function fillDigest(req: FillRequest): string {
+  return createHash('sha256').update(JSON.stringify(req)).digest('hex').slice(0, 16);
+}
+
+/** Backend-written receipt of what the database now holds — shown as-is, never model text. */
+export function fillReceipt(r: Extract<DraftFillResult, { ok: true }>): string {
+  const parts: string[] = [];
+  parts.push(`${r.created ? '已建立' : '已儲存'}「${r.formName}」草稿（版本 ${r.version}）`);
+  if (r.saved.length) parts.push(`寫入：${r.saved.map((x) => `${x.label} ${x.value}`).join('、')}`);
+  else if (!r.created) parts.push('沒有欄位變更');
+  if (r.rejected.length) parts.push(`未寫入：${r.rejected.map((x) => `${x.label}（${x.message}）`).join('、')}`);
+  parts.push(r.missing.length ? `尚缺必填：${r.missing.map((m) => m.label).join('、')}` : '必填已齊，可由您確認後送出');
+  return `${parts.join('。')}。`;
+}
+
+function draftResult(
+  tool: AiChatToolName,
+  label: string,
+  result: DraftFillResult,
+  operation: 'created' | 'opened' | 'updated'
+): ToolExecResult {
+  if (!result.ok) {
+    const blocks: AiMessageBlock[] = [
+      { kind: 'action_result', id: `fill_fail_${result.draftId ?? 'new'}_${result.version ?? 0}`, action: label, ok: false, message: result.message },
+    ];
+    return { ok: false, name: tool, label, response: { error: result.error, message: result.message, draftId: result.draftId, version: result.version }, blocks };
+  }
+  const receipt = fillReceipt(result);
+  const blocks: AiMessageBlock[] = [
+    {
+      kind: 'draft_reference',
+      id: `draft_${result.draftId}`,
+      draftId: result.draftId,
+      formKey: result.formKey,
+      formName: result.formName,
+      version: result.version,
+      status: 'draft',
+    },
+    { kind: 'action_result', id: `fill_${result.draftId}_v${result.version}`, action: label, ok: result.rejected.length === 0, message: receipt },
+  ];
+  const open = draftOpenResource({
+    draftId: result.draftId,
+    title: result.formName,
+    version: result.version,
+    operation,
+    formKey: result.formKey,
+    status: 'draft',
+  });
+  return {
+    ok: true,
+    name: tool,
+    label,
+    response: {
+      resourceType: 'application_draft',
+      draftId: result.draftId,
+      formKey: result.formKey,
+      version: result.version,
+      created: result.created,
+      saved: result.saved,
+      rejected: result.rejected,
+      missing: result.missing,
+      invalid: result.invalid,
+      readyToSubmit: result.readyToSubmit,
+      tables: result.tables,
+      patchedKeys: result.saved.map((x) => x.field),
+      receipt,
+    },
+    blocks,
+    openResources: [open],
+  };
+}
+
 export async function executeAiChatTool(
   name: string,
   args: Record<string, unknown> | undefined,
@@ -411,7 +607,7 @@ export async function executeAiChatTool(
 
   const tool = name as AiChatToolName;
   const label = TOOL_LABELS[tool];
-  const employee = await getCurrentEmployee();
+  const employee = ctx?.actor ?? (await getCurrentEmployee());
   if (!employee) {
     return {
       ok: false,
@@ -452,7 +648,7 @@ export async function executeAiChatTool(
         if (!q.ok) {
           return { ok: false, name: tool, label, response: { error: q.error } };
         }
-        const page = await searchProjectsPaged({ query: q.value, limit: 25, offset: 0 });
+        const page = await searchProjectsPaged({ query: q.value, employeeId: employee.id, limit: 25, offset: 0 });
         return {
           ok: true,
           name: tool,
@@ -528,26 +724,25 @@ export async function executeAiChatTool(
       }
 
       case 'list_my_approval_queue': {
-        const items = await getMyApprovalQueueAll();
+        // Same source as the welcome summary: designer forms included, real total.
+        const inbox = await loadAssistantInbox(30);
+        if (inbox.loadError) return { ok: false, name: tool, label, response: { error: 'inbox_unavailable', message: '待簽核清單暫時無法載入，這不代表沒有待辦。' } };
         return {
           ok: true,
           name: tool,
           label,
           response: {
-            count: items.length,
-            items: clip(
-              items.map((i) => ({
-                formType: i.formType,
-                label: i.label,
-                id: i.id,
-                caseNumber: i.caseNumber,
-                applicantName: i.applicantName,
-                totalAmount: i.totalAmount,
-                currency: i.currency ?? 'TWD',
-                href: i.href,
-              })),
-              30
-            ),
+            count: inbox.pendingTotal,
+            items: inbox.pendingApprovals.map((i) => ({
+              formType: i.formType,
+              label: i.label,
+              id: i.id,
+              caseNumber: i.caseNumber,
+              applicantName: i.applicantName,
+              summary: i.summary,
+              totalAmount: i.totalAmount,
+              href: i.href,
+            })),
           },
         };
       }
@@ -736,136 +931,72 @@ export async function executeAiChatTool(
         };
       }
 
-      case 'create_application_draft': {
-        if (!ctx) {
-          return { ok: false, name: tool, label, response: { error: 'missing_context' } };
-        }
-        const formKey = requireString(args, 'form_key', { min: 2, max: 40 });
+      case 'get_form_spec': {
+        const formKey = requireString(args, 'form_key', { min: 1, max: 40 });
         if (!formKey.ok) return { ok: false, name: tool, label, response: { error: formKey.error } };
-        let initial: Record<string, unknown> = {};
-        const rawJson = args?.initial_data_json;
-        if (typeof rawJson === 'string' && rawJson.trim()) {
-          try {
-            const parsed = JSON.parse(rawJson) as unknown;
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-              initial = parsed as Record<string, unknown>;
-            }
-          } catch {
-            return { ok: false, name: tool, label, response: { error: 'initial_data_json_invalid' } };
-          }
+        const form = await loadFilableForm(formKey.value, employee.id);
+        if (!form) {
+          return { ok: false, name: tool, label, response: { error: 'form_not_filable', message: '此表單不存在或您不能填寫。' } };
         }
-        try {
-          // Prefer the latest open draft for this conversation+form so the model
-          // does not open a blank second tab while the filled draft sits elsewhere.
-          const { listConversationDrafts } = await import('./drafts');
-          const sameForm = (await listConversationDrafts(ctx.conversationId, employee.id)).filter(
-            (d) => d.status === 'draft' && d.formDefinitionKey === formKey.value
-          );
-          // Prefer a draft that already has field data over a freshly created blank one.
-          const prior =
-            sameForm.find((d) => Object.keys(d.data ?? {}).length > 0) ?? sameForm[0] ?? null;
-          if (prior && Object.keys(initial).length === 0) {
-            const ctxDraft = await loadDraftFormContext(prior.id, employee.id);
-            const title = ctxDraft?.name ?? prior.title ?? formKey.value;
-            const block: AiMessageBlock = {
-              kind: 'draft_reference',
-              id: `draft_${prior.id}`,
-              draftId: prior.id,
-              formKey: prior.formDefinitionKey,
-              formName: title,
-              version: prior.version,
-              status: prior.status,
-            };
-            const open = draftOpenResource({
-              draftId: prior.id,
-              title,
-              version: prior.version,
-              operation: 'opened',
-              formKey: prior.formDefinitionKey,
-              status: prior.status,
-            });
-            return {
-              ok: true,
-              name: tool,
-              label,
-              response: {
-                resourceType: 'application_draft',
-                resourceId: prior.id,
-                draftId: prior.id,
-                title,
-                formKey: prior.formDefinitionKey,
-                version: prior.version,
-                created: false,
-                reusedExisting: true,
-                fields: ctxDraft ? describeDraftFields(ctxDraft.schema) : [],
-                data: prior.data,
-                message:
-                  '已重用本對話既有草稿（未新建空白稿）。請用 patch_application_draft 更新欄位；UI 會開啟此草稿。',
-              },
-              blocks: [block],
-              openResources: [open],
-            };
-          }
+        return { ok: true, name: tool, label, response: { formKey: form.key, formName: form.name, fields: formSpec(form.schema, form.picker) } };
+      }
 
-          const idemKey = ctx.turnId ? `${ctx.turnId}:${formKey.value}` : null;
-          const { draft, created } = await createApplicationDraft({
-            conversationId: ctx.conversationId,
-            ownerEmployeeId: employee.id,
-            formDefinitionKey: formKey.value,
-            data: initial,
-            createIdempotencyKey: idemKey,
-          });
-          const ctxDraft = await loadDraftFormContext(draft.id, employee.id);
-          const title = ctxDraft?.name ?? draft.title ?? formKey.value;
-          const block: AiMessageBlock = {
-            kind: 'draft_reference',
-            id: `draft_${draft.id}`,
-            draftId: draft.id,
-            formKey: draft.formDefinitionKey,
-            formName: title,
-            version: draft.version,
-            status: draft.status,
-          };
-          const open = draftOpenResource({
-            draftId: draft.id,
-            title,
-            version: draft.version,
-            operation: created ? 'created' : 'opened',
-            formKey: draft.formDefinitionKey,
-            status: draft.status,
-          });
-          return {
-            ok: true,
-            name: tool,
-            label,
-            response: {
-              resourceType: 'application_draft',
-              resourceId: draft.id,
-              draftId: draft.id,
-              title,
-              formKey: draft.formDefinitionKey,
-              version: draft.version,
-              created,
-              fields: ctxDraft ? describeDraftFields(ctxDraft.schema) : [],
-              message: created
-                ? '草稿已寫入資料庫。UI 會用 open_resource 開啟文件；請接著 patch 已知欄位，不要只靠文字宣稱右側已更新。'
-                : '本草稿已存在（同一次請求重試），已回傳既有 draftId，未再建立新草稿。',
+      case 'create_application_draft': {
+        if (!ctx) return { ok: false, name: tool, label, response: { error: 'missing_context' } };
+        const formKey = requireString(args, 'form_key', { min: 1, max: 40 });
+        if (!formKey.ok) return { ok: false, name: tool, label, response: { error: formKey.error } };
+        const request = fillRequestFrom(args);
+        // Same turn + same form + same content = a retry; anything else is a new draft.
+        const idemKey = ctx.turnId ? `${ctx.turnId}:${formKey.value}:${fillDigest(request)}` : null;
+        const result = await createDraftWithFill({
+          conversationId: ctx.conversationId,
+          ownerEmployeeId: employee.id,
+          formKey: formKey.value,
+          request,
+          idempotencyKey: idemKey,
+          options: ctx.fill,
+        });
+        return draftResult(tool, label, result, result.ok && result.created ? 'created' : 'opened');
+      }
+
+      case 'start_resubmission': {
+        if (!ctx) return { ok: false, name: tool, label, response: { error: 'missing_context' } };
+        const formId = requireUuid(args, 'form_id');
+        if (!formId.ok) return { ok: false, name: tool, label, response: { error: formId.error } };
+        const started = await startResubmission({ ownerEmployeeId: employee.id, submissionId: formId.value, conversationId: ctx.conversationId });
+        if (!started.ok) return { ok: false, name: tool, label, response: { error: started.code, message: started.error } };
+        const open = draftOpenResource({
+          draftId: started.draft.id,
+          title: started.formName,
+          version: started.draft.version,
+          operation: started.created ? 'created' : 'opened',
+          formKey: started.draft.formDefinitionKey,
+          status: 'draft',
+        });
+        return {
+          ok: true,
+          name: tool,
+          label,
+          response: {
+            draftId: started.draft.id,
+            version: started.draft.version,
+            formNumber: started.formNumber,
+            returnReason: started.reason ?? '退回時未提供原因',
+            message: '補件草稿已開好，內容與原單相同。尚未送出。',
+          },
+          blocks: [
+            {
+              kind: 'draft_reference',
+              id: `draft_${started.draft.id}`,
+              draftId: started.draft.id,
+              formKey: started.draft.formDefinitionKey,
+              formName: started.formName,
+              version: started.draft.version,
+              status: 'draft',
             },
-            blocks: [block],
-            openResources: [open],
-          };
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : 'create_failed';
-          return {
-            ok: false,
-            name: tool,
-            label,
-            response: {
-              error: msg,
-              message: msg === 'form_not_filable' ? '此表單不可填寫或不存在。' : '建立草稿失敗。',
-            },
-          };
-        }
+          ],
+          openResources: [open],
+        };
       }
 
       case 'describe_application_draft': {
@@ -873,7 +1004,7 @@ export async function executeAiChatTool(
         const draftId = requireUuid(args, 'draft_id');
         if (!draftId.ok) return { ok: false, name: tool, label, response: { error: draftId.error } };
         const draftCtx = await loadDraftFormContext(draftId.value, employee.id);
-        if (!draftCtx || draftCtx.draft.conversationId !== ctx.conversationId) {
+        if (!draftCtx || !(await isDraftInConversation(draftId.value, ctx.conversationId, employee.id))) {
           return {
             ok: false,
             name: tool,
@@ -881,6 +1012,7 @@ export async function executeAiChatTool(
             response: { error: 'not_found_or_forbidden', message: '找不到本草稿或無權限。' },
           };
         }
+        const status = draftStatus(draftCtx.schema, draftCtx.draft.data, draftCtx.today);
         return {
           ok: true,
           name: tool,
@@ -892,13 +1024,15 @@ export async function executeAiChatTool(
             version: draftCtx.draft.version,
             status: draftCtx.draft.status,
             data: draftCtx.draft.data,
-            fields: describeDraftFields(draftCtx.schema),
+            missing: status.missing,
+            invalid: status.invalid,
+            fields: formSpec(draftCtx.schema, draftCtx.options),
             versionMismatch: draftCtx.versionMismatch,
           },
         };
       }
 
-      case 'patch_application_draft': {
+      case 'update_application_draft': {
         if (!ctx) return { ok: false, name: tool, label, response: { error: 'missing_context' } };
         const draftId = requireUuid(args, 'draft_id');
         if (!draftId.ok) return { ok: false, name: tool, label, response: { error: draftId.error } };
@@ -912,111 +1046,30 @@ export async function executeAiChatTool(
         if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
           return { ok: false, name: tool, label, response: { error: 'expected_version_invalid' } };
         }
-        const patchJson = requireString(args, 'patch_json', { min: 2, max: 20000 });
-        if (!patchJson.ok) return { ok: false, name: tool, label, response: { error: patchJson.error } };
-        let patch: Record<string, unknown>;
-        try {
-          const parsed = JSON.parse(patchJson.value) as unknown;
-          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-            return { ok: false, name: tool, label, response: { error: 'patch_json_invalid' } };
-          }
-          patch = parsed as Record<string, unknown>;
-        } catch {
-          return { ok: false, name: tool, label, response: { error: 'patch_json_invalid' } };
+        const request = fillRequestFrom(args);
+        if (!request.set?.length && !request.clear?.length && !request.rows?.length) {
+          return { ok: false, name: tool, label, response: { error: 'nothing_to_update', message: '沒有要更新的欄位。' } };
         }
-        if (Object.keys(patch).length === 0) {
-          return { ok: false, name: tool, label, response: { error: 'patch_empty' } };
-        }
-
-        const owned = await getDraftForOwner(draftId.value, employee.id);
-        if (!owned || owned.conversationId !== ctx.conversationId) {
-          return {
-            ok: false,
-            name: tool,
-            label,
-            response: { error: 'not_found_or_forbidden' },
-          };
-        }
-
-        try {
-          const result = await patchApplicationDraft({
-            draftId: draftId.value,
-            ownerEmployeeId: employee.id,
-            expectedVersion,
-            patch,
-          });
-          if (!result.ok) {
-            return {
-              ok: false,
-              name: tool,
-              label,
-              response: {
-                error: 'version_conflict',
-                message: '草稿版本衝突：使用者可能剛手動改過。請重新 describe 後再 patch。',
-                version: result.conflict.draft.version,
-                data: result.conflict.draft.data,
-              },
-            };
-          }
-          const formName = result.draft.title || result.draft.formDefinitionKey;
-          // Stable id per draftId — sanitizeBlocks also dedupes by draftId+latest version.
-          const block: AiMessageBlock = {
-            kind: 'draft_reference',
-            id: `draft_${result.draft.id}`,
-            draftId: result.draft.id,
-            formKey: result.draft.formDefinitionKey,
-            formName,
-            version: result.draft.version,
-            status: result.draft.status,
-          };
-          const open = draftOpenResource({
-            draftId: result.draft.id,
-            title: formName,
-            version: result.draft.version,
-            operation: 'updated',
-            formKey: result.draft.formDefinitionKey,
-            status: result.draft.status,
-          });
-          return {
-            ok: true,
-            name: tool,
-            label,
-            response: {
-              resourceType: 'application_draft',
-              resourceId: result.draft.id,
-              draftId: result.draft.id,
-              title: formName,
-              version: result.draft.version,
-              patchedKeys: Object.keys(patch),
-              data: result.draft.data,
-              message: '草稿欄位已寫入。UI 會以 open_resource 重新整理該文件頁籤。',
-            },
-            blocks: [block],
-            openResources: [open],
-          };
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : 'patch_failed';
-          return {
-            ok: false,
-            name: tool,
-            label,
-            response: {
-              error: msg.startsWith('unknown_field:') ? 'unknown_field' : msg,
-              message: msg.startsWith('unknown_field:')
-                ? `欄位不存在：${msg.slice('unknown_field:'.length)}。請先 describe_application_draft。`
-                : '更新草稿失敗。',
-            },
-          };
-        }
+        const result = await fillDraft({
+          draftId: draftId.value,
+          ownerEmployeeId: employee.id,
+          conversationId: ctx.conversationId,
+          expectedVersion,
+          request,
+          options: ctx.fill,
+        });
+        return draftResult(tool, label, result, 'updated');
       }
 
       case 'propose_choices': {
         if (!ctx) return { ok: false, name: tool, label, response: { error: 'missing_context' } };
         const prompt = requireString(args, 'prompt', { min: 1, max: 500 });
-        const optionsJson = requireString(args, 'options_json', { min: 2, max: 4000 });
+        const optionsJson = Array.isArray(args?.options)
+          ? { ok: true as const, value: JSON.stringify(args.options) }
+          : requireString(args, 'options_json', { min: 2, max: 4000 });
         if (!prompt.ok) return { ok: false, name: tool, label, response: { error: prompt.error } };
         if (!optionsJson.ok) return { ok: false, name: tool, label, response: { error: optionsJson.error } };
-        let options: Array<{ id: string; label: string; value: string }> = [];
+        const options: Array<{ id: string; label: string; value: string }> = [];
         try {
           const parsed = JSON.parse(optionsJson.value) as unknown;
           if (!Array.isArray(parsed)) throw new Error('not_array');
@@ -1069,12 +1122,16 @@ export async function executeAiChatTool(
           typeof args?.draft_id === 'string' && UUID_RE.test(args.draft_id) ? args.draft_id : undefined;
         const fieldId =
           typeof args?.field_id === 'string' ? args.field_id.trim().slice(0, 80) : undefined;
+        const draft = draftId && (await isDraftInConversation(draftId, ctx.conversationId, employee.id)) ? await getDraftForOwner(draftId, employee.id) : null;
+        if (draftId && !draft) return { ok: false, name: tool, label, response: { error: 'not_found_or_forbidden' } };
         const block: AiMessageBlock = {
           kind: 'project_picker',
           id: `pp_${Date.now().toString(36)}`,
           prompt: prompt.value,
           conversationId: ctx.conversationId,
           draftId,
+          // The card writes against this version; a later edit makes it expire instead of overwriting.
+          draftVersion: draft?.version,
           fieldId,
           status: 'open',
         };
@@ -1085,6 +1142,34 @@ export async function executeAiChatTool(
           response: { presented: true },
           blocks: [block],
         };
+      }
+
+      case 'propose_field_form': {
+        if (!ctx) return { ok: false, name: tool, label, response: { error: 'missing_context' } };
+        const draftId = requireUuid(args, 'draft_id');
+        const prompt = requireString(args, 'prompt', { min: 1, max: 500 });
+        if (!draftId.ok || !prompt.ok) return { ok: false, name: tool, label, response: { error: 'invalid_args' } };
+        if (!(await isDraftInConversation(draftId.value, ctx.conversationId, employee.id))) {
+          return { ok: false, name: tool, label, response: { error: 'not_found_or_forbidden' } };
+        }
+        const fieldIds = Array.isArray(args?.field_ids) ? args.field_ids.map(String) : [];
+        const card = await buildFieldFormCard({ draftId: draftId.value, ownerEmployeeId: employee.id, conversationId: ctx.conversationId, fieldIds, prompt: prompt.value });
+        if (!card.ok) return { ok: false, name: tool, label, response: { error: card.error } };
+        return { ok: true, name: tool, label, response: { presented: true, fields: card.block.kind === 'field_form' ? card.block.fields.map((f) => f.id) : [] }, blocks: [card.block] };
+      }
+
+      case 'propose_draft_changes': {
+        if (!ctx) return { ok: false, name: tool, label, response: { error: 'missing_context' } };
+        const draftId = requireUuid(args, 'draft_id');
+        const prompt = requireString(args, 'prompt', { min: 1, max: 500 });
+        if (!draftId.ok || !prompt.ok) return { ok: false, name: tool, label, response: { error: 'invalid_args' } };
+        if (!(await isDraftInConversation(draftId.value, ctx.conversationId, employee.id))) {
+          return { ok: false, name: tool, label, response: { error: 'not_found_or_forbidden' } };
+        }
+        const set = (fillRequestFrom(args).set ?? []).map((x) => ({ field: x.field, value: String(x.value ?? '') }));
+        const card = await buildChangeConfirmCard({ draftId: draftId.value, ownerEmployeeId: employee.id, conversationId: ctx.conversationId, set, prompt: prompt.value });
+        if (!card.ok) return { ok: false, name: tool, label, response: { error: 'nothing_to_confirm', message: card.error } };
+        return { ok: true, name: tool, label, response: { presented: true, rejected: card.rejected, note: '尚未寫入，等待使用者確認' }, blocks: [card.block] };
       }
 
       case 'propose_nudge': {
@@ -1218,7 +1303,7 @@ export async function executeAiChatTool(
           return { ok: false, name: tool, label, response: { error: 'expected_version_invalid' } };
         }
         const owned = await getDraftForOwner(draftId.value, employee.id);
-        if (!owned || owned.conversationId !== ctx.conversationId) {
+        if (!owned || !(await isDraftInConversation(owned.id, ctx.conversationId, employee.id))) {
           return { ok: false, name: tool, label, response: { error: 'draft_forbidden' } };
         }
         const actor = { id: employee.id, role: employee.role };
@@ -1260,6 +1345,16 @@ export async function executeAiChatTool(
             previewHref: `/api/ai-chat/approved-snapshots/${snap.snapshot.id}`,
           };
           const suggestTrip = args?.suggest_trip_order_no === true;
+          const [source] = await getDb().select({ data: formSubmissions.data }).from(formSubmissions).where(eq(formSubmissions.id, sourceFormId.value)).limit(1);
+          const carry = linked.created
+            ? await buildTripCarryOverCard({
+                draftId: draftId.value,
+                ownerEmployeeId: employee.id,
+                conversationId: ctx.conversationId,
+                sourceData: (source?.data ?? {}) as Record<string, unknown>,
+                sourceFormNumber: snap.snapshot.sourceFormNumber,
+              })
+            : null;
           return {
             ok: true,
             name: tool,
@@ -1275,7 +1370,7 @@ export async function executeAiChatTool(
                 ? '已附加核准 PDF 快照到草稿。來源後續變更不會改寫此 PDF。'
                 : '此核准 PDF 已附加過，未重複建立。',
             },
-            blocks: [card],
+            blocks: carry ? [card, carry] : [card],
             openResources: [
               draftOpenResource({
                 draftId: draftId.value,
@@ -1302,7 +1397,7 @@ export async function executeAiChatTool(
           return { ok: false, name: tool, label, response: { error: 'expected_version_invalid' } };
         }
         const owned = await getDraftForOwner(draftId.value, employee.id);
-        if (!owned || owned.conversationId !== ctx.conversationId) {
+        if (!owned || !(await isDraftInConversation(owned.id, ctx.conversationId, employee.id))) {
           return { ok: false, name: tool, label, response: { error: 'draft_forbidden' } };
         }
         const rawIds = Array.isArray(args?.staged_ids) ? args.staged_ids : [];

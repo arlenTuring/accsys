@@ -56,7 +56,7 @@ export async function loadAttachmentPanelExtras(
       analysisSummary: a
         ? a.status === 'failed'
           ? `分析失敗：${a.error ?? 'unknown'}`
-          : result.summary ?? `狀態 ${a.status}`
+          : result.summary ?? (a.status === 'running' ? 'AI 檢查進行中' : `狀態 ${a.status}`)
         : null,
       confirmationNote: c
         ? `${c.reminderSummary}（確認於 ${c.confirmedAt.toISOString()}）${

@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { canReadForm, isUuid, type Actor } from '@/lib/authz/forms';
 import { getDb } from '@/lib/db';
 import {
@@ -104,22 +104,15 @@ export async function readPreviewFor(
   }
 
   if (needsPreviewDerivative(row.mimeType)) {
-    const [der] = await db
+    const rows = await db
       .select()
       .from(attachmentDerivatives)
-      .where(
-        and(
-          eq(attachmentDerivatives.attachmentId, row.id),
-          eq(attachmentDerivatives.status, 'ready')
-        )
-      )
-      .limit(1);
+      .where(eq(attachmentDerivatives.attachmentId, row.id));
+    const der = rows.find((d) => d.status === 'ready');
     if (!der) {
-      return {
-        ok: false,
-        status: 409,
-        reason: 'derivative_pending',
-      };
+      // A finished conversion that failed must not read as "still converting".
+      const failed = rows.some((d) => d.status === 'failed');
+      return { ok: false, status: 409, reason: failed ? 'derivative_missing' : 'derivative_pending' };
     }
     try {
       const bytes = await readNoFollow(der.storagePath);

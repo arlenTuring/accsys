@@ -1,0 +1,381 @@
+{
+  "conversationId": "2ce561ca-4514-4481-8985-936b26fe7983",
+  "employeeId": "20000000-0000-0000-0000-000000000001",
+  "report": [
+    {
+      "turnId": "d7543c06-f021-48f7-b1d3-bb1cfbe63733",
+      "message": "幫我建立 2026 年 11 月 4 日到台中拜訪客戶的公出申請，上午九點到下午六點，掛在測試專案 A，原因是設備驗收。",
+      "ms": 13978,
+      "result": {
+        "ok": true,
+        "reply": "已為您建立「公出差旅申請單」草稿，填寫內容如下：\n\n* **出差起始時間**：2026-11-04 09:00\n* **出差結束時間**：2026-11-04 18:00\n* **出差地點**：台中\n* **出差事由**：設備驗收\n* **行程概要**：專案：測試專案 A (T-PRJ-A) - 拜訪客戶進行設備驗收\n\n草稿已在右側工作區開啟。請確認內容（如有職務代理人或預支旅費需求可於右側補充），確認無誤後請在右側介面點擊「送出」。",
+        "model": "gemini-3.8-flash",
+        "toolsUsed": [
+          "可填表單",
+          "專案搜尋",
+          "建立草稿",
+          "讀取草稿",
+          "更新草稿"
+        ],
+        "blocks": [
+          {
+            "kind": "draft_reference",
+            "id": "draft_9265d2c7-20fc-48f4-9d41-6095be914eca",
+            "draftId": "9265d2c7-20fc-48f4-9d41-6095be914eca",
+            "formKey": "business-trip",
+            "formName": "公出差旅申請單",
+            "version": 2,
+            "status": "draft"
+          }
+        ],
+        "conversationId": "2ce561ca-4514-4481-8985-936b26fe7983",
+        "userMessageId": "8cf3ebad-203f-40d8-9028-d873f27dad10",
+        "modelMessageId": "6df361ab-6383-44e9-9db7-b824acfd0ee2",
+        "openResources": [
+          {
+            "type": "open_resource",
+            "resourceType": "application_draft",
+            "resourceId": "9265d2c7-20fc-48f4-9d41-6095be914eca",
+            "title": "公出差旅申請單",
+            "version": 2,
+            "operation": "updated",
+            "formKey": "business-trip",
+            "status": "draft"
+          }
+        ]
+      },
+      "trace": [
+        {
+          "seq": 1,
+          "stage": "turn.start",
+          "data": {
+            "model": "gemini-3.8-flash",
+            "employeeId": "20000000-0000-0000-0000-000000000001",
+            "stagedCount": 0,
+            "messageChars": 60,
+            "conversationId": "2ce561ca-4514-4481-8985-936b26fe7983"
+          }
+        },
+        {
+          "seq": 2,
+          "stage": "turn.context",
+          "data": {
+            "replayed": false,
+            "historyTurns": 0,
+            "conversationDrafts": [],
+            "historyCarriesDraftIds": false
+          }
+        },
+        {
+          "seq": 3,
+          "stage": "model.request",
+          "data": {
+            "mode": "AUTO",
+            "round": 0,
+            "contents": 1
+          }
+        },
+        {
+          "seq": 4,
+          "stage": "model.response",
+          "data": {
+            "round": 0,
+            "textChars": 0,
+            "droppedCalls": [],
+            "finishReason": "STOP",
+            "functionCalls": [
+              "list_filable_forms",
+              "search_projects"
+            ]
+          }
+        },
+        {
+          "seq": 5,
+          "stage": "tool.call",
+          "data": {
+            "args": {},
+            "name": "list_filable_forms",
+            "round": 0
+          }
+        },
+        {
+          "seq": 6,
+          "stage": "tool.result",
+          "data": {
+            "ok": true,
+            "name": "list_filable_forms",
+            "error": null,
+            "round": 0,
+            "draftId": null,
+            "message": null,
+            "patchedKeys": null,
+            "versionAfter": null,
+            "openResources": [],
+            "expectedVersion": null
+          }
+        },
+        {
+          "seq": 7,
+          "stage": "tool.call",
+          "data": {
+            "args": {
+              "query": "測試專案 A"
+            },
+            "name": "search_projects",
+            "round": 0
+          }
+        },
+        {
+          "seq": 8,
+          "stage": "tool.result",
+          "data": {
+            "ok": true,
+            "name": "search_projects",
+            "error": null,
+            "round": 0,
+            "draftId": null,
+            "message": null,
+            "patchedKeys": null,
+            "versionAfter": null,
+            "openResources": [],
+            "expectedVersion": null
+          }
+        },
+        {
+          "seq": 9,
+          "stage": "model.request",
+          "data": {
+            "mode": "AUTO",
+            "round": 1,
+            "contents": 3
+          }
+        },
+        {
+          "seq": 10,
+          "stage": "model.response",
+          "data": {
+            "round": 1,
+            "textChars": 0,
+            "droppedCalls": [],
+            "finishReason": "STOP",
+            "functionCalls": [
+              "create_application_draft"
+            ]
+          }
+        },
+        {
+          "seq": 11,
+          "stage": "tool.call",
+          "data": {
+            "args": {
+              "form_key": "business-trip"
+            },
+            "name": "create_application_draft",
+            "round": 1
+          }
+        },
+        {
+          "seq": 12,
+          "stage": "tool.result",
+          "data": {
+            "ok": true,
+            "name": "create_application_draft",
+            "error": null,
+            "round": 1,
+            "draftId": "9265d2c7-20fc-48f4-9d41-6095be914eca",
+            "message": "草稿已寫入資料庫。UI 會用 open_resource 開啟文件；請接著 patch 已知欄位，不要只靠文字宣稱右側已更新。",
+            "patchedKeys": null,
+            "versionAfter": 1,
+            "openResources": [
+              {
+                "type": "open_resource",
+                "title": "公出差旅申請單",
+                "status": "draft",
+                "formKey": "business-trip",
+                "version": 1,
+                "operation": "created",
+                "resourceId": "9265d2c7-20fc-48f4-9d41-6095be914eca",
+                "resourceType": "application_draft"
+              }
+            ],
+            "expectedVersion": null
+          }
+        },
+        {
+          "seq": 13,
+          "stage": "model.request",
+          "data": {
+            "mode": "AUTO",
+            "round": 2,
+            "contents": 5
+          }
+        },
+        {
+          "seq": 14,
+          "stage": "model.response",
+          "data": {
+            "round": 2,
+            "textChars": 0,
+            "droppedCalls": [],
+            "finishReason": "STOP",
+            "functionCalls": [
+              "describe_application_draft"
+            ]
+          }
+        },
+        {
+          "seq": 15,
+          "stage": "tool.call",
+          "data": {
+            "args": {
+              "draft_id": "9265d2c7-20fc-48f4-9d41-6095be914eca"
+            },
+            "name": "describe_application_draft",
+            "round": 2
+          }
+        },
+        {
+          "seq": 16,
+          "stage": "tool.result",
+          "data": {
+            "ok": true,
+            "name": "describe_application_draft",
+            "error": null,
+            "round": 2,
+            "draftId": "9265d2c7-20fc-48f4-9d41-6095be914eca",
+            "message": null,
+            "patchedKeys": null,
+            "versionAfter": 1,
+            "openResources": [],
+            "expectedVersion": null
+          }
+        },
+        {
+          "seq": 17,
+          "stage": "model.request",
+          "data": {
+            "mode": "AUTO",
+            "round": 3,
+            "contents": 7
+          }
+        },
+        {
+          "seq": 18,
+          "stage": "model.response",
+          "data": {
+            "round": 3,
+            "textChars": 0,
+            "droppedCalls": [],
+            "finishReason": "STOP",
+            "functionCalls": [
+              "patch_application_draft"
+            ]
+          }
+        },
+        {
+          "seq": 19,
+          "stage": "tool.call",
+          "data": {
+            "args": {
+              "draft_id": "9265d2c7-20fc-48f4-9d41-6095be914eca",
+              "patch_json": "{\"tripStartAt\":\"2026-11-04T09:00:00\",\"tripEndAt\":\"2026-11-04T18:00:00\",\"location\":\"台中\",\"purpose\":\"設備驗收\",\"itinerary\":\"專案：測試專案 A (T-PRJ-A) - 拜訪客戶進行設備驗收\"}",
+              "expected_version": 1
+            },
+            "name": "patch_application_draft",
+            "round": 3
+          }
+        },
+        {
+          "seq": 20,
+          "stage": "tool.result",
+          "data": {
+            "ok": true,
+            "name": "patch_application_draft",
+            "error": null,
+            "round": 3,
+            "draftId": "9265d2c7-20fc-48f4-9d41-6095be914eca",
+            "message": "草稿欄位已寫入。UI 會以 open_resource 重新整理該文件頁籤。",
+            "patchedKeys": [
+              "tripStartAt",
+              "tripEndAt",
+              "location",
+              "purpose",
+              "itinerary"
+            ],
+            "versionAfter": 2,
+            "openResources": [
+              {
+                "type": "open_resource",
+                "title": "公出差旅申請單",
+                "status": "draft",
+                "formKey": "business-trip",
+                "version": 2,
+                "operation": "updated",
+                "resourceId": "9265d2c7-20fc-48f4-9d41-6095be914eca",
+                "resourceType": "application_draft"
+              }
+            ],
+            "expectedVersion": 1
+          }
+        },
+        {
+          "seq": 21,
+          "stage": "model.request",
+          "data": {
+            "mode": "NONE",
+            "round": 4,
+            "reason": "tool_rounds_exhausted",
+            "contents": 9
+          }
+        },
+        {
+          "seq": 22,
+          "stage": "turn.ui_events",
+          "data": {
+            "blockKinds": [
+              "draft_reference"
+            ],
+            "openResources": [
+              {
+                "version": 2,
+                "operation": "updated",
+                "resourceId": "9265d2c7-20fc-48f4-9d41-6095be914eca"
+              }
+            ],
+            "blocksDroppedBySanitize": 1
+          }
+        },
+        {
+          "seq": 23,
+          "stage": "turn.end",
+          "data": {
+            "ok": true,
+            "toolsUsed": [
+              "可填表單",
+              "專案搜尋",
+              "建立草稿",
+              "讀取草稿",
+              "更新草稿"
+            ],
+            "replyChars": 219
+          }
+        }
+      ],
+      "dbDraftsAfter": [
+        {
+          "id": "9265d2c7-20fc-48f4-9d41-6095be914eca",
+          "formKey": "business-trip",
+          "version": 2,
+          "status": "draft",
+          "data": {
+            "purpose": "設備驗收",
+            "location": "台中",
+            "itinerary": "專案：測試專案 A (T-PRJ-A) - 拜訪客戶進行設備驗收",
+            "tripEndAt": "2026-11-04T18:00:00",
+            "tripStartAt": "2026-11-04T09:00:00"
+          }
+        }
+      ]
+    }
+  ]
+}

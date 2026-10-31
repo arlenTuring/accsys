@@ -45,7 +45,12 @@ export type CustomFormMode =
       expectedVersion: number;
       /** Chat→draft copies already on this draft (shown inside 附件). */
       attachedFiles?: DraftAttachedFile[];
+      submitLabel?: string;
       saveState?: 'idle' | 'saving' | 'saved' | 'error';
+      /** Panel-provided save status (version, time, or why it is not saved). */
+      saveNote?: string;
+      /** A file of this draft was edited, restored or re-checked. */
+      onFilesChanged?: () => void;
       onSave: (data: Record<string, unknown>, expectedVersion: number) => Promise<void>;
       onSubmitDocument: (data: Record<string, unknown>, expectedVersion: number, files: File[]) => Promise<void>;
     };
@@ -703,6 +708,7 @@ export function CustomForm({
                               <DraftAttachedFiles
                                 draftId={mode.draftId}
                                 files={mode.attachedFiles ?? []}
+                                onChanged={mode.onFilesChanged}
                               />
                             )}
                             <PendingFilesField
@@ -739,20 +745,20 @@ export function CustomForm({
       {mode.kind === 'ai_draft' && (
         <div className="flex flex-wrap items-center justify-end gap-3 border-t border-td-border px-5 py-4">
           {error && <p className="mr-auto text-sm text-red-600">{error}</p>}
-          <span className="mr-auto text-xs text-td-muted">
-            {mode.saveState === 'saving'
+          <span role="status" className={`mr-auto text-xs ${mode.saveState === 'error' ? 'font-semibold text-red-700' : 'text-td-muted'}`}>
+            {mode.saveNote ?? (mode.saveState === 'saving'
               ? '儲存中…'
               : mode.saveState === 'saved'
                 ? '已儲存'
                 : mode.saveState === 'error'
                   ? '儲存失敗'
-                  : '草稿會與對話同步'}
+                  : '草稿會與對話同步')}
           </span>
           <button type="button" onClick={onAiDraftSave} className="btn-secondary" disabled={submitting || mode.saveState === 'saving'}>
             儲存草稿
           </button>
           <button type="button" onClick={onSubmit} className="btn-primary" disabled={submitting || mode.saveState === 'saving'}>
-            {submitting ? '送出中…' : '送出單據'}
+            {submitting ? '送出中…' : (mode.submitLabel ?? '送出單據')}
           </button>
         </div>
       )}

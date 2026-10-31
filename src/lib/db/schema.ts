@@ -250,6 +250,8 @@ export const projects = pgTable(
     name: text('name').notNull(),
     /** product = 產品專案 (internal R&D), revenue = 營收專案 (customer work); picks the 費用申請單 edition. */
     kind: text('kind').notNull().default('product'),
+    /** Only employees in project_members may search, pick or file against a restricted project. */
+    restricted: boolean('restricted').notNull().default(false),
     createdAt: createdAt(),
   },
   (): PgTableExtraConfigValue[] => [check('projects_kind_check', sql`kind in ('product', 'revenue')`)]
@@ -1692,6 +1694,10 @@ export const aiApplicationDrafts = pgTable(
     submissionId: uuid('submission_id'),
     /** Same user turn + formKey → reuse draft (model/request retry). */
     createIdempotencyKey: text('create_idempotency_key'),
+    /** 補件: the returned submission this draft revises; it stays on that submission's form version. */
+    resubmitOfSubmissionId: uuid('resubmit_of_submission_id'),
+    /** Submission version the draft was copied from; a change since then blocks the resubmit. */
+    resubmitBaseVersion: integer('resubmit_base_version'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -1699,10 +1705,14 @@ export const aiApplicationDrafts = pgTable(
     fk('ai_application_drafts_conversation_id_fkey', t.conversationId, aiConversations.id),
     fk('ai_application_drafts_owner_employee_id_fkey', t.ownerEmployeeId, employees.id),
     fk('ai_application_drafts_submission_id_fkey', t.submissionId, formSubmissions.id),
+    fk('ai_application_drafts_resubmit_of_fkey', t.resubmitOfSubmissionId, formSubmissions.id),
     check('ai_application_drafts_status_check', sql`status in ('draft', 'submitted', 'abandoned')`),
     check('ai_application_drafts_data_check', sql`jsonb_typeof(data) = 'object'`),
     check('ai_application_drafts_version_check', sql`version > 0`),
     check('ai_application_drafts_title_check', sql`char_length(title) <= 160`),
+    uniqueIndex('ai_application_drafts_open_resubmit_uidx')
+      .on(t.resubmitOfSubmissionId)
+      .where(sql`resubmit_of_submission_id is not null and status = 'draft'`),
     uniqueIndex('ai_application_drafts_owner_create_idem_uidx')
       .on(t.ownerEmployeeId, t.createIdempotencyKey)
       .where(sql`create_idempotency_key is not null`),
@@ -1723,7 +1733,7 @@ export const aiAssistantEventAcks = pgTable(
   (t): PgTableExtraConfigValue[] => [
     primaryKey({ name: 'ai_assistant_event_acks_pkey', columns: [t.employeeId, t.eventKey] }),
     fk('ai_assistant_event_acks_employee_id_fkey', t.employeeId, employees.id),
-    check('ai_assistant_event_acks_state_check', sql`state in ('viewed', 'dismissed', 'muted')`),
+    check('ai_assistant_event_acks_state_check', sql`state in ('delivered', 'viewed', 'dismissed', 'muted')`),
     check(
       'ai_assistant_event_acks_event_key_check',
       sql`char_length(event_key) >= 1 AND char_length(event_key) <= 200`
@@ -1788,6 +1798,18 @@ export const aiChatStagedAttachments = pgTable(
     analysisStatus: text('analysis_status'),
     analysisResult: jsonb('analysis_result').$type<Record<string, unknown> | null>(),
     analysisCompletedAt: timestamp('analysis_completed_at', { withTimezone: true }),
+    /** Set when the person pressed 確認並檢查; no AI analysis runs before this. */
+    analysisStartedAt: timestamp('analysis_started_at', { withTimezone: true }),
+    /** What the stored result was computed from: file content, company profile, rules. */
+    analysisContentSha256: text('analysis_content_sha256'),
+    analysisCompanyVersion: integer('analysis_company_version'),
+    analysisRulesVersion: text('analysis_rules_version'),
+    /** Current photo edit (ai_file_edit_versions); null = the original as uploaded. */
+    activeEditId: uuid('active_edit_id'),
+    /** Draft chosen at 確認並檢查. */
+    targetDraftId: uuid('target_draft_id'),
+    /** Set once sent to the model with a message: no longer a pending file of the composer. */
+    sentAt: timestamp('sent_at', { withTimezone: true }),
     createdAt: createdAt(),
     purgedAt: timestamp('purged_at', { withTimezone: true }),
   },
@@ -1901,6 +1923,8 @@ export const aiDraftFileAttachments = pgTable(
     storagePath: text('storage_path').notNull(),
     sha256: text('sha256').notNull(),
     sourceStagedId: uuid('source_staged_id'),
+    /** Current photo edit; null = the original. The original row and bytes never change. */
+    activeEditId: uuid('active_edit_id'),
     attachedByEmployeeId: uuid('attached_by_employee_id').notNull(),
     attachedAt: timestamp('attached_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -2064,5 +2088,101 @@ export const attachmentUploadSessions = pgTable(
       sql`declared_size_bytes > 0 AND chunk_size_bytes > 0 AND total_chunks > 0`
     ),
     index('attachment_upload_sessions_owner_idx').on(t.ownerEmployeeId, t.createdAt),
+  ]
+);
+
+/**
+ * Per-turn diagnostic trace of the AI assistant (one correlation id per user
+ * turn): model rounds, tool calls and results, draft versions before/after,
+ * and the UI events returned. Field values are only recorded outside
+ * production when AI_TRACE_VALUES=1; tokens, credentials and file contents are
+ * never stored.
+ */
+export const aiTurnTraces = pgTable(
+  'ai_turn_traces',
+  {
+    id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    turnId: uuid('turn_id').notNull(),
+    conversationId: uuid('conversation_id'),
+    ownerEmployeeId: uuid('owner_employee_id'),
+    seq: integer('seq').notNull(),
+    stage: text('stage').notNull(),
+    data: jsonb('data').notNull().default(sql`'{}'::jsonb`),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    fk('ai_turn_traces_owner_employee_id_fkey', t.ownerEmployeeId, employees.id),
+    check('ai_turn_traces_stage_check', sql`char_length(stage) between 1 and 60`),
+    uniqueIndex('ai_turn_traces_turn_seq_uidx').on(t.turnId, t.seq),
+    index('ai_turn_traces_conversation_idx').on(t.conversationId, t.createdAt),
+    index('ai_turn_traces_created_at_idx').on(t.createdAt),
+  ]
+);
+
+/**
+ * A draft continued in another conversation of the same owner (opened from the
+ * draft library or a card there). The draft's own conversation_id stays its
+ * origin; this link is what lets a later conversation read and update it.
+ */
+export const aiConversationDraftLinks = pgTable(
+  'ai_conversation_draft_links',
+  {
+    conversationId: uuid('conversation_id').notNull(),
+    draftId: uuid('draft_id').notNull(),
+    ownerEmployeeId: uuid('owner_employee_id').notNull(),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    primaryKey({ name: 'ai_conversation_draft_links_pkey', columns: [t.conversationId, t.draftId] }),
+    fk('ai_conversation_draft_links_conversation_id_fkey', t.conversationId, aiConversations.id),
+    fk('ai_conversation_draft_links_draft_id_fkey', t.draftId, aiApplicationDrafts.id),
+    fk('ai_conversation_draft_links_owner_employee_id_fkey', t.ownerEmployeeId, employees.id),
+    index('ai_conversation_draft_links_draft_idx').on(t.draftId),
+  ]
+);
+
+/** Who may use a restricted project (projects.restricted); unrestricted projects ignore this table. */
+export const projectMembers = pgTable(
+  'project_members',
+  {
+    projectId: uuid('project_id').notNull(),
+    employeeId: uuid('employee_id').notNull(),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    primaryKey({ name: 'project_members_pkey', columns: [t.projectId, t.employeeId] }),
+    fk('project_members_project_id_fkey', t.projectId, projects.id),
+    fk('project_members_employee_id_fkey', t.employeeId, employees.id),
+    index('project_members_employee_idx').on(t.employeeId),
+  ]
+);
+
+/**
+ * Saved versions of a photo edit. The original file is never touched: each
+ * version keeps the operations plus two renders, `outputPath` (what people see,
+ * with annotations) and `analysisPath` (crop and rotation only, no annotations,
+ * so a note written on the photo is never read as evidence from the document).
+ */
+export const aiFileEditVersions = pgTable(
+  'ai_file_edit_versions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ownerEmployeeId: uuid('owner_employee_id').notNull(),
+    sourceKind: text('source_kind').notNull(),
+    sourceId: uuid('source_id').notNull(),
+    version: integer('version').notNull(),
+    operations: jsonb('operations').$type<Record<string, unknown>>().notNull(),
+    outputPath: text('output_path').notNull(),
+    outputSha256: text('output_sha256').notNull(),
+    analysisPath: text('analysis_path').notNull(),
+    analysisSha256: text('analysis_sha256').notNull(),
+    mimeType: text('mime_type').notNull(),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('ai_file_edit_versions_source_version_uidx').on(t.sourceKind, t.sourceId, t.version),
+    fk('ai_file_edit_versions_owner_fkey', t.ownerEmployeeId, employees.id),
+    check('ai_file_edit_versions_kind_check', sql`source_kind in ('staged', 'draft_file')`),
+    index('ai_file_edit_versions_source_idx').on(t.sourceId),
   ]
 );

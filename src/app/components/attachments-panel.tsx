@@ -5,7 +5,6 @@ import { getAttachmentDownloadUrl, uploadAttachment } from '@/lib/attachments/ac
 import type { AttachmentRow } from '@/lib/attachments/queries';
 import { AttachmentViewer, type ViewerItem } from '@/app/components/attachment-viewer';
 import type { AttachmentPanelExtra } from '@/lib/attachments/analysis-queries';
-import { optimizeImageForUpload } from '@/lib/attachments/client-image-optimize';
 import { AttachmentInvoiceReminder } from '@/app/components/attachment-invoice-reminder';
 import { fmtFileSize } from './pending-files-field';
 
@@ -68,9 +67,8 @@ export function AttachmentsPanel({
     setError(null);
     setUploading(true);
     for (let i = 0; i < files.length; i++) {
-      const raw = files.item(i);
-      if (!raw) continue;
-      const { file } = await optimizeImageForUpload(raw);
+      const file = files.item(i);
+      if (!file) continue;
       const formData = new FormData();
       formData.set('file', file);
       const result = await uploadAttachment(formType, formId, formData);

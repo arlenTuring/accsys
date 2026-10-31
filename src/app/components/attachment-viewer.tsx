@@ -22,6 +22,15 @@ type Props = {
 };
 
 const SCAN_FAIL_HINT = '無法預覽：格式不支援、轉換未完成，或權限不足。';
+const LOAD_FAIL_HINT = '預覽載入失敗，請重試，或下載原檔查看。';
+
+/** Keeps a picture rotated around its top-left corner inside the scrollable area. */
+const ROTATION_SHIFT: Record<number, string> = {
+  0: '',
+  90: ' translateY(-100%)',
+  180: ' translate(-100%, -100%)',
+  270: ' translateX(-100%)',
+};
 
 export function AttachmentViewer({ items, initialIndex = 0, open, onClose }: Props) {
   const [index, setIndex] = useState(initialIndex);
@@ -36,6 +45,9 @@ export function AttachmentViewer({ items, initialIndex = 0, open, onClose }: Pro
   const pdfDocRef = useRef<{ numPages: number; getPage: (n: number) => Promise<unknown>; destroy: () => Promise<void> } | null>(
     null
   );
+  const renderTaskRef = useRef<{ cancel: () => void } | null>(null);
+  /** Only the newest load may touch the state: an older file must never show under the name of this one. */
+  const loadSeqRef = useRef(0);
   const objectUrlRef = useRef<string | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
@@ -55,6 +67,7 @@ export function AttachmentViewer({ items, initialIndex = 0, open, onClose }: Pro
 
   const loadItem = useCallback(async () => {
     if (!item) return;
+    const seq = ++loadSeqRef.current;
     cleanup();
     setStatus('loading');
     setError(null);
@@ -65,14 +78,17 @@ export function AttachmentViewer({ items, initialIndex = 0, open, onClose }: Pro
 
     try {
       const res = await fetch(item.previewUrl, { credentials: 'same-origin', cache: 'no-store' });
+      if (seq !== loadSeqRef.current) return;
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
+        if (seq !== loadSeqRef.current) return;
         setError(typeof body.message === 'string' ? body.message : SCAN_FAIL_HINT);
         setStatus('failed');
         return;
       }
       const mime = res.headers.get('Content-Type')?.split(';')[0]?.trim() || item.mimeType;
       const buf = await res.arrayBuffer();
+      if (seq !== loadSeqRef.current) return;
 
       if (mime === 'application/pdf') {
         const pdfjs = await import('pdfjs-dist');
@@ -85,6 +101,10 @@ export function AttachmentViewer({ items, initialIndex = 0, open, onClose }: Pro
           disableStream: false,
         });
         const doc = await loadingTask.promise;
+        if (seq !== loadSeqRef.current) {
+          void doc.destroy().catch(() => undefined);
+          return;
+        }
         pdfDocRef.current = doc as typeof pdfDocRef.current;
         setPageCount(doc.numPages);
         setStatus('ready');
@@ -102,8 +122,9 @@ export function AttachmentViewer({ items, initialIndex = 0, open, onClose }: Pro
 
       setError('此格式無法站內預覽');
       setStatus('failed');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : SCAN_FAIL_HINT);
+    } catch {
+      if (seq !== loadSeqRef.current) return;
+      setError(LOAD_FAIL_HINT);
       setStatus('failed');
     }
   }, [item, cleanup]);
@@ -132,6 +153,7 @@ export function AttachmentViewer({ items, initialIndex = 0, open, onClose }: Pro
         getViewport: (o: { scale: number; rotation: number }) => { width: number; height: number };
         render: (o: { canvasContext: CanvasRenderingContext2D; viewport: { width: number; height: number } }) => {
           promise: Promise<void>;
+          cancel: () => void;
         };
       };
       if (cancelled) return;
@@ -141,7 +163,9 @@ export function AttachmentViewer({ items, initialIndex = 0, open, onClose }: Pro
       if (!ctx) return;
       canvas.width = viewport.width;
       canvas.height = viewport.height;
-      await pdfPage.render({ canvasContext: ctx, viewport }).promise;
+      const task = pdfPage.render({ canvasContext: ctx, viewport });
+      renderTaskRef.current = task;
+      await task.promise;
     })().catch(() => {
       if (!cancelled) {
         setError('PDF 頁面渲染失敗');
@@ -150,6 +174,8 @@ export function AttachmentViewer({ items, initialIndex = 0, open, onClose }: Pro
     });
     return () => {
       cancelled = true;
+      renderTaskRef.current?.cancel();
+      renderTaskRef.current = null;
     };
   }, [open, status, page, scale, rotation]);
 
@@ -179,7 +205,7 @@ export function AttachmentViewer({ items, initialIndex = 0, open, onClose }: Pro
   return (
     <div className={shellClass} role="dialog" aria-modal="true" aria-label="附件預覽">
       <header className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-3 py-2 text-sm text-slate-800">
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 basis-full">
           <p className="truncate font-medium">{item.fileName}</p>
           <p className="text-xs text-slate-500">
             {item.mimeType} · {(item.fileSizeBytes / 1024).toFixed(1)} KB
@@ -273,7 +299,7 @@ export function AttachmentViewer({ items, initialIndex = 0, open, onClose }: Pro
           <img
             src={imageUrl}
             alt={item.fileName}
-            style={{ transform: `scale(${scale}) rotate(${rotation}deg)`, transformOrigin: 'top left' }}
+            style={{ transform: `scale(${scale}) rotate(${rotation}deg)${ROTATION_SHIFT[rotation]}`, transformOrigin: 'top left' }}
             className="max-w-none"
           />
         )}

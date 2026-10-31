@@ -23,7 +23,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   try {
     const file = await readSnapshotBytes(id);
     if (!file) return new NextResponse('Not found', { status: 404 });
-    return new NextResponse(file.bytes, {
+    return new NextResponse(new Uint8Array(file.bytes), {
       status: 200,
       headers: {
         'Content-Type': 'application/pdf',

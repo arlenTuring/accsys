@@ -1,0 +1,54 @@
+{
+  "when": "2026-10-30T09:42:18.665Z",
+  "modelDown": null,
+  "baseDraft": "20b06dae-a5ef-4d5b-ab9f-1d37b28e5499",
+  "conv1": "47b4057a-255d-420d-8a18-199cebf4d8e3",
+  "conv2": "519739c9-679d-4bcf-80b7-0cdc77000064",
+  "results": [
+    {
+      "case": "2",
+      "ok": true,
+      "why": "新 session 讀到 v1，資料相同"
+    },
+    {
+      "case": "5",
+      "ok": true,
+      "why": "新草稿 25671195，原草稿 v1 未變",
+      "evidence": [
+        {
+          "id": "20b06dae-a5ef-4d5b-ab9f-1d37b28e5499",
+          "v": 1
+        },
+        {
+          "id": "25671195-29a8-4159-8046-22f3ea81075e",
+          "v": 1
+        }
+      ]
+    },
+    {
+      "case": "4",
+      "ok": true,
+      "why": "同一 ID 更新到 v2；綁定與稽核已記錄；新對話未另建草稿"
+    },
+    {
+      "case": "6",
+      "ok": true,
+      "why": "依序重送草稿數 1；並行重送草稿數 1（第二個請求：上一個回覆還在處理中，請稍候再傳送。）"
+    },
+    {
+      "case": "8",
+      "ok": true,
+      "why": "AI 改為 2026-11-04T20:00；人工同欄位 → conflict（DB 仍 v3）；人工改地點 → 合併為 v4，結束 2026-11-04T20:00、地點 台中市南屯區"
+    },
+    {
+      "case": "10",
+      "ok": true,
+      "why": "讀取 拒絕、儲存 拒絕、送出 拒絕、放棄 拒絕、綁定 not_found、AI 修改 not_found_or_forbidden、檔案網址 HTTP 404；A 草稿仍 v4"
+    },
+    {
+      "case": "11",
+      "ok": true,
+      "why": "以 v3 操作：儲存 version_conflict、AI 寫入 version_conflict、送出 version_conflict；草稿仍 v4"
+    }
+  ]
+}

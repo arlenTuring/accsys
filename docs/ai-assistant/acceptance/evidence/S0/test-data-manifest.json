@@ -1,0 +1,81 @@
+{
+  "people": {
+    "A": {
+      "id": "20000000-0000-0000-0000-000000000001",
+      "code": "T-STAFF",
+      "name": "測試員工"
+    },
+    "B": {
+      "id": "20000000-0000-0000-0000-0000000000b1",
+      "code": "T-STAFF-B",
+      "name": "測試員工乙"
+    },
+    "C": {
+      "id": "20000000-0000-0000-0000-000000000002",
+      "code": "T-MGR",
+      "name": "測試主管"
+    },
+    "D": {
+      "id": "20000000-0000-0000-0000-000000000004",
+      "code": "T-GM",
+      "name": "測試總經理"
+    }
+  },
+  "projects": [
+    {
+      "id": "30000000-0000-0000-0000-00000000000a",
+      "code": "T-PRJ-A",
+      "name": "測試專案 A",
+      "kind": "product"
+    },
+    {
+      "id": "30000000-0000-0000-0000-00000000000b",
+      "code": "T-PRJ-B",
+      "name": "測試專案 B",
+      "kind": "revenue"
+    },
+    {
+      "id": "30000000-0000-0000-0000-00000000000c",
+      "code": "T-PRJ-X",
+      "name": "測試限制專案 X",
+      "kind": "product"
+    }
+  ],
+  "companyTaxId": "12345675",
+  "submissions": {
+    "ai-acceptance:v1:trip:taichung-1": {
+      "id": "57bd79e7-423a-4ca5-a17b-8529015bdb4d",
+      "formNumber": "20261030BT0001",
+      "status": "approved"
+    },
+    "ai-acceptance:v1:trip:taichung-2": {
+      "id": "35f9ef2d-5f60-4883-ac0d-0a1654027374",
+      "formNumber": "20261030BT0002",
+      "status": "approved"
+    },
+    "ai-acceptance:v1:trip:hsinchu": {
+      "id": "d0ae5736-84ef-4b67-a137-c6e8cd66e207",
+      "formNumber": "20261030BT0003",
+      "status": "approved"
+    },
+    "ai-acceptance:v1:trip:returned": {
+      "id": "d5fda3d1-a771-4b33-afb5-1c26eef8f9c1",
+      "formNumber": "20261030BT0004",
+      "status": "returned"
+    },
+    "ai-acceptance:v1:trip:pending": {
+      "id": "c98a7165-59ce-47cc-985b-48e41e25ec40",
+      "formNumber": "20261030BT0005",
+      "status": "pending_approval"
+    },
+    "ai-acceptance:v1:trip:b-pending": {
+      "id": "13ec5688-4c24-4233-910f-0d436ec10586",
+      "formNumber": "20261030BT0006",
+      "status": "pending_approval"
+    }
+  },
+  "notifications": {
+    "A": 4,
+    "C": 51
+  }
+}

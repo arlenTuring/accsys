@@ -1,0 +1,14 @@
+15:00:04 | ai_draft.created | ai_application_draft | {"by": "assistant", "fields": [], "formKey": "travel-expense", "version": 1, "rejected": []}
+15:00:23 | ai_draft.approved_pdf_attached | ai_application_draft | {"version": 2, "snapshotId": "7474a5ea-3588-4455-881f-63131633c08f", "sourceFormNumber": "20261030BT0001"}
+15:00:37 | ai_draft.updated | ai_application_draft | {"by": "assistant", "fields": ["tripStartDate", "tripEndDate", "purpose", "tripOrderNo"], "version": 3, "rejec
+15:01:06 | ai_draft.updated | ai_application_draft | {"by": "assistant", "fields": ["companions", "reportItems", "costItems"], "version": 4, "rejected": ["budgetCo
+15:01:50 | ai_draft.updated | ai_application_draft | {"by": "assistant", "fields": ["budgetCodeId"], "version": 5, "rejected": []}
+15:02:16 | ai_draft.files_attached | ai_application_draft | {"files": [{"id": "c824d21f-d380-4820-81a1-0610ecc4016d", "source": "71112060-2143-4d86-9fd9-e88b66db7ff6"}], 
+15:02:18 | ai_draft.files_attached | ai_application_draft | {"files": [{"id": "a3c17543-a736-469b-a345-a9cc67197cab", "source": "2725e71c-5b9e-41fd-ae47-a8c526d43f31"}], 
+15:02:31 | ai_draft.updated | ai_application_draft | {"by": "panel", "fields": ["costItems"], "merged": null, "version": 8}
+15:05:21 | custom.created | custom | {"key": "travel-expense", "version": "c034b24d-3a92-4ff9-a415-5368f4cb9832", "caseNumber": "CP115100052", "for
+15:05:21 | attachment.uploaded | custom | {"mime": "application/pdf", "size": 80488, "sha256": "ff561b9bc4eeb844288247c582bdcc09fc32755b65b3ccb01d40d274
+15:05:21 | attachment.uploaded | custom | {"mime": "application/pdf", "size": 13855824, "sha256": "675ca77b26bff45007e56b87d45ca8eae5f921d954073506870b6
+15:05:21 | attachment.uploaded | custom | {"mime": "image/jpeg", "size": 18180, "sha256": "9f516b00465b16a61e25108e95af895604b8c93435c98fa9e0b2dd2028a0c
+15:15:51 | custom.step_approved | custom | {"final": false, "stepOrder": 1}
+15:16:20 | custom.step_approved | custom | {"final": true, "stepOrder": 3}

@@ -1,0 +1,90 @@
+{
+  "when": "2026-10-31T07:01:31.389Z",
+  "results": [
+    {
+      "case": "1-pending-content",
+      "ok": true,
+      "why": "「待您簽核：公出差旅申請單」測試員工 申請｜[測試] 桃園產線評估 · 桃園市 · 2026-11-12 09:00 ～ 2026-11-12 18:00"
+    },
+    {
+      "case": "5-facts-match-record",
+      "ok": true,
+      "why": "比對 48 則提醒與原單：事由、地點、金額、單號全部一致"
+    },
+    {
+      "case": "2-return-real-reason",
+      "ok": true,
+      "why": "原因「[測試] 請補上客戶拜訪行程與預估交通方式後再送出。」與簽核紀錄相同；補件入口 true"
+    },
+    {
+      "case": "3-reject-no-resubmit",
+      "ok": true,
+      "why": "公出差旅申請單已被拒絕；補件入口 false（工作流程目前沒有拒絕狀態，以狀態值驗證）"
+    },
+    {
+      "case": "4-no-reason-honest",
+      "ok": true,
+      "why": "[測試] 高雄客戶說明會 · 高雄市 · 2026-11-10 09:00 ～ 2026-11-10 17:00｜原因：退回時未提供原因"
+    },
+    {
+      "case": "6-total-beyond-page",
+      "ok": true,
+      "why": "DB 48 張；歡迎訊息「你目前有 48 張單待簽核。」"
+    },
+    {
+      "case": "7-no-loss-across-pages",
+      "ok": true,
+      "why": "同時間 95 則：3 頁取得 95 則不重複；重新載入還原 95 則；時間較早但晚提交的通知 1 則也取得"
+    },
+    {
+      "case": "8-reconnect-no-repeat",
+      "ok": true,
+      "why": "重連再輪詢 0 則；兩裝置同時輪詢共彈出 1 次"
+    },
+    {
+      "case": "9-read-keeps-todo",
+      "ok": true,
+      "why": "已讀後待簽 48 → 48，簽核步驟仍 pending；該則不再提醒"
+    },
+    {
+      "case": "10-nudge-once-per-day",
+      "ok": true,
+      "why": "兩裝置同時：already_today、notified；通知 1 則"
+    },
+    {
+      "case": "11-day-boundary-taipei",
+      "ok": true,
+      "why": "23:59 notified；同分鐘 already_today；00:01 notified（2030-03-10、2031-01-01、2031-01-02）"
+    },
+    {
+      "case": "nudge-api-authz",
+      "ok": true,
+      "why": "B 直接呼叫：找不到單據或無權限。"
+    },
+    {
+      "case": "12-no-model-needed",
+      "ok": true,
+      "why": "憑證失效時：「你送出的 3 張單仍在處理，其中 1 張被退回待補件；今天有 4 張單有新進度。」；退回提醒仍有原因（摘要由原單產生，不呼叫模型）"
+    },
+    {
+      "case": "resubmit-natural-language",
+      "ok": true,
+      "why": "工具 查詢我的單據、開補件草稿、讀取草稿、更新草稿；事由「[測試] 高雄客戶王小明需求訪談」；沿用原單版本 true"
+    },
+    {
+      "case": "resubmit-authz",
+      "ok": true,
+      "why": "再開同一張 → 同一草稿 true；B：not_found；非退回單：not_returned"
+    },
+    {
+      "case": "resubmit-stale-blocked",
+      "ok": true,
+      "why": "被擋：表單已被其他人更新，請重新整理頁面後再修改；原單仍 returned"
+    },
+    {
+      "case": "resubmit-same-form",
+      "ok": true,
+      "why": "3 次送出：同一單號 20261031BT0004，狀態 pending_approval，單據總數不變；附件 0 → 1；稽核 custom.resubmitted"
+    }
+  ]
+}

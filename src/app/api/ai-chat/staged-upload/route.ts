@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 /**
- * Multipart upload for AI chat staging — avoids base64 inflation through Server Actions.
+ * Multipart upload for AI chat staging — keeps the original file; avoids base64 inflation through Server Actions.
  * Body still subject to proxyClientMaxBodySize (configured 55mb).
  */
 export async function POST(request: Request) {
@@ -33,7 +33,6 @@ export async function POST(request: Request) {
     conversationId,
     clientAttachmentId,
     fileName: file.name || 'image',
-    mimeType: file.type || 'application/octet-stream',
     bytes,
   });
   if (!result.ok) {
@@ -43,44 +42,7 @@ export async function POST(request: Request) {
     );
   }
 
-  // Business invoice check after security scan — remind, never block staging.
-  let invoice: import('@/lib/attachments/invoice-check').InvoiceCheckResult | null = null;
-  try {
-    const { analyzeStagedAttachment } = await import('@/lib/ai-chat/staged-invoice');
-    const analyzed = await analyzeStagedAttachment({
-      ownerEmployeeId: employee.id,
-      stagedId: result.staged.id,
-    });
-    if (analyzed.ok) {
-      invoice = analyzed.result;
-    } else {
-      invoice = {
-        complete: false,
-        pagesAnalysed: 0,
-        pagesTotal: null,
-        overallStatus: 'analysis_failed',
-        summary: '無法完成發票／統編檢查；安全掃描已通過，確認後仍可夾帶',
-        pages: [],
-        usedVision: false,
-      };
-    }
-  } catch (err) {
-    console.warn('[staged-upload] invoice analyze:', (err as Error).message);
-    invoice = {
-      complete: false,
-      pagesAnalysed: 0,
-      pagesTotal: null,
-      overallStatus: 'analysis_failed',
-      summary: '發票檢查發生錯誤；安全掃描已通過，確認後仍可夾帶',
-      pages: [],
-      usedVision: false,
-    };
-  }
-
-  return NextResponse.json({
-    ok: true,
-    staged: result.staged,
-    scanStatus: result.staged.scanStatus,
-    invoice,
-  });
+  // Deterministic checks only (real file type, size, security scan). The AI check
+  // starts when the person presses 確認並檢查, never on upload.
+  return NextResponse.json({ ok: true, staged: result.staged, scanStatus: result.staged.scanStatus });
 }

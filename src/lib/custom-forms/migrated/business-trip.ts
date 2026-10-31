@@ -96,6 +96,17 @@ export const BUSINESS_TRIP_FORM: MigratedForm = {
             format: 'plain',
           },
           {
+            // Optional: lets a trip be filed against a project (also recorded on the submission's project_id).
+            id: 'projectId',
+            type: 'project',
+            label: '關聯專案',
+            help: '如出差屬於特定專案請選擇；非必填',
+            required: false,
+            width: 2,
+            showInHeader: true,
+            semantic: 'project',
+          },
+          {
             id: 'itinerary',
             type: 'textarea',
             label: '行程概要',

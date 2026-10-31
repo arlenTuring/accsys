@@ -7,14 +7,16 @@ import {
   createConversationAction,
   pollLauncherEventsAction,
   sendAiChatMessage,
+  startResubmissionAction,
 } from '@/lib/ai-chat/actions';
 import type { LauncherEvent } from '@/lib/ai-chat/launcher-events';
 import { SafeMarkdown } from '@/app/tools/ai-chat/safe-markdown';
 import { usePathname } from 'next/navigation';
 
 const MUTE_KEY = 'accsys.ai.launcher.muteUntil';
-const CURSOR_KEY = 'accsys.ai.launcher.cursor';
 const SEEN_CHANNEL = 'accsys-ai-launcher';
+/** One-time hand-over to the full assistant: a URL parameter would reopen the draft on every reload. */
+const OPEN_DRAFT_KEY = 'accsys.ai.openDraft';
 const FULL_PATH = '/tools/ai-chat';
 
 type Props = {
@@ -38,7 +40,6 @@ export function GlobalAssistant({ enabled }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const [unread, setUnread] = useState(0);
-  const cursorRef = useRef<string | null>(null);
   const inputFocused = useRef(false);
   const panelRef = useRef<HTMLDivElement>(null);
   /** First Enter arms send; second Enter sends. Typing / blur clears the arm. */
@@ -49,7 +50,6 @@ export function GlobalAssistant({ enabled }: Props) {
     try {
       const m = Number(sessionStorage.getItem(MUTE_KEY) || '0');
       setMutedUntil(m);
-      cursorRef.current = sessionStorage.getItem(CURSOR_KEY);
     } catch {
       /* ignore */
     }
@@ -71,9 +71,11 @@ export function GlobalAssistant({ enabled }: Props) {
       for (const e of incoming) {
         if (!keys.has(e.eventKey)) merged.push(e);
       }
-      return merged.slice(-8);
+      return merged;
     });
-    setUnread((n) => n + incoming.length);
+    const fresh = incoming.filter((e) => e.fresh).length;
+    if (fresh === 0) return;
+    setUnread((n) => n + fresh);
     // Do not steal focus while typing.
     if (!inputFocused.current && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
       // Soft open only when collapsed and not muted.
@@ -88,6 +90,19 @@ export function GlobalAssistant({ enabled }: Props) {
     let timer: number | undefined;
     let delay = 15_000;
 
+    /** Walks every page of a scope, so a long backlog arrives in one go. False when a request failed. */
+    async function drain(scope: 'fresh' | 'delivered'): Promise<boolean> {
+      let after: string | null = null;
+      for (let page = 0; page < 25 && !cancelled; page++) {
+        const res = await pollLauncherEventsAction({ scope, after });
+        if (!res.ok) return false;
+        if (res.events.length) absorbEvents(res.events);
+        if (!res.hasMore) break;
+        after = res.nextAfter;
+      }
+      return true;
+    }
+
     async function tick() {
       if (cancelled) return;
       if (document.visibilityState === 'hidden') {
@@ -100,24 +115,14 @@ export function GlobalAssistant({ enabled }: Props) {
         timer = window.setTimeout(tick, delay);
         return;
       }
-      const res = await pollLauncherEventsAction({ cursorCreatedAt: cursorRef.current });
-      if (!cancelled && res.ok) {
-        if (res.nextCursor) {
-          cursorRef.current = res.nextCursor;
-          try {
-            sessionStorage.setItem(CURSOR_KEY, res.nextCursor);
-          } catch {
-            /* ignore */
-          }
-        }
-        if (res.events.length) absorbEvents(res.events);
-        delay = 15_000;
-      } else {
-        delay = Math.min(delay * 1.5, 90_000);
-      }
-      timer = window.setTimeout(tick, delay);
+      // Offline or a deploy in progress: nothing was claimed, so the next tick picks it all up.
+      const ok = await drain('fresh').catch(() => false);
+      delay = ok ? 15_000 : Math.min(delay * 1.5, 90_000);
+      if (!cancelled) timer = window.setTimeout(tick, delay);
     }
 
+    // Reminders already delivered and not dealt with come back quietly after a reload.
+    void drain('delivered').catch(() => false);
     timer = window.setTimeout(tick, 4_000);
 
     const onVis = () => {
@@ -162,8 +167,28 @@ export function GlobalAssistant({ enabled }: Props) {
     } catch {
       /* ignore */
     }
-    setEvents((prev) => prev.filter((e) => !keys.includes(e.eventKey)));
+    const left = events.filter((e) => !keys.includes(e.eventKey));
+    setEvents(left);
     setUnread(0);
+    // Nothing left to say: no empty panel staying on screen.
+    if (left.length === 0 && replies.length === 0) setOpen(false);
+  }
+
+  function resubmit(ev: LauncherEvent) {
+    start(async () => {
+      const res = await startResubmissionAction({ submissionId: ev.formId! }).catch(() => null);
+      if (!res || !res.ok) {
+        setError(res?.error ?? '連線中斷，補件草稿沒有建立，請重試。');
+        return;
+      }
+      dismiss([ev.eventKey], 'viewed');
+      try {
+        sessionStorage.setItem(OPEN_DRAFT_KEY, JSON.stringify({ draftId: res.draftId, title: res.title }));
+      } catch {
+        /* the draft is still listed in the conversation */
+      }
+      window.location.href = `${FULL_PATH}?c=${encodeURIComponent(res.conversationId)}`;
+    });
   }
 
   function ensureConversation(then: (id: string) => void) {
@@ -256,83 +281,37 @@ export function GlobalAssistant({ enabled }: Props) {
             {events.length === 0 && replies.length === 0 && (
               <p className="text-td-muted">沒有新的主動提醒。可問短問題，或進入完整助手。</p>
             )}
-            {events.map((ev) => (
+            {events.length > 3 && (
+              <div className="flex items-center justify-between text-xs">
+                <p className="font-medium text-td-blue-dark">共 {events.length} 則提醒</p>
+                <button type="button" className="underline" onClick={() => dismiss(events.map((e) => e.eventKey), 'dismissed')}>
+                  全部稍後
+                </button>
+              </div>
+            )}
+            {[...events].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((ev) => (
               <div key={ev.eventKey} className="rounded-lg border border-td-border px-2 py-2">
                 <p className="font-medium text-td-blue-dark">{ev.title}</p>
-                {ev.kind !== 'digest' && (
-                  <p className="mt-0.5 text-xs text-td-muted whitespace-pre-wrap">
-                    {ev.caseNumber ? `${ev.caseNumber} · ` : ''}
-                    {ev.body}
-                  </p>
+                <p className="mt-0.5 text-xs text-td-muted whitespace-pre-wrap">{ev.body}</p>
+                {ev.reason && !ev.reason.missing && ev.reason.full !== ev.reason.short && (
+                  <details className="mt-1 text-xs">
+                    <summary className="cursor-pointer underline">看完整原因</summary>
+                    <p className="mt-1 whitespace-pre-wrap">{ev.reason.full}</p>
+                  </details>
                 )}
-                {ev.kind === 'digest' && ev.items && ev.items.length > 0 && (
-                  <ul className="mt-1 space-y-2">
-                    {ev.items.map((item) => (
-                      <li key={item.eventKey} className="rounded border border-td-border/70 bg-slate-50 px-2 py-1.5 text-xs">
-                        <p className="font-medium text-td-blue-dark">{item.title}</p>
-                        <p className="mt-0.5 text-td-muted whitespace-pre-wrap">
-                          {item.caseNumber ? `${item.caseNumber} · ` : ''}
-                          {item.body}
-                        </p>
-                        <div className="mt-1 flex flex-wrap gap-2">
-                          {item.href && (
-                            <Link
-                              href={item.href}
-                              className="underline"
-                              onClick={() => dismiss([item.eventKey, ev.eventKey], 'viewed')}
-                            >
-                              查看單據
-                            </Link>
-                          )}
-                          <button
-                            type="button"
-                            className="underline"
-                            onClick={() => {
-                              dismiss([item.eventKey, ev.eventKey], 'viewed');
-                              ensureConversation((id) => {
-                                window.location.href = `${FULL_PATH}?c=${encodeURIComponent(id)}`;
-                              });
-                            }}
-                          >
-                            在助手處理
-                          </button>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                {ev.caseNumber && <p className="mt-0.5 text-[11px] text-td-muted">單號 {ev.caseNumber}</p>}
                 <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                  {ev.kind !== 'digest' && ev.href && (
+                  {ev.canResubmit && ev.formId && (
+                    <button type="button" className="font-medium underline" disabled={pending} onClick={() => resubmit(ev)}>
+                      補件
+                    </button>
+                  )}
+                  {ev.href && (
                     <Link href={ev.href} className="underline" onClick={() => dismiss([ev.eventKey], 'viewed')}>
                       查看
                     </Link>
                   )}
-                  {ev.kind !== 'digest' && (
-                    <button
-                      type="button"
-                      className="underline"
-                      onClick={() => {
-                        dismiss([ev.eventKey], 'viewed');
-                        ensureConversation((id) => {
-                          window.location.href = `${FULL_PATH}?c=${encodeURIComponent(id)}`;
-                        });
-                      }}
-                    >
-                      繼續處理
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="underline"
-                    onClick={() =>
-                      dismiss(
-                        ev.kind === 'digest' && ev.items
-                          ? [ev.eventKey, ...ev.items.map((i) => i.eventKey)]
-                          : [ev.eventKey],
-                        'dismissed'
-                      )
-                    }
-                  >
+                  <button type="button" className="underline" onClick={() => dismiss([ev.eventKey], 'dismissed')}>
                     稍後
                   </button>
                 </div>

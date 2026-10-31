@@ -1,4 +1,5 @@
 import { and, desc, eq, sql } from 'drizzle-orm';
+import { recordAudit } from '@/lib/audit/record';
 import type { Actor } from '@/lib/authz/forms';
 import { getDb } from '@/lib/db';
 import {
@@ -38,9 +39,6 @@ export async function attachApprovedSnapshotToDraft(input: {
   const current = await getDraftForOwner(input.draftId, ownerEmployeeId);
   if (!current) throw new Error('draft_not_found');
   if (current.status !== 'draft') throw new Error('draft_not_editable');
-  if (current.version !== input.expectedVersion) {
-    return { ok: false, conflict: { code: 'version_conflict', draft: current } };
-  }
 
   const db = getDb();
   const [snapshot] = await db
@@ -59,85 +57,55 @@ export async function attachApprovedSnapshotToDraft(input: {
     .limit(1);
   if (!snapshot) throw new Error('snapshot_not_found');
 
-  const inserted = await db
-    .insert(aiDraftSnapshotAttachments)
-    .values({
-      draftId: input.draftId,
-      snapshotId: input.snapshotId,
-      attachedByEmployeeId: ownerEmployeeId,
-    })
-    .onConflictDoNothing()
-    .returning({ attachedAt: aiDraftSnapshotAttachments.attachedAt });
+  const meta = (attachedAt: Date): DraftSnapshotMeta => ({
+    snapshotId: snapshot.id,
+    sourceFormType: snapshot.sourceFormType,
+    sourceFormId: snapshot.sourceFormId,
+    sourceFormNumber: snapshot.sourceFormNumber,
+    sourceFormKey: snapshot.sourceFormKey,
+    fileName: snapshot.fileName,
+    fileSizeBytes: snapshot.fileSizeBytes,
+    approvedAt: snapshot.approvedAt,
+    attachedAt,
+  });
 
-  let draft = current;
-  if (inserted.length > 0) {
-    const [row] = await db
-      .update(aiApplicationDrafts)
-      .set({
-        version: sql`${aiApplicationDrafts.version} + 1`,
-        updatedAt: sql`now()`,
-      })
-      .where(
-        and(
-          eq(aiApplicationDrafts.id, input.draftId),
-          eq(aiApplicationDrafts.ownerEmployeeId, ownerEmployeeId),
-          eq(aiApplicationDrafts.version, input.expectedVersion),
-          eq(aiApplicationDrafts.status, 'draft')
-        )
-      )
-      .returning();
-    if (!row) {
-      const again = await getDraftForOwner(input.draftId, ownerEmployeeId);
-      if (!again) throw new Error('draft_not_found');
-      return { ok: false, conflict: { code: 'version_conflict', draft: again } };
-    }
-    draft = mapDraft(row);
-  } else {
-    const [link] = await db
+  // Version check and link in one transaction: a conflict leaves nothing behind,
+  // and a PDF already on the draft is a no-op that keeps the version.
+  const outcome = await db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select({ version: aiApplicationDrafts.version, status: aiApplicationDrafts.status })
+      .from(aiApplicationDrafts)
+      .where(and(eq(aiApplicationDrafts.id, input.draftId), eq(aiApplicationDrafts.ownerEmployeeId, ownerEmployeeId)))
+      .for('update');
+    if (!locked || locked.status !== 'draft') throw new Error('draft_not_editable');
+    const [link] = await tx
       .select({ attachedAt: aiDraftSnapshotAttachments.attachedAt })
       .from(aiDraftSnapshotAttachments)
-      .where(
-        and(
-          eq(aiDraftSnapshotAttachments.draftId, input.draftId),
-          eq(aiDraftSnapshotAttachments.snapshotId, input.snapshotId)
-        )
-      )
+      .where(and(eq(aiDraftSnapshotAttachments.draftId, input.draftId), eq(aiDraftSnapshotAttachments.snapshotId, input.snapshotId)))
       .limit(1);
-    if (!link) throw new Error('attach_failed');
-    return {
-      ok: true,
-      created: false,
-      draft,
-      snapshot: {
-        snapshotId: snapshot.id,
-        sourceFormType: snapshot.sourceFormType,
-        sourceFormId: snapshot.sourceFormId,
-        sourceFormNumber: snapshot.sourceFormNumber,
-        sourceFormKey: snapshot.sourceFormKey,
-        fileName: snapshot.fileName,
-        fileSizeBytes: snapshot.fileSizeBytes,
-        approvedAt: snapshot.approvedAt,
-        attachedAt: link.attachedAt,
-      },
-    };
-  }
+    if (link) return { kind: 'existing' as const, attachedAt: link.attachedAt };
+    if (locked.version !== input.expectedVersion) return { kind: 'conflict' as const };
+    const [row] = await tx
+      .insert(aiDraftSnapshotAttachments)
+      .values({ draftId: input.draftId, snapshotId: input.snapshotId, attachedByEmployeeId: ownerEmployeeId })
+      .returning({ attachedAt: aiDraftSnapshotAttachments.attachedAt });
+    await tx
+      .update(aiApplicationDrafts)
+      .set({ version: sql`${aiApplicationDrafts.version} + 1`, updatedAt: sql`now()` })
+      .where(eq(aiApplicationDrafts.id, input.draftId));
+    await recordAudit(tx, {
+      actorEmployeeId: ownerEmployeeId,
+      action: 'ai_draft.approved_pdf_attached',
+      entityType: 'ai_application_draft',
+      entityId: input.draftId,
+      details: { snapshotId: snapshot.id, sourceFormNumber: snapshot.sourceFormNumber, version: locked.version + 1 },
+    });
+    return { kind: 'added' as const, attachedAt: row.attachedAt };
+  });
 
-  return {
-    ok: true,
-    created: true,
-    draft,
-    snapshot: {
-      snapshotId: snapshot.id,
-      sourceFormType: snapshot.sourceFormType,
-      sourceFormId: snapshot.sourceFormId,
-      sourceFormNumber: snapshot.sourceFormNumber,
-      sourceFormKey: snapshot.sourceFormKey,
-      fileName: snapshot.fileName,
-      fileSizeBytes: snapshot.fileSizeBytes,
-      approvedAt: snapshot.approvedAt,
-      attachedAt: inserted[0]!.attachedAt,
-    },
-  };
+  const draft = (await getDraftForOwner(input.draftId, ownerEmployeeId))!;
+  if (outcome.kind === 'conflict') return { ok: false, conflict: { code: 'version_conflict', draft } };
+  return { ok: true, created: outcome.kind === 'added', draft, snapshot: meta(outcome.attachedAt) };
 }
 
 export async function listDraftSnapshots(draftId: string, ownerId: string): Promise<DraftSnapshotMeta[]> {

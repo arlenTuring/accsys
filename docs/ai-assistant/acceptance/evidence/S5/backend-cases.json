@@ -1,0 +1,65 @@
+{
+  "when": "2026-10-30T11:06:55.092Z",
+  "results": [
+    {
+      "case": "old-result-cleared",
+      "ok": true,
+      "why": "編輯前結果 not_found；儲存編輯後 analysis_status=null"
+    },
+    {
+      "case": "annotation-not-evidence",
+      "ok": true,
+      "why": "畫面版含買方統編，AI 讀的版本沒有 → not_found（不是 match）"
+    },
+    {
+      "case": "analysis-version",
+      "ok": true,
+      "why": "分析記錄的檔案雜湊 = 不含註解版本（a9919818c9c5…）"
+    },
+    {
+      "case": "versions-kept",
+      "ok": true,
+      "why": "版本 2,1；舊基準再存 → conflict"
+    },
+    {
+      "case": "original-unchanged",
+      "ok": true,
+      "why": "編輯兩次後原檔雜湊不變（9f516b00465b…）"
+    },
+    {
+      "case": "restore-original",
+      "ok": true,
+      "why": "還原後目前版本為原圖，歷史仍有 2 個版本"
+    },
+    {
+      "case": "edit-carried-to-draft",
+      "ok": true,
+      "why": "草稿顯示編輯版；草稿內原檔雜湊與上傳時相同"
+    },
+    {
+      "case": "edit-in-draft",
+      "ok": true,
+      "why": "草稿內再次編輯 → v1；舊 AI 結果標為需重新檢查（none）"
+    },
+    {
+      "case": "other-user-denied",
+      "ok": true,
+      "why": "B 不能編輯、讀取 A 的檔案或編輯版本"
+    },
+    {
+      "case": "rejects-non-image",
+      "ok": true,
+      "why": "回傳 invalid"
+    },
+    {
+      "case": "rejects-bad-ops",
+      "ok": true,
+      "why": "不合法旋轉與裁切被拒"
+    },
+    {
+      "case": "pending-survive-reload",
+      "ok": true,
+      "why": "對話待處理檔案 1 個"
+    }
+  ]
+}

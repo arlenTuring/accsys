@@ -1,0 +1,7 @@
+歡迎訊息： 你目前有 9 張單待簽核。（資料時間 10/31 下午02:07） pendingCount=9
+第 1 次輪詢：20 則，cursor 前進=true
+內容範例： {"eventKey":"custom:94efb3c5-6057-4d15-a8f3-469a40c36b89:v1:approval_requested:20000000-0000-0000-0000-000000000002","title":"有新的待簽核事項","body":"公出差旅申請單 20261031BT0037 待您簽核","caseNumber":"20261031BT0037","href":"/f/_/94efb3c5-6057-4d15-a8f3-469a40c36b89"}
+第 2 次輪詢：1 則，cursor 前進=false
+第 3 次輪詢：1 則，cursor 前進=false
+第 4 次輪詢：1 則，cursor 前進=false
+通知總數 56，輪詢實際取得 20，遺失 36（ref 0b319172）

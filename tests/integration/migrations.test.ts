@@ -30,7 +30,7 @@ type LoginRole = keyof typeof PASSWORDS;
 const LEGACY_TABLES: Record<string, { key: string; newColumns?: string[] }> = {
   departments: { key: 'id', newColumns: ['parent_department_id', 'org_level_id', 'sort_order', 'active'] },
   employees: { key: 'id', newColumns: ['access_enabled', 'disabled_at', 'disabled_reason', 'phone', 'extension'] },
-  projects: { key: 'id', newColumns: ['kind'] },
+  projects: { key: 'id', newColumns: ['kind', 'restricted'] },
   budget_codes: { key: 'id' },
   suppliers: { key: 'id' },
   procurement_cases: { key: 'id' },

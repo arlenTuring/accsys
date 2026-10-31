@@ -522,7 +522,7 @@ export async function replaceSteps(
   } else {
     first = await insertResolvedSteps(tx, formType, form.id, input.chain.resolved);
   }
-  // Requests from the previous round are obsolete.
+  // Requests and returns of the previous round are obsolete.
   await tx
     .update(notifications)
     .set({ isRead: true })
@@ -530,7 +530,7 @@ export async function replaceSteps(
       and(
         eq(notifications.formType, formType),
         eq(notifications.formId, form.id),
-        eq(notifications.type, 'approval_requested'),
+        inArray(notifications.type, ['approval_requested', 'request_returned']),
         eq(notifications.isRead, false)
       )
     );

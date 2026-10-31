@@ -33,9 +33,16 @@ type PanelState = {
   options: PickerOptions;
   currentEmployeeId: string;
   versionMismatch: boolean;
+  resubmit: { formNumber: string; href: string; reason: string | null } | null;
   today: string;
   files: DraftAttachedFile[];
 };
+
+function fmt(v: unknown): string {
+  if (v === null || v === undefined || v === '') return '（空白）';
+  if (typeof v === 'object') return 'rows' in (v as object) ? `${((v as { rows?: unknown[] }).rows ?? []).length} 列明細` : JSON.stringify(v);
+  return String(v).replace('T', ' ');
+}
 
 export function DraftPanel({
   draftId,
@@ -48,6 +55,22 @@ export function DraftPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [saveNote, setSaveNote] = useState<string | null>(null);
+  /** Server data the form was loaded from (merge base for the next save). */
+  const baseRef = useRef<{ version: number; data: Record<string, unknown> } | null>(null);
+  /** Version this panel itself just saved (a reload of it is not news). */
+  const savedRef = useRef<{ version: number; at: string } | null>(null);
+  /** One formal submit at a time: repeated clicks never start a second save + submit. */
+  const submittingRef = useRef(false);
+  /** Formal submit waits for an explicit 確認送出 (sending a chat message never submits). */
+  const [confirming, setConfirming] = useState<{ resolve: (ok: boolean) => void; rows: { label: string; value: string }[] } | null>(null);
+  /** Newer server version that arrived while the panel had unsaved edits. */
+  const [pendingRemote, setPendingRemote] = useState<{ version: number; fields: string[] } | null>(null);
+  const [conflict, setConflict] = useState<{
+    latest: ApplicationDraft;
+    items: { field: string; label: string; mine: unknown; theirs: unknown }[];
+    mine: Record<string, unknown>;
+  } | null>(null);
   const [dirty, setDirty] = useState(false);
   const [remoteNotice, setRemoteNotice] = useState<string | null>(null);
   const [panel, setPanel] = useState<PanelState | null>(null);
@@ -60,7 +83,7 @@ export function DraftPanel({
   draftIdRef.current = draftId;
 
   const reload = useCallback(
-    async (opts?: { soft?: boolean; fromRemote?: boolean }) => {
+    async (opts?: { soft?: boolean; fromRemote?: boolean; discardLocal?: boolean }) => {
       const requestDraftId = draftIdRef.current;
       const soft = Boolean(opts?.soft);
       if (!soft) {
@@ -78,7 +101,18 @@ export function DraftPanel({
           onLoadState?.('error', res.error);
           return;
         }
-        const wasDirty = dirtyRef.current;
+        if (opts?.fromRemote && dirtyRef.current && !opts.discardLocal) {
+          // Unsaved manual edits: keep them on screen, say what changed remotely.
+          const base = baseRef.current?.data ?? {};
+          const keys = new Set([...Object.keys(base), ...Object.keys(res.draft.data)]);
+          const labels = new Map(res.schema.sections.flatMap((sec) => sec.fields.map((f) => [f.id, f.label] as const)));
+          const fields = [...keys]
+            .filter((k) => JSON.stringify(base[k] ?? null) !== JSON.stringify(res.draft.data[k] ?? null))
+            .map((k) => labels.get(k) ?? k);
+          if (res.draft.version !== baseRef.current?.version) setPendingRemote({ version: res.draft.version, fields });
+          onVersionChange?.(res.draft);
+          return;
+        }
         setPanel({
           draft: res.draft,
           formKey: res.formKey,
@@ -88,22 +122,26 @@ export function DraftPanel({
           options: res.options,
           currentEmployeeId: res.currentEmployeeId,
           versionMismatch: res.versionMismatch,
+          resubmit: res.resubmit,
           today: res.today,
           files: res.files,
         });
-        // Always remount the form with server `data` — soft reload used to update
-        // panel state only, leaving CustomForm's empty local `values` in place.
+        baseRef.current = { version: res.draft.version, data: res.draft.data };
+        setPendingRemote(null);
+        setConflict(null);
+        // Remount the form with server `data` (CustomForm reads `initial` once).
         setFormMountId((n) => n + 1);
         setSaveState('idle');
+        setSaveNote(
+          savedRef.current?.version === res.draft.version
+            ? `已儲存 v${res.draft.version} · ${savedRef.current.at}`
+            : `已載入 v${res.draft.version}`
+        );
         setDirty(false);
         onDirtyChange?.(false);
         onLoadState?.('ready');
         onVersionChange?.(res.draft);
-        if (opts?.fromRemote && wasDirty) {
-          setRemoteNotice('已套用對話中的草稿更新（會覆蓋此面板尚未儲存的手動修改）。');
-        } else if (opts?.fromRemote) {
-          setRemoteNotice(null);
-        }
+        setRemoteNotice(opts?.fromRemote && opts.discardLocal ? '已載入最新版本，先前未儲存的修改已放棄。' : null);
       } catch (err) {
         if (draftIdRef.current !== requestDraftId) return;
         const msg = err instanceof Error ? err.message : '載入草稿失敗';
@@ -131,6 +169,48 @@ export function DraftPanel({
     void reload({ soft: true, fromRemote: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey]);
+
+  /** Save with merge base; on failure the form keeps every typed value. */
+  async function save(data: Record<string, unknown>, expectedVersion: number, baseData: Record<string, unknown> | null) {
+    if (!panel) return;
+    setSaveState('saving');
+    setSaveNote('儲存中…');
+    let res: Awaited<ReturnType<typeof saveDraftAction>>;
+    try {
+      res = await saveDraftAction({ draftId: panel.draft.id, expectedVersion, data, baseData });
+    } catch {
+      setSaveState('error');
+      setSaveNote('連線中斷，尚未儲存。您的輸入仍保留在畫面上，恢復連線後再按「儲存草稿」。');
+      throw new Error('連線中斷，尚未儲存。');
+    }
+    if (!res.ok) {
+      setSaveState('error');
+      if (res.code === 'conflict') {
+        const mineChanged = Object.fromEntries(
+          Object.keys({ ...(baseData ?? {}), ...data })
+            .filter((k) => JSON.stringify(data[k] ?? null) !== JSON.stringify(baseData?.[k] ?? null))
+            .map((k) => [k, data[k]])
+        );
+        setConflict({ latest: res.draft, items: res.conflicts, mine: mineChanged });
+        setSaveNote('尚未儲存：有欄位衝突，請在上方選擇。');
+      } else {
+        setSaveNote(`尚未儲存：${res.error}`);
+      }
+      throw new Error(res.error);
+    }
+    setSaveState('saved');
+    setPendingRemote(null);
+    setConflict(null);
+    setDirty(false);
+    onDirtyChange?.(false);
+    setPanel((prev) => (prev ? { ...prev, draft: res.draft } : prev));
+    onVersionChange?.(res.draft);
+    baseRef.current = { version: res.draft.version, data: res.draft.data };
+    savedRef.current = { version: res.draft.version, at: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }) };
+    setSaveNote(`已儲存 v${res.draft.version} · ${savedRef.current.at}`);
+    // Merged with someone else's changes: show the combined result.
+    if (res.mergedFields) void reload({ soft: true });
+  }
 
   if (loading && !panel) {
     return <p className="p-4 text-sm text-td-muted">載入草稿…</p>;
@@ -192,6 +272,70 @@ export function DraftPanel({
           重新載入草稿
         </button>
       </div>
+      {confirming && (
+        <div ref={(el) => el?.scrollIntoView({ block: 'center' })} role="dialog" aria-modal="true" aria-labelledby="submit-confirm-title" className="rounded-lg border-2 border-td-blue bg-white px-4 py-3 text-sm shadow">
+          <p id="submit-confirm-title" className="font-semibold text-td-blue-dark">
+            {panel?.resubmit ? `確認重新送出「${panel.name}」？` : `確認正式送出「${panel?.name}」？`}
+          </p>
+          <p className="mt-1 text-xs text-td-muted">
+            {panel?.resubmit
+              ? `會更新原單 ${panel.resubmit.formNumber} 並重新進入簽核，不會產生新單號。`
+              : '送出後會建立正式單據並進入簽核，不能再以草稿修改。'}
+          </p>
+          {confirming.rows.length > 0 && (
+            <ul className="mt-2 space-y-0.5 text-xs">
+              {confirming.rows.map((r) => (
+                <li key={r.label}>
+                  <span className="text-td-muted">{r.label}：</span>
+                  {r.value}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="mt-3 flex gap-2">
+            <button type="button" className="btn-primary text-sm" autoFocus onClick={() => confirming.resolve(true)}>
+              {panel?.resubmit ? '確認重新送出' : '確認送出'}
+            </button>
+            <button type="button" className="btn-secondary text-sm" onClick={() => confirming.resolve(false)}>
+              返回修改
+            </button>
+          </div>
+        </div>
+      )}
+      {pendingRemote && (
+        <div role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+          助手已把草稿更新到 v{pendingRemote.version}
+          {pendingRemote.fields.length > 0 ? `（${pendingRemote.fields.join('、')}）` : ''}。您有尚未儲存的修改，畫面沒有自動套用。
+          按「儲存草稿」會合併不同欄位；同一欄位兩邊都改時會請您選擇。
+          <button type="button" className="ml-2 underline" onClick={() => void reload({ soft: true, fromRemote: true, discardLocal: true })}>
+            放棄我的修改，載入 v{pendingRemote.version}
+          </button>
+        </div>
+      )}
+      {conflict && (
+        <div role="alert" className="space-y-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-950">
+          <p>同一欄位已被修改（目前 v{conflict.latest.version}），尚未儲存：</p>
+          <ul className="list-disc pl-5">
+            {conflict.items.map((c) => (
+              <li key={c.field}>
+                {c.label}：您的值「{fmt(c.mine)}」／最新值「{fmt(c.theirs)}」
+              </li>
+            ))}
+          </ul>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn-secondary text-sm"
+              onClick={() => void save({ ...conflict.latest.data, ...conflict.mine }, conflict.latest.version, conflict.latest.data).catch(() => {})}
+            >
+              保留我的值並儲存
+            </button>
+            <button type="button" className="btn-secondary text-sm" onClick={() => void reload({ soft: true, fromRemote: true, discardLocal: true })}>
+              改用最新值（放棄我的修改）
+            </button>
+          </div>
+        </div>
+      )}
       {remoteNotice && (
         <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-950">
           {remoteNotice}
@@ -200,13 +344,24 @@ export function DraftPanel({
           </button>
         </div>
       )}
+      {panel.resubmit && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+          <p className="font-medium">
+            補件：原單{' '}
+            <a className="underline" href={panel.resubmit.href} target="_blank" rel="noreferrer">
+              {panel.resubmit.formNumber}
+            </a>
+          </p>
+          <p className="mt-1 whitespace-pre-wrap text-xs">退回原因：{panel.resubmit.reason ?? '退回時未提供原因'}</p>
+        </div>
+      )}
       {panel.versionMismatch && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           表單已發布新版本。請重新整理草稿內容後再送出，系統不會把舊預覽默默套到新 schema。
         </div>
       )}
       {!panel.schema.sections.some((s) => s.fields.some((f) => f.type === 'attachments')) && (
-        <DraftAttachedFiles draftId={panel.draft.id} files={panel.files} />
+        <DraftAttachedFiles draftId={panel.draft.id} files={panel.files} onChanged={() => void reload({ soft: true, fromRemote: true })} />
       )}
       <CustomForm
         key={`${panel.draft.id}:${formMountId}`}
@@ -223,53 +378,71 @@ export function DraftPanel({
           draftId: panel.draft.id,
           expectedVersion: panel.draft.version,
           attachedFiles: panel.files,
+          submitLabel: panel.resubmit ? '重新送出' : undefined,
           saveState,
+          saveNote: saveNote ?? undefined,
+          onFilesChanged: () => void reload({ soft: true, fromRemote: true }),
           onSave: async (data, expectedVersion) => {
-            setSaveState('saving');
-            const res = await saveDraftAction({
-              draftId: panel.draft.id,
-              expectedVersion,
-              data,
-            });
-            if (!res.ok) {
-              setSaveState('error');
-              if (res.draft) {
-                setPanel((prev) => (prev ? { ...prev, draft: res.draft! } : prev));
-                onVersionChange?.(res.draft);
-              }
-              throw new Error(res.error);
-            }
-            setSaveState('saved');
-            setPanel((prev) => (prev ? { ...prev, draft: res.draft } : prev));
-            onVersionChange?.(res.draft);
+            await save(data, expectedVersion, baseRef.current?.data ?? null);
           },
           onSubmitDocument: async (data, expectedVersion, files) => {
-            const saved = await saveDraftAction({
-              draftId: panel.draft.id,
-              expectedVersion,
-              data,
-            });
-            if (!saved.ok) throw new Error(saved.error);
-            const ver = saved.draft.version;
-            setPanel((prev) => (prev ? { ...prev, draft: saved.draft } : prev));
-
-            const res = await submitDraftAction({
-              draftId: panel.draft.id,
-              expectedVersion: ver,
-              files,
-            });
-            if (!res.ok) throw new Error(res.error);
-            onDirtyChange?.(false);
-            onSubmitted?.({
-              formNumber: res.formNumber,
-              href: res.href,
-              submissionId: res.submissionId,
-              formKey: res.formKey,
-            });
-            await reload({ soft: false });
+            if (submittingRef.current) return;
+            submittingRef.current = true;
+            try {
+              await submitOnce(data, expectedVersion, files);
+            } finally {
+              submittingRef.current = false;
+            }
           },
         }}
       />
     </div>
   );
+
+  async function submitOnce(data: Record<string, unknown>, expectedVersion: number, files: File[]) {
+    if (!panel) return;
+    const rows = panel.schema.sections
+      .flatMap((sec) => sec.fields)
+      .filter((f) => f.showInHeader && data[f.id] !== undefined && data[f.id] !== null && data[f.id] !== '')
+      .map((f) => {
+        const v = data[f.id];
+        // Show names for picked references, not ids.
+        const pools: Partial<Record<string, { id: string; label: string }[]>> = {
+          project: panel.options.projects,
+          employee: panel.options.employees,
+          department: panel.options.departments,
+          budget_code: panel.options.budgetCodes,
+          supplier: panel.options.suppliers,
+        };
+        const pool = pools[f.type];
+        return { label: f.label, value: pool?.find((o) => o.id === v)?.label ?? fmt(v) };
+      });
+    const ok = await new Promise<boolean>((resolve) => setConfirming({ resolve, rows }));
+    setConfirming(null);
+    if (!ok) throw new Error('已取消送出，草稿未變更。');
+    const saved = await saveDraftAction({
+      draftId: panel.draft.id,
+      expectedVersion,
+      data,
+      baseData: baseRef.current?.data ?? null,
+    });
+    if (!saved.ok) throw new Error(saved.error);
+    const ver = saved.draft.version;
+    setPanel((prev) => (prev ? { ...prev, draft: saved.draft } : prev));
+
+    const res = await submitDraftAction({
+      draftId: panel.draft.id,
+      expectedVersion: ver,
+      files,
+    });
+    if (!res.ok) throw new Error(res.error);
+    onDirtyChange?.(false);
+    onSubmitted?.({
+      formNumber: res.formNumber,
+      href: res.href,
+      submissionId: res.submissionId,
+      formKey: res.formKey,
+    });
+    await reload({ soft: false });
+  }
 }

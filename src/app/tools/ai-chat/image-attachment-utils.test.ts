@@ -31,8 +31,10 @@ describe('planAcceptedAttachments', () => {
 });
 
 describe('statusLabel', () => {
-  it('does not invent a separate scan phase label', () => {
-    expect(statusLabel('uploading')).toBe('上傳與檢查中');
-    expect(statusLabel('scanning')).toBe('上傳與檢查中');
+  it('labels upload and scan as one phase, and says the AI has not run yet', () => {
+    expect(statusLabel('uploading')).toBe('上傳與安全檢查中');
+    expect(statusLabel('scanning')).toBe('上傳與安全檢查中');
+    expect(statusLabel('scanned')).toContain('尚未送 AI');
+    expect(statusLabel('blocked')).toContain('已隔離');
   });
 });

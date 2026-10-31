@@ -8,6 +8,7 @@ import { FORM_TABLE, type FormType, FORM_TYPES } from '@/lib/procurement/form-re
 import { taipeiToday } from '@/lib/taipei-date';
 import { runInTransaction, abort, type Outbox } from '@/lib/workflow/tx';
 import { getFormApprovalSnapshot } from './approval-snapshot';
+import { factsFor, factsLine, loadFormFacts } from './form-facts';
 
 export type NudgePreview = {
   formType: FormType;
@@ -32,7 +33,7 @@ async function loadApplicantId(formType: FormType, formId: string): Promise<stri
   return row?.applicant_employee_id ?? null;
 }
 
-export async function previewNudge(formTypeRaw: string, formId: string): Promise<NudgePreview | null> {
+export async function previewNudge(formTypeRaw: string, formId: string, now: Date = new Date()): Promise<NudgePreview | null> {
   if (!isFormType(formTypeRaw) || !/^[0-9a-f-]{36}$/i.test(formId)) return null;
   const formType = formTypeRaw;
   const actor = await getCurrentEmployee();
@@ -70,7 +71,7 @@ export async function previewNudge(formTypeRaw: string, formId: string): Promise
     };
   }
 
-  const businessDate = taipeiToday();
+  const businessDate = taipeiToday(now);
   const db = getDb();
   const [existing] = await db
     .select({ id: aiNudgeEvents.id, createdAt: aiNudgeEvents.createdAt, status: aiNudgeEvents.status })
@@ -105,6 +106,8 @@ export async function previewNudge(formTypeRaw: string, formId: string): Promise
 export async function executeNudge(input: {
   formType: string;
   formId: string;
+  /** Tests only: the day limit follows this clock. */
+  now?: Date;
 }): Promise<
   | {
       ok: true;
@@ -115,7 +118,8 @@ export async function executeNudge(input: {
     }
   | { ok: false; error: string; code?: string }
 > {
-  const preview = await previewNudge(input.formType, input.formId);
+  const now = input.now ?? new Date();
+  const preview = await previewNudge(input.formType, input.formId, now);
   if (!preview) return { ok: false, error: '找不到單據或無權限。', code: 'forbidden' };
   if (!preview.canNudge && preview.alreadyNudgedToday) {
     const db = getDb();
@@ -126,7 +130,7 @@ export async function executeNudge(input: {
         and(
           eq(aiNudgeEvents.formType, preview.formType),
           eq(aiNudgeEvents.formId, preview.formId),
-          eq(aiNudgeEvents.businessDate, taipeiToday())
+          eq(aiNudgeEvents.businessDate, taipeiToday(now))
         )
       )
       .limit(1);
@@ -135,7 +139,7 @@ export async function executeNudge(input: {
       status: 'already_today',
       eventId: row?.id ?? '',
       recipientNames: preview.recipientNames,
-      businessDate: taipeiToday(),
+      businessDate: taipeiToday(now),
     };
   }
   if (!preview.canNudge) {
@@ -145,7 +149,9 @@ export async function executeNudge(input: {
   const actor = await getCurrentEmployee();
   if (!actor) return { ok: false, error: '請先登入。', code: 'unauthenticated' };
 
-  const businessDate = taipeiToday();
+  const businessDate = taipeiToday(now);
+  const facts = factsFor(await loadFormFacts([preview]), preview);
+  const about = facts ? `${facts.label}（${factsLine(facts) || facts.formNumber}）` : preview.caseNumber;
   const result = await runInTransaction('ai_chat.nudge', async (tx, outbox) => {
     // Re-check status inside the transaction.
     const snap = await getFormApprovalSnapshot(preview.formType, preview.formId);
@@ -197,7 +203,7 @@ export async function executeNudge(input: {
     for (let i = 0; i < snap!.pendingApproverIds.length; i++) {
       const recipientEmployeeId = snap!.pendingApproverIds[i];
       const eventKey = `${preview.formType}:${preview.formId}:v${version}:approval_requested:${recipientEmployeeId}:nudge:${businessDate}`;
-      const message = `提醒：${caseNumber} 仍待您簽核（申請人透過 AI 助手催簽）`;
+      const message = `提醒：${about} 仍待您簽核（申請人透過 AI 助手催簽）`;
       const notified = await tx
         .insert(notifications)
         .values({

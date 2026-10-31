@@ -19,7 +19,7 @@ async function runIsolated(
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
       cwd: opts.cwd,
-      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', LANG: 'C' },
+      env: { NODE_ENV: process.env.NODE_ENV, PATH: process.env.PATH ?? '/usr/bin:/bin', LANG: 'C' },
       stdio: ['ignore', 'ignore', 'pipe'],
     });
     let stderr = '';

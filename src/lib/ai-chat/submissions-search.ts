@@ -69,7 +69,7 @@ export async function searchMyCustomSubmissions(input: {
       const location = typeof data.location === 'string' ? data.location : '';
       const purpose = typeof data.purpose === 'string' ? data.purpose : '';
       const start = typeof data.tripStartAt === 'string' ? data.tripStartAt : '';
-      const summary = [start, location, purpose].filter(Boolean).join(' · ') || r.name;
+      const summary = [String(start ?? '').replace('T', ' '), location, purpose].filter(Boolean).join(' · ') || r.name;
       return {
         formType: 'custom' as const,
         formId: r.id,

@@ -1,14 +1,20 @@
+import { and, eq, gte, inArray } from 'drizzle-orm';
 import { getMyApprovalQueueAll, type ApprovalQueueItem } from '@/lib/approvals/queue';
-import { getMyCustomApprovalQueue, getMySubmissions } from '@/lib/custom-forms/queries';
+import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { getMySubmissions } from '@/lib/custom-forms/queries';
+import { getDb } from '@/lib/db';
+import { approvalSteps, notifications } from '@/lib/db/schema';
 import { getMyExpenseClaims } from '@/lib/expense-claims/queries';
 import { FORM_LABELS, FORM_ROUTE_PREFIX, type FormType } from '@/lib/procurement/form-registry';
 import { getMyPurchaseOrders } from '@/lib/purchase-orders/queries';
 import { getMyRequests } from '@/lib/purchase-requests/queries';
+import { taipeiToday } from '@/lib/taipei-date';
 import {
   enrichWithSnapshots,
   formatWaitingDuration,
   type ApprovalSnapshot,
 } from './approval-snapshot';
+import { factsFor, factsLine, loadFormFacts } from './form-facts';
 
 export type InboxItem = {
   kind: 'pending_approval' | 'my_in_progress';
@@ -24,6 +30,8 @@ export type InboxItem = {
   pendingApproverNames?: string[];
   waitingSinceIso?: string | null;
   waitingFor?: string | null;
+  /** Purpose, place, date, amount: what lets a person recognise the form without its number. */
+  summary?: string;
 };
 
 export type AssistantInbox = {
@@ -33,6 +41,12 @@ export type AssistantInbox = {
   loadError: string | null;
   hasMorePending: boolean;
   hasMoreMine: boolean;
+  /** Real totals, not the size of the page above. */
+  pendingTotal: number;
+  mineTotal: number;
+  returnedTotal: number;
+  /** My forms with an approval decision today (company calendar). */
+  progressToday: number;
 };
 
 const IN_PROGRESS = new Set(['pending_approval', 'returned']);
@@ -48,6 +62,35 @@ function asQueueItem(q: ApprovalQueueItem): InboxItem {
     totalAmount: q.totalAmount,
     href: q.href,
   };
+}
+
+/** Forms of mine an approver acted on today, finished ones included. */
+async function countProgressToday(mine: InboxItem[]): Promise<number> {
+  const employee = await getCurrentEmployee();
+  if (!employee) return 0;
+  const dayStart = new Date(`${taipeiToday()}T00:00:00+08:00`);
+  const db = getDb();
+  const touched = new Set<string>();
+  const ids = mine.map((m) => m.id);
+  if (ids.length > 0) {
+    const acted = await db
+      .select({ formType: approvalSteps.formType, formId: approvalSteps.formId })
+      .from(approvalSteps)
+      .where(and(inArray(approvalSteps.formId, ids), inArray(approvalSteps.status, ['approved', 'returned']), gte(approvalSteps.actedAt, dayStart)));
+    for (const a of acted) touched.add(`${a.formType}:${a.formId}`);
+  }
+  const outcomes = await db
+    .select({ formType: notifications.formType, formId: notifications.formId })
+    .from(notifications)
+    .where(
+      and(
+        eq(notifications.recipientEmployeeId, employee.id),
+        inArray(notifications.type, ['request_returned', 'request_approved']),
+        gte(notifications.createdAt, dayStart)
+      )
+    );
+  for (const o of outcomes) touched.add(`${o.formType}:${o.formId}`);
+  return touched.size;
 }
 
 function applySnapshot(item: InboxItem, snapshot: ApprovalSnapshot | null): InboxItem {
@@ -68,28 +111,16 @@ function applySnapshot(item: InboxItem, snapshot: ApprovalSnapshot | null): Inbo
 export async function loadAssistantInbox(limitPerSection = 8): Promise<AssistantInbox> {
   const fetchedAt = new Date().toISOString();
   try {
-    const [queue, requests, orders, claims, customQueue, submissions] = await Promise.all([
+    const [queue, requests, orders, claims, submissions] = await Promise.all([
       getMyApprovalQueueAll(),
       getMyRequests(),
       getMyPurchaseOrders(),
       getMyExpenseClaims(),
-      getMyCustomApprovalQueue(),
       getMySubmissions(),
     ]);
 
-    const pendingAll: InboxItem[] = [
-      ...queue.map(asQueueItem),
-      ...customQueue.map((q) => ({
-        kind: 'pending_approval' as const,
-        formType: 'custom',
-        label: q.label,
-        id: q.id,
-        caseNumber: q.caseNumber,
-        applicantName: q.applicantName,
-        totalAmount: q.totalAmount,
-        href: `/f/_/${q.id}`,
-      })),
-    ];
+    // getMyApprovalQueueAll already covers designer forms.
+    const pendingAll: InboxItem[] = queue.map(asQueueItem);
 
     const mineAll: InboxItem[] = [
       ...requests
@@ -145,18 +176,28 @@ export async function loadAssistantInbox(limitPerSection = 8): Promise<Assistant
     const pendingSlice = pendingAll.slice(0, limitPerSection);
     const mineSlice = mineAll.slice(0, limitPerSection);
 
-    const [pendingEnriched, mineEnriched] = await Promise.all([
+    const [pendingEnriched, mineEnriched, progressToday, facts] = await Promise.all([
       enrichWithSnapshots(pendingSlice),
       enrichWithSnapshots(mineSlice),
+      countProgressToday(mineAll),
+      loadFormFacts([...pendingSlice, ...mineSlice].map((i) => ({ formType: i.formType, formId: i.id }))),
     ]);
+    const withSummary = (item: InboxItem): InboxItem => {
+      const f = factsFor(facts, { formType: item.formType, formId: item.id });
+      return f ? { ...item, summary: factsLine(f) } : item;
+    };
 
     return {
       fetchedAt,
-      pendingApprovals: pendingEnriched.map((p) => applySnapshot(p, p.snapshot)),
-      myInProgress: mineEnriched.map((p) => applySnapshot(p, p.snapshot)),
+      pendingApprovals: pendingEnriched.map((p) => withSummary(applySnapshot(p, p.snapshot))),
+      myInProgress: mineEnriched.map((p) => withSummary(applySnapshot(p, p.snapshot))),
       loadError: null,
       hasMorePending: pendingAll.length > limitPerSection,
       hasMoreMine: mineAll.length > limitPerSection,
+      pendingTotal: pendingAll.length,
+      mineTotal: mineAll.length,
+      returnedTotal: mineAll.filter((m) => m.status === 'returned').length,
+      progressToday,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'inbox_load_failed';
@@ -167,6 +208,10 @@ export async function loadAssistantInbox(limitPerSection = 8): Promise<Assistant
       loadError: message.slice(0, 200),
       hasMorePending: false,
       hasMoreMine: false,
+      pendingTotal: 0,
+      mineTotal: 0,
+      returnedTotal: 0,
+      progressToday: 0,
     };
   }
 }

@@ -1,0 +1,82 @@
+{
+  "people": {
+    "A": {
+      "id": "20000000-0000-0000-0000-000000000001",
+      "code": "T-STAFF",
+      "name": "測試員工"
+    },
+    "B": {
+      "id": "20000000-0000-0000-0000-0000000000b1",
+      "code": "T-STAFF-B",
+      "name": "測試員工乙"
+    },
+    "C": {
+      "id": "20000000-0000-0000-0000-000000000002",
+      "code": "T-MGR",
+      "name": "測試主管"
+    },
+    "D": {
+      "id": "20000000-0000-0000-0000-000000000004",
+      "code": "T-GM",
+      "name": "測試總經理"
+    }
+  },
+  "projects": [
+    {
+      "id": "30000000-0000-0000-0000-00000000000a",
+      "code": "T-PRJ-A",
+      "name": "測試專案 A",
+      "kind": "product"
+    },
+    {
+      "id": "30000000-0000-0000-0000-00000000000b",
+      "code": "T-PRJ-B",
+      "name": "測試專案 B",
+      "kind": "revenue"
+    },
+    {
+      "id": "30000000-0000-0000-0000-00000000000c",
+      "code": "T-PRJ-X",
+      "name": "測試限制專案 X",
+      "kind": "product",
+      "restricted": true
+    }
+  ],
+  "companyTaxId": "12345675",
+  "submissions": {
+    "ai-acceptance:v1:trip:taichung-1": {
+      "id": "1c6f7f4a-a9bc-4bc6-a714-c81de098b6e6",
+      "formNumber": "20261030BT0001",
+      "status": "approved"
+    },
+    "ai-acceptance:v1:trip:taichung-2": {
+      "id": "853661a3-be10-4c40-89c2-75d2eaf37c0e",
+      "formNumber": "20261030BT0002",
+      "status": "approved"
+    },
+    "ai-acceptance:v1:trip:hsinchu": {
+      "id": "13e9cb87-8f4d-4a8c-b75f-6d1a3559412d",
+      "formNumber": "20261030BT0003",
+      "status": "approved"
+    },
+    "ai-acceptance:v1:trip:returned": {
+      "id": "ce2df9f3-d233-4146-b68e-e6705b6221ae",
+      "formNumber": "20261030BT0004",
+      "status": "returned"
+    },
+    "ai-acceptance:v1:trip:pending": {
+      "id": "b0e8cc36-3428-4110-89bc-d5b02f25cdc0",
+      "formNumber": "20261030BT0005",
+      "status": "pending_approval"
+    },
+    "ai-acceptance:v1:trip:b-pending": {
+      "id": "9791bc17-0cb9-4949-9fc4-93bf566f0ed9",
+      "formNumber": "20261030BT0006",
+      "status": "pending_approval"
+    }
+  },
+  "notifications": {
+    "A": 4,
+    "C": 51
+  }
+}

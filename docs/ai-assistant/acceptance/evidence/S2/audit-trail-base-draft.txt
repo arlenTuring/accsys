@@ -1,0 +1,9 @@
+ai_draft.created|assistant|1|["tripStartAt", "tripEndAt", "location", "purpose", "projectId"]|
+ai_draft.linked||||
+ai_draft.updated|assistant|2|["tripEndAt"]|
+ai_draft.updated|assistant|3|["tripEndAt"]|
+ai_draft.updated|panel|4|["location"]|["location"]
+ai_draft.updated|panel|5|["advanceAmount", "location", "jobProxyEmployeeId", "approvalProxyNote", "itinerary"]|
+ai_draft.updated|panel|6|[]|
+ai_draft.updated|panel|7|[]|[]
+ai_draft.updated|panel|8|[]|[]

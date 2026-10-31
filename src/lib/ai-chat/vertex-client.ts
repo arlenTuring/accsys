@@ -1,7 +1,8 @@
 import type { AiChatConfig } from './config';
 import { AiChatConfigError } from './config';
 import { getVertexAccessToken } from './auth';
-import { AI_CHAT_TOOL_DECLARATIONS, executeAiChatTool } from './tools';
+import { AI_CHAT_TOOL_DECLARATIONS, executeAiChatTool, type AiToolContext } from './tools';
+import { summarize, type TurnTrace } from './trace';
 
 export type ChatTurn = {
   role: 'user' | 'model';
@@ -36,13 +37,18 @@ const SYSTEM = [
   '只用繁體中文，語氣清楚精簡。',
   '只回答與 ACCSYS、採購、請款、簽核、專案、預算、組織流程有關的問題；無關話題簡短拒絕。',
   '可呼叫唯讀或受控工具查真實資料；不要捏造單號、專案、金額或簽核狀態。',
-  '建單流程：list_filable_forms／propose_choices 確認表單 → create_application_draft → describe_application_draft 取得欄位 id 與 version → patch_application_draft 寫入已知欄位。',
+  '每則使用者訊息前會附上【系統工作狀態】：今天日期與時區、本對話草稿的 draft_id、version、已填欄位、明細 row_id、尚缺必填與目前草稿的欄位規格。這是資料庫的權威狀態；以它為準，不要依賴你先前的回覆。',
+  '建單：使用者要新的一張時，用 create_application_draft 一次帶入所有已知欄位（不知道欄位 id 先 get_form_spec）。修改既有草稿用 update_application_draft，只送要改的欄位；不要為了修改而另開新草稿。使用者說「另外開一張」才建立新草稿。',
+  '欄位值：日期時間用 YYYY-MM-DDTHH:mm（台北時間）；相對日期依工作狀態的日曆換算。選項用選項文字。人員、專案等參照欄位填名稱或代碼，由後端比對；後端回報 ambiguous／not_found 時，把候選列給使用者選，不要自己挑或編 ID。明細用 rows 逐列 add／update／delete，合計由系統計算，不要自己算。',
+  '表單沒有的資訊（例如表單無專案欄位）要照實告訴使用者，不可塞進其他欄位假裝已設定。',
+  '互動卡片：缺少的日期時間、人員、選項類欄位可用 propose_field_form 讓使用者直接填；專案有歧義或未指定時用 propose_project_picker（帶 draft_id、field_id）；使用者明確說出要改成什麼時直接用 update_application_draft，不要再確認；只有新值是你從文件或上下文推測、或一次要改三個以上欄位時，才用 propose_draft_changes 讓使用者確認；請使用者在幾個答案中選一個時用 propose_choices。卡片不代表已寫入，寫入結果以後端回報為準。',
+  '回覆只根據工具回傳的 saved／rejected／missing 說明結果：saved 才能說已填入；rejected 要說明原因與候選；missing 列出要補的項目，只問缺的或有歧義的，不要請使用者重給已提供的資訊。工具失敗時直說沒有儲存。',
   '公出差旅申請單 key=business-trip；出差報告暨旅費報支單 key=travel-expense。兩者不同，不可把「申請公出」導向報支表單。',
-  '已核准公出申請附加到報支：search_my_submissions 或 propose_approved_document_picker → 使用者點選後 attach_approved_document_pdf。預設附加 PDF 快照，不是即時連動。',
-  '聊天室已上傳的圖片／PDF 要寫入草稿附件：呼叫 attach_staged_files_to_draft（draft_id + expected_version；staged_ids 可省略＝本回合全部）。禁止回覆「系統無法透過對話附加」——那是過時說法。',
+  '回覆使用者時不要出現草稿 ID、表單 ID 或任何 UUID；用表單名稱、事由與單號稱呼。',
+  '補件：使用者要修正被退回的單據時，search_my_submissions（status=returned）找到後用 start_resubmission 開補件草稿，再用 update_application_draft 修改；沒有退回原因時照實說未提供，不要推測。送出由使用者在畫面確認。',
+  '已核准公出申請附加到報支：要使用者從核准單中挑選時一定用 propose_approved_document_picker（不要用 propose_choices，也不要自己列清單代替），需要新草稿就先 create_application_draft 再開選擇器；使用者點選後才 attach_approved_document_pdf。預設附加 PDF 快照，不是即時連動。',
+  '聊天室已上傳的圖片／PDF 要寫入草稿附件：呼叫 attach_staged_files_to_draft（draft_id + expected_version；staged_ids 可省略＝本回合全部）。',
   '附加後工具會回傳 invoiceChecks（買方統編比對）。不符／未辨識／公司未設定是業務提醒，不是安全阻擋；必須把結果說清楚，不可假裝整張發票已核可或可抵稅。僅見賣方統編不可當買方相符。',
-  '文件工作區的草稿是權威狀態。禁止只在回覆文字宣稱「已更新草稿」卻未成功呼叫 patch_application_draft；是否開啟文件由 UI 的 open_resource 決定。',
-  '表格欄位必須用 {rows:[{欄位id:值}], total:null}。出差報支 travel-expense 例：tripStartDate/tripEndDate/purpose、reportItems（tripDate,location,itinerary,timeSlot）、costItems（expenseDate,category,mileage,summary,currency,amount）。',
   '金額、油資補助若公司費率不明，不要猜數字，留空並請使用者在右側補。',
   '正式「送出單據」只能由使用者在右側按下送出；你不能自行送件。',
   '催簽：propose_nudge 後由使用者確認。圖片看不清的關鍵數字標待確認，不猜測。',
@@ -146,13 +152,9 @@ export async function generateChatReply(
   cfg: AiChatConfig,
   history: ChatTurn[],
   userParts: UserContentPart[],
-  toolCtx: {
-    conversationId: string;
-    ownerEmployeeId: string;
-    turnId?: string | null;
-    recentStagedIds?: string[];
-  },
-  outerSignal?: AbortSignal
+  toolCtx: AiToolContext,
+  outerSignal?: AbortSignal,
+  trace?: TurnTrace
 ): Promise<GenerateChatResult> {
   const { token, principalHint } = await getVertexAccessToken(cfg);
 
@@ -202,20 +204,31 @@ export async function generateChatReply(
   const onOuterAbort = () => taskAbort.abort();
   outerSignal?.addEventListener('abort', onOuterAbort);
 
-  const toolSummaries: string[] = [];
+  // Backend receipts of saved drafts and plain failure notes; used only when the
+  // model returns no text. Never internal tool hints.
+  const receipts: string[] = [];
 
-  function fallbackTextFromTools(): string | null {
-    if (toolSummaries.length === 0) return null;
-    return toolSummaries.join('\n');
+  function fallbackTextFromTools(): string {
+    if (receipts.length > 0) return receipts.join('\n');
+    return '這次沒有完成任何草稿變更。請再說一次要做什麼，或補充需要的資訊。';
   }
 
   try {
     for (let round = 0; round < cfg.maxToolRounds; round++) {
+      trace?.emit('model.request', { round, mode: 'AUTO', contents: contents.length });
       const data = await callGenerate(cfg, token, contents, 'AUTO', taskAbort.signal);
       addUsage(usage, data.usageMetadata);
       const parts = data.candidates?.[0]?.content?.parts ?? [];
       const finishReason = data.candidates?.[0]?.finishReason;
-      const calls = functionCallsFromParts(parts).slice(0, cfg.maxToolsPerRound);
+      const allCalls = functionCallsFromParts(parts);
+      const calls = allCalls.slice(0, cfg.maxToolsPerRound);
+      trace?.emit('model.response', {
+        round,
+        finishReason: finishReason ?? null,
+        functionCalls: allCalls.map((c) => c.name),
+        droppedCalls: allCalls.slice(cfg.maxToolsPerRound).map((c) => c.name),
+        textChars: textFromParts(parts).length,
+      });
 
       if (calls.length === 0) {
         const text = textFromParts(parts) || fallbackTextFromTools();
@@ -233,7 +246,21 @@ export async function generateChatReply(
       contents.push({ role: 'model', parts });
       const responseParts: Part[] = [];
       for (const call of calls) {
+        trace?.emit('tool.call', { round, name: call.name, args: summarize(call.args) as Record<string, unknown> });
         const result = await executeAiChatTool(call.name, call.args, toolCtx);
+        const resp = (result.response ?? {}) as Record<string, unknown>;
+        trace?.emit('tool.result', {
+          round,
+          name: call.name,
+          ok: result.ok,
+          error: typeof resp.error === 'string' ? resp.error : null,
+          message: typeof resp.message === 'string' ? resp.message.slice(0, 200) : null,
+          draftId: typeof resp.draftId === 'string' ? resp.draftId : null,
+          expectedVersion: (call.args as Record<string, unknown>)?.expected_version ?? null,
+          versionAfter: typeof resp.version === 'number' ? resp.version : null,
+          patchedKeys: Array.isArray(resp.patchedKeys) ? resp.patchedKeys : null,
+          openResources: (result.openResources ?? []).map((o) => summarize(o, true)),
+        });
         // Only list successful tools in the UI chip row — failed calls used to
         // still show「更新草稿」and made users think the right panel was stale.
         if (result.ok && !toolsUsedSet.has(result.label)) {
@@ -242,13 +269,8 @@ export async function generateChatReply(
         }
         if (result.blocks?.length) blocks.push(...result.blocks);
         if (result.openResources?.length) openResources.push(...result.openResources);
-        const msg =
-          result.response && typeof result.response === 'object' && 'message' in result.response
-            ? String((result.response as { message?: unknown }).message ?? '')
-            : '';
-        if (result.ok && msg) toolSummaries.push(msg);
-        else if (!result.ok && msg) toolSummaries.push(`（工具未完成）${msg}`);
-        else if (result.ok) toolSummaries.push(`已執行：${result.label}`);
+        if (result.ok && typeof resp.receipt === 'string') receipts.push(resp.receipt);
+        else if (!result.ok && /draft/.test(call.name)) receipts.push(`${result.label}未完成：${typeof resp.message === 'string' ? resp.message : '操作失敗'}`);
         const fr: Record<string, unknown> = {
           name: call.name,
           response: result.response,
@@ -259,6 +281,8 @@ export async function generateChatReply(
       contents.push({ role: 'user', parts: responseParts });
     }
 
+    // Tool budget exhausted: force a text answer with tools disabled.
+    trace?.emit('model.request', { round: cfg.maxToolRounds, mode: 'NONE', reason: 'tool_rounds_exhausted', contents: contents.length });
     const final = await callGenerate(cfg, token, contents, 'NONE', taskAbort.signal);
     addUsage(usage, final.usageMetadata);
     const text =

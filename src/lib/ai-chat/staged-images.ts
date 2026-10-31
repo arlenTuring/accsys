@@ -1,16 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/lib/db';
 import { aiChatStagedAttachments, aiConversations } from '@/lib/db/schema';
 import { scanBytes, scannerConfig, ScannerUnavailable } from '@/lib/attachments/scan';
 import { quarantineKey, readNoFollow, removeKey, writeNew } from '@/lib/attachments/storage';
 
-import { MAX_ATTACHMENTS_PER_FORM, MAX_FILE_SIZE_BYTES, formatBytesLabel } from '@/lib/attachments/policy';
+import { MAX_CHAT_ATTACHMENTS, MAX_FILE_SIZE_BYTES, formatBytesLabel } from '@/lib/attachments/policy';
 import { sniffAllowedType } from '@/lib/attachments/validate';
 
 /** Aligned with form attachment policy (no separate 3 MB / 3-file chat ceiling). */
 export const AI_IMAGE_MAX_BYTES = MAX_FILE_SIZE_BYTES;
-export const AI_IMAGE_MAX_COUNT = Math.min(10, MAX_ATTACHMENTS_PER_FORM);
+export const AI_IMAGE_MAX_COUNT = MAX_CHAT_ATTACHMENTS;
 export const AI_IMAGE_MAX_PIXELS = 40_000_000;
 export const AI_IMAGE_ALLOWED_MIME = new Set([
   'image/jpeg',
@@ -31,6 +31,8 @@ export type StagedImageRow = {
   width: number | null;
   height: number | null;
   scanStatus: 'pending' | 'scanning' | 'ready' | 'failed' | 'purged';
+  /** Current photo edit; null = the original. */
+  activeEditId: string | null;
   createdAt: Date;
 };
 
@@ -124,7 +126,7 @@ export async function stageAiChatImage(input: {
     };
   }
   const sniffed = sniffAllowedType(input.bytes);
-  const mime = sniffed?.mime ?? sniffImageMime(input.bytes);
+  const mime = sniffed ?? sniffImageMime(input.bytes);
   if (!mime || !AI_IMAGE_ALLOWED_MIME.has(mime)) {
     return {
       ok: false,
@@ -141,6 +143,7 @@ export async function stageAiChatImage(input: {
   }
 
   const db = getDb();
+  // Resource guard against bursts, not a product limit on a conversation's lifetime.
   const [{ n }] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(aiChatStagedAttachments)
@@ -149,11 +152,12 @@ export async function stageAiChatImage(input: {
         eq(aiChatStagedAttachments.conversationId, input.conversationId),
         eq(aiChatStagedAttachments.ownerEmployeeId, input.ownerEmployeeId),
         isNull(aiChatStagedAttachments.purgedAt),
-        sql`${aiChatStagedAttachments.scanStatus} <> 'purged'`
+        sql`${aiChatStagedAttachments.scanStatus} <> 'purged'`,
+        sql`${aiChatStagedAttachments.createdAt} > now() - interval '10 minutes'`
       )
     );
-  if (n >= AI_IMAGE_MAX_COUNT) {
-    return { ok: false, error: `同一則訊息最多 ${AI_IMAGE_MAX_COUNT} 個附件。`, code: 'too_many' };
+  if (n >= AI_IMAGE_MAX_COUNT * 3) {
+    return { ok: false, error: '短時間內上傳的附件過多，請稍後再試。', code: 'too_many' };
   }
 
   const [existing] = await db
@@ -272,6 +276,20 @@ export async function getReadyStagedImagesForOwner(
   return out;
 }
 
+/**
+ * Removes staged files older than `olderThanDays` (run from a scheduled job).
+ * Files added to a draft were copied there, so only the staging copy goes.
+ */
+export async function purgeExpiredStaged(olderThanDays: number): Promise<number> {
+  const db = getDb();
+  const rows = await db
+    .select({ id: aiChatStagedAttachments.id, owner: aiChatStagedAttachments.ownerEmployeeId })
+    .from(aiChatStagedAttachments)
+    .where(and(isNull(aiChatStagedAttachments.purgedAt), sql`${aiChatStagedAttachments.createdAt} < now() - make_interval(days => ${olderThanDays})`));
+  for (const r of rows) await purgeStagedImage(r.owner, r.id);
+  return rows.length;
+}
+
 export async function purgeStagedImage(ownerEmployeeId: string, stagedId: string): Promise<boolean> {
   const db = getDb();
   const [row] = await db
@@ -294,7 +312,7 @@ export async function purgeStagedImage(ownerEmployeeId: string, stagedId: string
 export async function readStagedImageForOwner(
   ownerEmployeeId: string,
   stagedId: string
-): Promise<{ mimeType: string; fileName: string; bytes: Uint8Array } | null> {
+): Promise<{ mimeType: string; fileName: string; bytes: Uint8Array; activeEditId: string | null } | null> {
   const db = getDb();
   const [row] = await db
     .select()
@@ -310,7 +328,58 @@ export async function readStagedImageForOwner(
     .limit(1);
   if (!row) return null;
   const bytes = await readNoFollow(row.storagePath);
-  return { mimeType: row.mimeType, fileName: row.fileName, bytes };
+  return { mimeType: row.mimeType, fileName: row.fileName, bytes, activeEditId: row.activeEditId };
+}
+
+export type PendingStaged = {
+  id: string;
+  clientAttachmentId: string;
+  fileName: string;
+  mimeType: string;
+  fileSizeBytes: number;
+  analysisStatus: string | null;
+  analysisResult: Record<string, unknown> | null;
+  targetDraftId: string | null;
+  activeEditId: string | null;
+};
+
+/** Files the composer was still working on: uploaded, not sent to the model, not on a draft. */
+export async function listPendingStaged(ownerEmployeeId: string, conversationId: string): Promise<PendingStaged[]> {
+  await assertConversationOwner(conversationId, ownerEmployeeId);
+  const rows = await getDb()
+    .select({
+      id: aiChatStagedAttachments.id,
+      clientAttachmentId: aiChatStagedAttachments.clientAttachmentId,
+      fileName: aiChatStagedAttachments.fileName,
+      mimeType: aiChatStagedAttachments.mimeType,
+      fileSizeBytes: aiChatStagedAttachments.fileSizeBytes,
+      analysisStatus: aiChatStagedAttachments.analysisStatus,
+      analysisResult: aiChatStagedAttachments.analysisResult,
+      targetDraftId: aiChatStagedAttachments.targetDraftId,
+      activeEditId: aiChatStagedAttachments.activeEditId,
+    })
+    .from(aiChatStagedAttachments)
+    .where(
+      and(
+        eq(aiChatStagedAttachments.conversationId, conversationId),
+        eq(aiChatStagedAttachments.ownerEmployeeId, ownerEmployeeId),
+        eq(aiChatStagedAttachments.scanStatus, 'ready'),
+        isNull(aiChatStagedAttachments.purgedAt),
+        isNull(aiChatStagedAttachments.sentAt),
+        sql`not exists (select 1 from ai_draft_file_attachments f where f.source_staged_id = ${aiChatStagedAttachments.id})`
+      )
+    )
+    .orderBy(aiChatStagedAttachments.createdAt)
+    .limit(AI_IMAGE_MAX_COUNT);
+  return rows.map((r) => ({ ...r, fileSizeBytes: Number(r.fileSizeBytes) }));
+}
+
+export async function markStagedSent(ownerEmployeeId: string, ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  await getDb()
+    .update(aiChatStagedAttachments)
+    .set({ sentAt: sql`now()` })
+    .where(and(eq(aiChatStagedAttachments.ownerEmployeeId, ownerEmployeeId), inArray(aiChatStagedAttachments.id, ids)));
 }
 
 function mapRow(row: {
@@ -323,6 +392,7 @@ function mapRow(row: {
   width: number | null;
   height: number | null;
   scanStatus: string;
+  activeEditId?: string | null;
   createdAt: Date;
 }): StagedImageRow {
   return {
@@ -335,6 +405,7 @@ function mapRow(row: {
     width: row.width,
     height: row.height,
     scanStatus: row.scanStatus as StagedImageRow['scanStatus'],
+    activeEditId: row.activeEditId ?? null,
     createdAt: row.createdAt,
   };
 }

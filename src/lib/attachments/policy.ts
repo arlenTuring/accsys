@@ -17,6 +17,15 @@ export const MAX_FILE_SIZE_BYTES = envInt('ATTACHMENT_MAX_BYTES', 50 * 1024 * 10
 /** Per-form / per-message attachment count ceiling (default 50). */
 export const MAX_ATTACHMENTS_PER_FORM = envInt('ATTACHMENT_MAX_COUNT', 50, 1, 200);
 
+/** Files one chat message may carry (never above the per-form ceiling). */
+export const MAX_CHAT_ATTACHMENTS = Math.min(envInt('ATTACHMENT_CHAT_MAX_COUNT', 10, 1, 50), MAX_ATTACHMENTS_PER_FORM);
+
+/** One AI check of one file may take this long; afterwards it is reported as not completed. */
+export const ANALYSIS_TIMEOUT_MS = envInt('ATTACHMENT_ANALYSIS_TIMEOUT_MS', 90_000, 5_000, 300_000);
+
+/** Largest payload sent inline to the model; bigger PDFs are analysed from their first pages. */
+export const ANALYSIS_MAX_INLINE_BYTES = envInt('ATTACHMENT_ANALYSIS_MAX_BYTES', 18 * 1024 * 1024, 1_000_000, 20 * 1024 * 1024);
+
 /** Multipart chunk size for resumable uploads (default 2 MiB). */
 export const UPLOAD_CHUNK_BYTES = envInt('ATTACHMENT_CHUNK_BYTES', 2 * 1024 * 1024, 256 * 1024, 8 * 1024 * 1024);
 

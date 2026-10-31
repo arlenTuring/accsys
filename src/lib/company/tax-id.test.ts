@@ -71,4 +71,11 @@ describe('compareBuyerTaxId', () => {
       }).status
     ).toBe('not_invoice');
   });
+
+  it('a buyer tax id read with low confidence decides nothing', () => {
+    const base = { companyTaxId: '12345675', companyConfigured: true, documentKind: 'invoice' as const, analysisOk: true, analysisDone: true };
+    expect(compareBuyerTaxId({ ...base, extractedBuyerTaxId: '12345675', confidence: 'low' }).status).toBe('unclear');
+    expect(compareBuyerTaxId({ ...base, extractedBuyerTaxId: '87654321', confidence: 'low' }).status).toBe('unclear');
+    expect(compareBuyerTaxId({ ...base, extractedBuyerTaxId: '12345675', confidence: 'high' }).status).toBe('match');
+  });
 });

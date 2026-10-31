@@ -72,6 +72,10 @@ export function compareBuyerTaxId(opts: {
     }
     return { status: 'not_found', detail: '未辨識到買方統編（不代表原件確定沒有）' };
   }
+  // A number read with low confidence decides nothing, either way.
+  if (opts.confidence === 'none' || opts.confidence === 'low') {
+    return { status: 'unclear', detail: `買方統編看不清楚（疑似 ${got}），未能確認` };
+  }
   if (got === expected) {
     return { status: 'match', detail: '買方統編與公司設定相符' };
   }

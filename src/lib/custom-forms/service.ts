@@ -19,6 +19,7 @@ import {
   projects,
   suppliers,
 } from '@/lib/db/schema';
+import { projectUsableBy } from '@/lib/projects/access';
 import { taipeiToday } from '@/lib/taipei-date';
 import { applyPaymentSchedule } from './payment';
 import {
@@ -159,7 +160,7 @@ const CASE_TYPE_OF_LEGACY: Record<string, 'standard' | 'standalone_expense'> = {
 };
 
 /** Referenced employees, departments, budget codes, projects, suppliers and assets must exist (and be active); scoped budget codes must match. */
-async function assertRefs(tx: Tx, refs: NormalizedSubmission['refs']) {
+async function assertRefs(tx: Tx, refs: NormalizedSubmission['refs'], applicantId: string) {
   const check = async (ids: string[], query: (l: string[]) => Promise<{ id: string }[]>, what: string) => {
     const unique = [...new Set(ids)];
     if (unique.length === 0) return;
@@ -169,7 +170,8 @@ async function assertRefs(tx: Tx, refs: NormalizedSubmission['refs']) {
   await check(refs.employees, (l) => tx.select({ id: employees.id }).from(employees).where(and(inArray(employees.id, l), eq(employees.accessEnabled, true))), '員工');
   await check(refs.departments, (l) => tx.select({ id: departments.id }).from(departments).where(and(inArray(departments.id, l), eq(departments.active, true))), '部門');
   await check(refs.budgetCodes, (l) => tx.select({ id: budgetCodes.id }).from(budgetCodes).where(inArray(budgetCodes.id, l)), '預算編號');
-  await check(refs.projects, (l) => tx.select({ id: projects.id }).from(projects).where(inArray(projects.id, l)), '專案');
+  // Restricted projects only for their members (same rule as the pickers and the assistant).
+  await check(refs.projects, (l) => tx.select({ id: projects.id }).from(projects).where(and(inArray(projects.id, l), projectUsableBy(applicantId))), '專案（或您無權使用）');
   await check(refs.suppliers, (l) => tx.select({ id: suppliers.id }).from(suppliers).where(inArray(suppliers.id, l)), '廠商');
   if (refs.assets.length > 0) {
     const ids = [...new Set(refs.assets)];
@@ -321,7 +323,7 @@ export function createSubmission(actor: Actor, key: string, input: CreateInput, 
       const source = link ? await loadSource(tx, def, link, raw[link.id], applicantId) : null;
       const value = normalize(def.schema, source ? carryRows(source, raw) : rest.data);
       assertAttachments(def.schema, value, typeof fileCount === 'number' ? fileCount : 0);
-      await assertRefs(tx, value.refs);
+      await assertRefs(tx, value.refs, applicantId);
       const assetLines = def.schema.assetRegister ? await prepareAssetLines(tx, def.schema.assetRegister, value.data) : null;
       const parties = { applicantId, filerId: actor.id, departmentId: applicant.departmentId };
       const steps = confirmed(await resolveFlowInTx(tx, def.flow, flowContext(parties, def.key, value)), { ...parties, editorId: actor.id });
@@ -463,7 +465,7 @@ export function reviseSubmission(actor: Actor, id: string, mode: 'update' | 'res
         .from(attachments)
         .where(and(eq(attachments.formType, FORM), eq(attachments.formId, id)));
       assertAttachments(def.schema, value, n + (typeof input?.newFileCount === 'number' ? input.newFileCount : 0));
-      await assertRefs(tx, value.refs);
+      await assertRefs(tx, value.refs, form.applicantEmployeeId);
       if (def.schema.assetRegister) await writeAssetLines(tx, id, await prepareAssetLines(tx, def.schema.assetRegister, value.data, id));
       const parties = { applicantId: form.applicantEmployeeId, filerId, departmentId: applicant.departmentId };
       const steps = confirmed(await resolveFlowInTx(tx, def.flow, flowContext(parties, def.key, value)), { ...parties, editorId: actor.id });

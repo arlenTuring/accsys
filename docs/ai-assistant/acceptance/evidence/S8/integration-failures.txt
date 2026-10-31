@@ -1,0 +1,2 @@
+ FAIL  tests/integration/auth-login.test.ts > Google login: identity binding rules > does not bind an unknown account by
+ FAIL  tests/integration/auth-login.test.ts > Google login: identity binding rules > refuses an email address reused by 

@@ -24,7 +24,9 @@ const PROMPT = `你是發票／收據欄位抽取器。只輸出一個 JSON 物�
 規則：
 - buyerTaxId = 買受人／買方統一編號（8 位數字）。不要把賣方／開立人統編填進 buyerTaxId。
 - sellerTaxId = 銷售人／賣方統編。
-- 若看不清或找不到買方統編，buyerTaxId 填 null，confidence 用 low 或 none。
+- 只抄寫看到的數字，不要自己判斷位數、格式或檢查碼是否正確；格式檢查由系統處理。
+- confidence 專指「買方統編這一欄」的可讀程度：每一位都清楚才用 high；字太小、模糊、要猜任何一位數字就用 low，此時不要猜，buyerTaxId 填 null。
+- 找不到買方統編欄位時 buyerTaxId 填 null，confidence 用 none。
 - documentKind: invoice | receipt | other | unknown
 - 7-ELEVEN 電子發票證明聯通常買方統編在「買受人」欄；若無載明買方統編則 buyerTaxId=null。
 JSON 鍵：documentKind,buyerTaxId,buyerName,sellerTaxId,sellerName,invoiceNumber,invoiceDate,amount,currency,confidence,notes,rawTextExcerpt`;
@@ -72,7 +74,7 @@ export async function extractInvoiceWithVision(input: {
   if (!cfg.enabled || !cfg.projectId) {
     return { ok: false, error: 'model_unavailable' };
   }
-  const mime = input.mimeType.startsWith('image/') ? input.mimeType : 'image/jpeg';
+  const mime = input.mimeType;
   if (input.bytes.length === 0 || input.bytes.length > 20 * 1024 * 1024) {
     return { ok: false, error: 'image_too_large' };
   }

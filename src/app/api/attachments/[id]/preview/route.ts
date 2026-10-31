@@ -22,7 +22,9 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
           ? { error: 'preview_unsupported', message: '此格式無法站內預覽，請下載原檔' }
           : result.reason === 'scan_blocked'
             ? { error: 'not_available', message: '附件尚未通過安全掃描' }
-            : { error: 'not_found' };
+            : result.reason === 'derivative_missing'
+              ? { error: 'preview_failed', message: '預覽服務無法轉換此檔案。檔案本身沒有問題，請下載原檔查看。' }
+              : { error: 'not_found', message: '找不到附件或沒有權限。' };
     return NextResponse.json(body, {
       status: result.status,
       headers: { 'Cache-Control': 'private, no-store' },

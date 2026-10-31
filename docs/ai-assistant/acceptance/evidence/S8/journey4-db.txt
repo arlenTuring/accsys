@@ -1,0 +1,11 @@
+46e68f10-ca67-4f43-b708-a4a5f05207fe | 20261031BT0004 | pending_approval | 4 | 上午拜訪高雄客戶窗口王小明，下午搭高鐵返回。
+multipage.pdf | 13855824
+06:25:15 | custom.created | {"key": "business-trip", "version": "e3499774-1443-4cdd-9ec7-53a009805dba", "caseNumber": 
+06:25:15 | custom.step_returned | {"reason": "[測試] 請補上客戶拜訪行程與預估交通方式後再送出。", "stepOrder": 1}
+06:46:31 | custom.resubmitted | {"previousItems": [{"data": {"purpose": "[測試] 高雄客戶說明會", "location": "高雄市", "itinerary": "說
+06:46:31 | attachment.uploaded | {"mime": "application/pdf", "size": 13855824, "sha256": "675ca77b26bff45007e56b87d45ca8eae
+1
+submitted | 3 | 補件：公出差旅申請單
+t | approval_requested | 公出差旅申請單 20261031BT0004 待您簽核
+t | request_returned | 公出差旅申請單 20261031BT0004 已被退回：[測試] 請補上客戶拜訪行程與預估交通方式後
+f | approval_requested | 公出差旅申請單 20261031BT0004 已重新送出，待您簽核

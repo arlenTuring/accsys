@@ -157,12 +157,12 @@ async function approveAll(actor: { id: string; role: string }, submissionId: str
       throw new Error('no pending approver — check approval flow for business-trip');
     }
     const r = await customService.approveSubmissionStep(
-      { id: pending.approverEmployeeId, role: 'employee' },
+      { id: pending.approverEmployeeId },
       submissionId,
       fs.version
     );
     if (!r.ok) {
-      if (r.code === 'version_conflict') continue;
+      if (r.code === 'conflict') continue;
       throw new Error(`approve failed: ${JSON.stringify(r)}`);
     }
   }
@@ -191,7 +191,7 @@ async function returnOnce(actor: { id: string; role: string }, submissionId: str
     .limit(1);
   if (!pending?.approverEmployeeId) throw new Error('no pending approver to return');
   const r = await customService.returnSubmissionStep(
-    { id: pending.approverEmployeeId, role: 'employee' },
+    { id: pending.approverEmployeeId },
     submissionId,
     '【AI測試】刻意退回，供負向測試使用',
     fs.version

@@ -16,7 +16,23 @@ export const AI_BLOCK_KINDS = [
   'nudge_confirm',
   'document_picker',
   'approved_pdf_card',
+  'field_form',
+  'change_confirm',
 ] as const;
+
+/** One input of a field_form card; built by the server from the form schema, never by the model. */
+export type FormCardField = {
+  id: string;
+  label: string;
+  type: 'text' | 'textarea' | 'date' | 'datetime' | 'money' | 'number' | 'select' | 'employee' | 'project';
+  required: boolean;
+  /** select / employee choices (value = option value or employee id). */
+  options?: { value: string; label: string }[];
+  /** Value stored in the draft when the card was made. */
+  current?: string;
+};
+
+export type CardStatus = 'open' | 'answered' | 'expired';
 
 export type AiBlockKind = (typeof AI_BLOCK_KINDS)[number];
 
@@ -86,6 +102,32 @@ export type AiMessageBlock =
       formName: string;
       version: number;
       status: string;
+    }
+  | {
+      kind: 'field_form';
+      id: string;
+      prompt: string;
+      conversationId: string;
+      draftId: string;
+      draftVersion: number;
+      formName: string;
+      fields: FormCardField[];
+      status: CardStatus;
+      /** Receipt after it was used (what the database stored). */
+      outcome?: string;
+    }
+  | {
+      kind: 'change_confirm';
+      id: string;
+      prompt: string;
+      conversationId: string;
+      draftId: string;
+      draftVersion: number;
+      formName: string;
+      /** value = what will be written (as the assistant tools accept it); from / to are for display. */
+      changes: { field: string; label: string; from: string; to: string; value: string }[];
+      status: CardStatus;
+      outcome?: string;
     }
   | {
       kind: 'action_result';
@@ -209,7 +251,7 @@ export function sanitizeBlocks(raw: unknown, conversationId: string): AiMessageB
         const prompt = asString(item.prompt, 500);
         if (!prompt || !Array.isArray(item.options)) break;
         const options: ChoiceOption[] = [];
-        for (const o of item.options.slice(0, 12)) {
+        for (const o of item.options.slice(0, 20)) {
           if (!isRecord(o)) continue;
           const oid = asString(o.id, 64);
           const label = asString(o.label, 120);
@@ -265,6 +307,75 @@ export function sanitizeBlocks(raw: unknown, conversationId: string): AiMessageB
           inputType,
           status: item.status === 'answered' || item.status === 'expired' ? item.status : 'open',
           answeredValue: asString(item.answeredValue, 500) ?? undefined,
+        });
+        break;
+      }
+      case 'field_form': {
+        const prompt = asString(item.prompt, 500);
+        const draftId = asUuid(item.draftId);
+        const draftVersion = typeof item.draftVersion === 'number' ? item.draftVersion : null;
+        const formName = asString(item.formName, 120) ?? '';
+        if (!prompt || !draftId || draftVersion === null || !Array.isArray(item.fields)) break;
+        const types = new Set<FormCardField['type']>(['text', 'textarea', 'date', 'datetime', 'money', 'number', 'select', 'employee', 'project']);
+        const fields: FormCardField[] = [];
+        for (const f of item.fields.slice(0, 12)) {
+          if (!isRecord(f)) continue;
+          const fid = asString(f.id, 80);
+          const label = asString(f.label, 120);
+          const type = asString(f.type, 20) as FormCardField['type'] | null;
+          if (!fid || !label || !type || !types.has(type)) continue;
+          const options = Array.isArray(f.options)
+            ? f.options
+                .slice(0, 300)
+                .filter(isRecord)
+                .map((o) => ({ value: asString(o.value, 120) ?? '', label: asString(o.label, 160) ?? '' }))
+                .filter((o) => o.value && o.label)
+            : undefined;
+          fields.push({ id: fid, label, type, required: f.required === true, options, current: asString(f.current, 500) ?? undefined });
+        }
+        if (fields.length === 0) break;
+        out.push({
+          kind: 'field_form',
+          id,
+          prompt,
+          conversationId: asUuid(item.conversationId) ?? conversationId,
+          draftId,
+          draftVersion,
+          formName,
+          fields,
+          status: item.status === 'answered' || item.status === 'expired' ? item.status : 'open',
+          outcome: asString(item.outcome, 1000) ?? undefined,
+        });
+        break;
+      }
+      case 'change_confirm': {
+        const prompt = asString(item.prompt, 500);
+        const draftId = asUuid(item.draftId);
+        const draftVersion = typeof item.draftVersion === 'number' ? item.draftVersion : null;
+        if (!prompt || !draftId || draftVersion === null || !Array.isArray(item.changes)) break;
+        const changes = item.changes
+          .slice(0, 30)
+          .filter(isRecord)
+          .map((c) => ({
+            field: asString(c.field, 80) ?? '',
+            label: asString(c.label, 120) ?? '',
+            from: asString(c.from, 500) ?? '',
+            to: asString(c.to, 500) ?? '',
+            value: asString(c.value, 2000) ?? '',
+          }))
+          .filter((c) => c.field && c.label);
+        if (changes.length === 0) break;
+        out.push({
+          kind: 'change_confirm',
+          id,
+          prompt,
+          conversationId: asUuid(item.conversationId) ?? conversationId,
+          draftId,
+          draftVersion,
+          formName: asString(item.formName, 120) ?? '',
+          changes,
+          status: item.status === 'answered' || item.status === 'expired' ? item.status : 'open',
+          outcome: asString(item.outcome, 1000) ?? undefined,
         });
         break;
       }

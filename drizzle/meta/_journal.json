@@ -225,6 +225,48 @@
       "when": 1793600000000,
       "tag": "0031_staged_invoice_confirm",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1793700000000,
+      "tag": "0032_ai_turn_traces",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1793800000000,
+      "tag": "0033_ai_conversation_draft_links",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1793900000000,
+      "tag": "0034_project_access",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1794000000000,
+      "tag": "0035_staged_analysis_provenance",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1794100000000,
+      "tag": "0036_file_edit_versions",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1794200000000,
+      "tag": "0037_proactive_events_resubmit",
+      "breakpoints": true
     }
   ]
 }

@@ -71,13 +71,13 @@ async function main() {
       break;
     }
     const r = await customService.approveSubmissionStep(
-      { id: pending.approverEmployeeId, role: 'employee' },
+      { id: pending.approverEmployeeId },
       submissionId,
       fs.version
     );
     console.log('approve', i, pending.stepOrder, r);
     if (!r.ok) {
-      if (r.code === 'version_conflict') continue;
+      if (r.code === 'conflict') continue;
       throw new Error(JSON.stringify(r));
     }
   }

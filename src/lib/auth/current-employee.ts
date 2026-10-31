@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { cookies } from 'next/headers';
 import { cache } from 'react';
 import { sessionCookieNames } from '@/lib/auth/config';
@@ -20,8 +21,22 @@ export async function readSessionToken(): Promise<string | undefined> {
  * immediately); memoized only within a single request.
  */
 export const getCurrentEmployee = cache(async (): Promise<CurrentEmployee | null> => {
+  const scoped = sessionScope.getStore();
+  if (scoped) return resolveSession(scoped);
   return resolveSession(await readSessionToken());
 });
+
+/**
+ * Server-side scripts and integration tests (no HTTP request) run code "as" a
+ * session by supplying its token. The session is still resolved against the
+ * database (revocation, access and role checks apply), so this grants nothing a
+ * real cookie would not. Never exposed to browsers.
+ */
+const sessionScope = new AsyncLocalStorage<string>();
+
+export function runWithSessionToken<T>(token: string, fn: () => Promise<T>): Promise<T> {
+  return sessionScope.run(token, fn);
+}
 
 /** For sensitive admin actions: the login behind this session must be recent. */
 export function hasRecentAuthentication(employee: CurrentEmployee, maxAgeMs: number, now = Date.now()): boolean {

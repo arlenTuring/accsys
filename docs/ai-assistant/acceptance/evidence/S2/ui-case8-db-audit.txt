@@ -1,0 +1,8 @@
+6|2026-11-04T21:00|設備驗收與教育訓練
+ai_draft.created|assistant|1|
+ai_draft.linked|||
+ai_draft.updated|assistant|2|
+ai_draft.updated|assistant|3|
+ai_draft.updated|panel|4|["location"]
+ai_draft.updated|assistant|5|
+ai_draft.updated|panel|6|["purpose"]

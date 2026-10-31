@@ -1,0 +1,72 @@
+{
+  "when": "2026-10-31T07:09:42.402Z",
+  "guiDraft": "64f11021-4af4-495b-9757-a63228a199c8",
+  "nlDraft": "abf711f6-9bcf-408d-9a01-d3e341b58a8c",
+  "results": [
+    {
+      "case": "choice-idempotent",
+      "ok": true,
+      "why": "選表單兩次 → 草稿 1 張，第二次重播"
+    },
+    {
+      "case": "form-card-fields",
+      "ok": true,
+      "why": "卡片欄位：tripStartAt,tripEndAt,location,jobProxyEmployeeId,purpose,projectId"
+    },
+    {
+      "case": "form-card-double",
+      "ok": true,
+      "why": "並行送出卡片兩次 → 實際寫入 1 次，草稿 v2"
+    },
+    {
+      "case": "gui-only-draft",
+      "ok": true,
+      "why": "DB：{\"purpose\":\"設備驗收\",\"location\":\"台南\",\"projectId\":\"30000000-0000-0000-0000-00000000000a\",\"tripEndAt\":\"2026-11-18T17:30\",\"tripStartAt\":\"2026-11-18T09:00\",\"jobProxyEmployeeId\":\"20000000-0000-0000-0000-000000000002\"}"
+    },
+    {
+      "case": "gui-equals-nl",
+      "ok": true,
+      "why": "日期、地點、專案、代理人與卡片結果相同，事由含設備驗收"
+    },
+    {
+      "case": "stale-card",
+      "ok": true,
+      "why": "舊卡片送出 → expired；地點仍 高雄；卡片狀態 expired"
+    },
+    {
+      "case": "project-search",
+      "ok": true,
+      "why": "A 結果 T-PRJ,T-PRJ-A,T-PRJ-B；B 結果 T-PRJ,T-PRJ-A,T-PRJ-B,T-PRJ-X"
+    },
+    {
+      "case": "project-write",
+      "ok": true,
+      "why": "AI／卡片寫入 X → 拒絕；直接呼叫正式送出服務帶 X → 拒絕（）"
+    },
+    {
+      "case": "project-card",
+      "ok": true,
+      "why": "卡片帶版本 v1；選 X → invalid：沒有寫入：關聯專案（所選項目不存在，或您無權選用）；選 A → 寫入；同卡再點 → 重播"
+    },
+    {
+      "case": "change-confirm",
+      "ok": true,
+      "why": "預覽（出差結束時間:2026-11-18 17:30→2026-11-18 19:00；出差地點:台南→台南市安平區）後 DB 仍 v2；確認 → v3；過期卡片 → expired，地點仍 台南市安平區"
+    },
+    {
+      "case": "approved-picker",
+      "ok": true,
+      "why": "候選 3 張：20261031BT0003 2026-10-22 09:00 · 新竹市 · ／20261031BT0002 2026-10-21 08:30 · 台中市南屯區／20261031BT0001 2026-10-14 09:00 · 台中市西屯區"
+    },
+    {
+      "case": "model-uses-card",
+      "ok": true,
+      "why": "卡片：draft_reference,action_result,field_form；草稿已填欄位：無；回覆：已為您建立「公出差旅申請單」草稿。 目前尚缺以下必填欄位，您可以直接在下方卡片填寫，或直接以文字告訴我： - **出差起始時間** - **出差結束時間** -"
+    },
+    {
+      "case": "failed-turn-note",
+      "ok": true,
+      "why": "已存系統說明：這則訊息沒有處理完成：目前無法連線到語言模型，請稍後再試或聯絡管理員。 草稿沒有因這則訊息變更。"
+    }
+  ]
+}

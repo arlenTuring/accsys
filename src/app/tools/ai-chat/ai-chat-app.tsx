@@ -7,11 +7,11 @@ import {
   getAiChatStatus,
   getAssistantInboxAction,
   loadOlderMessagesAction,
+  presentFormChoicesAction,
   purgeStagedAiChatImageAction,
   sendAiChatMessage,
-  stageAiChatImageAction,
 } from '@/lib/ai-chat/actions';
-import { attachStagedFilesToDraftAction } from '@/lib/ai-chat/actions-staged-invoice';
+import { attachStagedFilesToDraftAction, listPendingStagedAction } from '@/lib/ai-chat/actions-staged-invoice';
 import type { AiMessageBlock } from '@/lib/ai-chat/blocks';
 import type { OpenResourceEvent } from '@/lib/ai-chat/open-resource';
 import {
@@ -34,6 +34,7 @@ import {
   statusAfterInvoiceCheck,
   useObjectUrlCleanup,
 } from './image-attachments';
+import { PhotoEditor } from './photo-editor';
 import {
   type DocTab,
   loadDocTabsPref,
@@ -64,14 +65,6 @@ function newClientId(): string {
   return crypto.randomUUID();
 }
 
-async function fileToBase64(file: File): Promise<string> {
-  const buf = await file.arrayBuffer();
-  const bytes = new Uint8Array(buf);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
-  return btoa(binary);
-}
-
 /** User wants chat photos copied onto the open draft (not only model tool calls). */
 function wantsDraftAttach(text: string): boolean {
   return /夾帶|夾進|附加到草稿|放到草稿|附上草稿|附到草稿/.test(text);
@@ -93,6 +86,18 @@ function stagedIdsFromMessageBlocks(msgs: UiMessage[]): string[] {
     }
   }
   return [...new Set(ids)];
+}
+
+/** Where a file left in the composer picks up after a reload. */
+function restoredStatus(
+  analysisStatus: string | null,
+  hasTarget: boolean,
+  invoice: ReturnType<typeof invoiceReminderFromCheck>
+): ClientImageAttachment['status'] {
+  if (analysisStatus === 'running') return 'checking';
+  if (!invoice || !hasTarget) return 'scanned';
+  // Checked but not on the draft yet: offer to add it again.
+  return statusAfterInvoiceCheck(invoice) === 'ready' ? 'attach_failed' : 'needs_confirm';
 }
 
 export function AiChatApp() {
@@ -176,114 +181,63 @@ export function AiChatApp() {
       if (uploadInFlightRef.current.has(id)) return;
       uploadInFlightRef.current.add(id);
       const gate = { epoch, conversationId: convId };
-      patchAttachment(id, { status: 'uploading', error: undefined }, gate);
+      patchAttachment(id, { status: 'uploading', error: undefined, progress: 0 }, gate);
       try {
-        // Prefer multipart API (no base64 bloat). Fall back to Server Action for tiny files.
-        patchAttachment(id, { status: 'uploading', error: undefined }, gate);
-        type InvoiceRaw = {
-          overallStatus?: string;
-          summary?: string;
-          pages?: Array<{ buyerTaxId?: string | null; sellerTaxId?: string | null }>;
-        };
-        type StageOk = { ok: true; stagedId: string; scanStatus: string; invoice?: InvoiceRaw | null };
-        type StageRes = StageOk | { ok: false; error: string; code?: string };
-        let res: StageRes;
-        try {
-          if (file.size > 512 * 1024) {
-            const fd = new FormData();
-            fd.set('file', file, meta.fileName);
-            fd.set('conversationId', convId);
-            fd.set('clientAttachmentId', id);
-            const http = await fetch('/api/ai-chat/staged-upload', {
-              method: 'POST',
-              body: fd,
-              credentials: 'same-origin',
-            });
-            const body = (await http.json().catch(() => ({}))) as {
-              ok?: boolean;
-              error?: string;
-              code?: string;
-              scanStatus?: string;
-              staged?: { id: string; scanStatus: string };
-              invoice?: InvoiceRaw | null;
-            };
-            if (!http.ok || !body.ok || !body.staged?.id) {
-              res = {
-                ok: false,
-                error:
-                  typeof body.error === 'string'
-                    ? body.error
-                    : http.status === 413
-                      ? '檔案過大'
-                      : '上傳或檢查失敗，請重試',
-                code: body.code,
-              };
-            } else {
-              res = {
-                ok: true,
-                stagedId: body.staged.id,
-                scanStatus: body.scanStatus ?? body.staged.scanStatus,
-                invoice: body.invoice ?? null,
-              };
-            }
-          } else {
-            let base64: string;
+        // Always the original file, multipart with progress. Scan and type checks happen on the server.
+        const body = await new Promise<{
+          http: number;
+          ok?: boolean;
+          error?: string;
+          code?: string;
+          staged?: { id: string; scanStatus: string };
+        }>((resolve, reject) => {
+          const fd = new FormData();
+          fd.set('file', file, meta.fileName);
+          fd.set('conversationId', convId);
+          fd.set('clientAttachmentId', id);
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', '/api/ai-chat/staged-upload');
+          xhr.upload.onprogress = (e) => {
+            if (!e.lengthComputable) return;
+            const pct = Math.round((e.loaded / e.total) * 100);
+            patchAttachment(id, { progress: pct, status: pct >= 100 ? 'scanning' : 'uploading' }, gate);
+          };
+          xhr.onerror = () => reject(new Error('network'));
+          xhr.onload = () => {
+            let parsed: Record<string, unknown> = {};
             try {
-              base64 = await fileToBase64(file);
+              parsed = JSON.parse(xhr.responseText) as Record<string, unknown>;
             } catch {
-              patchAttachment(id, { status: 'failed', error: '讀取檔案失敗' }, gate);
-              return;
+              /* non-JSON error page */
             }
-            const actionRes = await stageAiChatImageAction({
-              conversationId: convId,
-              clientAttachmentId: id,
-              fileName: meta.fileName,
-              mimeType: meta.mimeType,
-              base64,
-            });
-            res = actionRes.ok
-              ? {
-                  ok: true,
-                  stagedId: actionRes.stagedId,
-                  scanStatus: actionRes.scanStatus,
-                  invoice: actionRes.invoice ?? null,
-                }
-              : actionRes;
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : '上傳失敗';
+            resolve({ http: xhr.status, ...parsed });
+          };
+          xhr.send(fd);
+        }).catch(() => null);
+        if (!body) {
+          patchAttachment(id, { status: 'failed', error: '連線中斷，檔案尚未上傳，請重試' }, gate);
+          return;
+        }
+        if (body.http === 401) {
+          patchAttachment(id, { status: 'failed', error: '登入已逾時，請重新登入後重試' }, gate);
+          return;
+        }
+        if (!body.ok || !body.staged?.id) {
+          const infected = body.code === 'infected';
           patchAttachment(
             id,
             {
-              status: 'failed',
-              error: msg.includes('unauthenticated') || msg.includes('NEXT_REDIRECT')
-                ? '登入已逾時，請重新登入後重試'
-                : file.size > 8 * 1024 * 1024
-                  ? '上傳失敗：檔案偏大，請重新整理頁面後再試'
-                  : '上傳或檢查失敗，請重試',
+              status: infected ? 'blocked' : 'failed',
+              error: infected
+                ? '檔案未通過安全掃描，已隔離，不能夾帶'
+                : (body.error ?? (body.http === 413 ? '檔案超過大小上限' : '上傳或檢查失敗，請重試')),
+              file: infected ? undefined : file,
             },
             gate
           );
           return;
         }
-        if (!res.ok) {
-          patchAttachment(id, { status: 'failed', error: res.error }, gate);
-          return;
-        }
-        const scanReady = res.scanStatus === 'ready';
-        const invoice = invoiceReminderFromCheck(res.invoice);
-        const nextStatus = statusAfterInvoiceCheck(scanReady, invoice);
-        patchAttachment(
-          id,
-          {
-            status: nextStatus,
-            stagedId: res.stagedId,
-            invoice,
-            error: scanReady ? undefined : '圖片掃描未通過',
-            file: scanReady ? undefined : file,
-          },
-          gate
-        );
+        patchAttachment(id, { status: 'scanned', stagedId: body.staged.id, error: undefined, file: undefined }, gate);
       } finally {
         uploadInFlightRef.current.delete(id);
       }
@@ -364,6 +318,24 @@ export function AiChatApp() {
     [applyOpenResources]
   );
 
+  /** openDraftMeta changes with the active tab; the mount effect must not run again for that. */
+  const openDraftRef = useRef(openDraftMeta);
+  useEffect(() => {
+    openDraftRef.current = openDraftMeta;
+  }, [openDraftMeta]);
+
+  const [attachNotice, setAttachNotice] = useState<string | null>(null);
+  const [editingPhoto, setEditingPhoto] = useState<ClientImageAttachment | null>(null);
+  // Files waiting for 確認並檢查 do not hold the chat back; only work in progress does.
+  const attachmentsBusy = attachments.some((a) => ['processing', 'selected', 'uploading', 'scanning', 'checking', 'attaching'].includes(a.status));
+  const messagesRef = useRef<HTMLDivElement | null>(null);
+  const lastMessageId = messages[messages.length - 1]?.id;
+  // Follow the newest message (sent, answered, or added by a card) — older pages loaded above do not move it.
+  useEffect(() => {
+    const el = messagesRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [lastMessageId]);
+
   const loadConversation = useCallback(
     (opts?: { conversationId?: string | null; forceNew?: boolean }) => {
       const gen = ++bootGen.current;
@@ -395,6 +367,29 @@ export function AiChatApp() {
           sessionStorage.setItem(CONV_PREF, boot.conversationId);
         } catch {
           /* ignore */
+        }
+        // Files still waiting in the composer come back from the server after a reload.
+        const pending = await listPendingStagedAction({ conversationId: boot.conversationId }).catch(() => null);
+        if (pending?.ok && gen === bootGen.current) {
+          setAttachments((prev) => {
+            const have = new Set(prev.map((a) => a.stagedId));
+            const restored = pending.items.filter((i) => !have.has(i.id)).map((i): ClientImageAttachment => {
+              const invoice = invoiceReminderFromCheck(i.analysisResult as Parameters<typeof invoiceReminderFromCheck>[0]);
+              return {
+                clientAttachmentId: i.clientAttachmentId,
+                fileName: i.fileName,
+                mimeType: i.mimeType,
+                sizeBytes: i.fileSizeBytes,
+                previewUrl: `/api/ai-chat/staged/${i.id}?preview=1`,
+                stagedId: i.id,
+                invoice,
+                edited: i.activeEditId ? 1 : undefined,
+                target: i.targetDraftId ? { draftId: i.targetDraftId, title: '先前選定的草稿' } : undefined,
+                status: restoredStatus(i.analysisStatus, Boolean(i.targetDraftId), invoice),
+              };
+            });
+            return restored.length ? [...prev, ...restored] : prev;
+          });
         }
       });
     },
@@ -430,6 +425,15 @@ export function AiChatApp() {
     const params = new URLSearchParams(window.location.search);
     const fromUrl = params.get('c');
     loadConversation({ conversationId: fromUrl || preferred });
+    // Arriving from a reminder: the draft to work on, not whatever was bound last.
+    try {
+      const handed = sessionStorage.getItem('accsys.ai.openDraft');
+      sessionStorage.removeItem('accsys.ai.openDraft');
+      const draft = handed ? (JSON.parse(handed) as { draftId?: string; title?: string }) : null;
+      if (draft?.draftId) openDraftRef.current(draft.draftId, { title: draft.title ?? '草稿' });
+    } catch {
+      /* ignore */
+    }
     void getAiChatStatus().then((s) => setStatusMeta({ model: s.model, ok: s.ok && s.enabled }));
   }, [loadConversation]);
 
@@ -467,17 +471,27 @@ export function AiChatApp() {
           setInboxHint(intent === 'view_pending' ? '目前沒有待簽核事項。' : '目前沒有進行中的送件。');
           return;
         }
+        const total = intent === 'view_pending' ? res.inbox.pendingTotal : res.inbox.mineTotal;
         const lines = items
           .slice(0, 8)
-          .map((i) => `· ${i.label}（${i.caseNumber}）`)
+          .map((i) => {
+            const who = intent === 'view_pending' && i.applicantName ? `${i.applicantName}｜` : '';
+            const state = i.status === 'returned' ? '｜已退回' : '';
+            return `· ${i.label}：${who}${i.summary || i.caseNumber}${state}`;
+          })
           .join('\n');
-        setInboxHint(`${intent === 'view_pending' ? '待簽核' : '送件進度'}：\n${lines}`);
+        const more = total > items.length ? `\n還有 ${total - items.length} 張，請到${intent === 'view_pending' ? '待簽核' : '我的申請'}頁查看全部。` : '';
+        setInboxHint(`${intent === 'view_pending' ? '待簽核' : '送件進度'}（共 ${total} 張）：\n${lines}${more}`);
       });
       return;
     }
-    if (intent === 'create_form') {
-      setInput('我想建立一張新單據，請列出我可填寫的表單。');
-      inputRef.current?.focus();
+    if (intent === 'create_form' && conversationId) {
+      // A form-type card straight away: building a draft needs no typing.
+      start(async () => {
+        const res = await presentFormChoicesAction({ conversationId });
+        if (!res.ok) setError(res.error);
+        loadConversation({ conversationId });
+      });
     }
   }
 
@@ -522,8 +536,6 @@ export function AiChatApp() {
       return;
     }
     const picked = [...fileList];
-    // Show strip as「壓縮處理中」first so upload worker does NOT race with downscale
-    // (a 13MB original must not be staged before optimize finishes).
     const { candidates: rawCandidates, invalid } = buildImageCandidates(picked, newClientId);
     const processing = rawCandidates.map((c) => ({ ...c, status: 'processing' as const }));
     const { accepted: provisional, overLimit } = planAcceptedAttachments(
@@ -557,53 +569,14 @@ export function AiChatApp() {
       );
     }
 
-    try {
-      const { optimizeImageForUpload } = await import('@/lib/attachments/client-image-optimize');
-      for (const item of provisional) {
-        if (!item.file) continue;
-        const { file: next, optimized, originalBytes, outputBytes } = await optimizeImageForUpload(
-          item.file
-        );
-        const stillThere = attachmentsRef.current.some(
-          (a) => a.clientAttachmentId === item.clientAttachmentId && a.status === 'processing'
-        );
-        if (!stillThere) continue;
-        const previewUrl = optimized ? URL.createObjectURL(next) : item.previewUrl;
-        const oldPreview = item.previewUrl;
-        patchAttachment(item.clientAttachmentId, {
-          status: 'selected',
-          file: next,
-          fileName: next.name,
-          mimeType: next.type || item.mimeType,
-          sizeBytes: next.size,
-          previewUrl,
-        });
-        if (optimized && previewUrl !== oldPreview) {
-          try {
-            URL.revokeObjectURL(oldPreview);
-          } catch {
-            /* ignore */
-          }
-          if (originalBytes > outputBytes) {
-            console.info(
-              '[ai-chat] optimized',
-              item.fileName,
-              `${originalBytes}→${outputBytes}`
-            );
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('[ai-chat] image optimize failed; uploading originals:', err);
-      for (const item of provisional) {
-        patchAttachment(item.clientAttachmentId, { status: 'selected' });
-      }
-    }
+    // The original goes up unchanged: previews and analysis copies never replace the file of record.
+    for (const item of provisional) patchAttachment(item.clientAttachmentId, { status: 'selected' });
   }
 
-  function onSend() {
+  /** `override`: text from a choice card, sent exactly as if typed (attachments are not included). */
+  function onSend(override?: string) {
     if (!conversationId || pending) return;
-    const text = input.trim();
+    const text = (override ?? input).trim();
     if (!text && attachments.length === 0) return;
     const blocking = attachments.filter((a) => !canSendToModel(a.status));
     if (blocking.length > 0) {
@@ -618,8 +591,9 @@ export function AiChatApp() {
     const stagedAttachmentIds = attachments
       .filter((a) => canSendToModel(a.status) && a.stagedId)
       .map((a) => a.stagedId!);
+    // Saying 「夾進草稿」 is the go-ahead for files still waiting for 確認並檢查.
     const attachableNow = attachments
-      .filter((a) => a.stagedId && canAttachToDraft(a.status))
+      .filter((a) => a.stagedId && (canAttachToDraft(a.status) || a.status === 'scanned'))
       .map((a) => a.stagedId!);
     const draftTargetId =
       boundDraft?.draftId ??
@@ -638,7 +612,7 @@ export function AiChatApp() {
     setError(null);
     const expectedConversation = conversationId;
     const keptAttachments = attachments;
-    const keptInput = input;
+    const keptInput = override === undefined ? input : '';
     const attachIntent = wantsDraftAttach(text);
     start(async () => {
       // Copy checked files onto the draft in the browser — do not wait for the model tool.
@@ -654,6 +628,7 @@ export function AiChatApp() {
           } else {
             const attached = await attachStagedFilesToDraftAction({
               draftId: draftTargetId,
+              conversationId: expectedConversation!,
               expectedVersion: draftTargetVersion >= 1 ? draftTargetVersion : 1,
               stagedIds,
               confirmReminders: false,
@@ -688,6 +663,8 @@ export function AiChatApp() {
         clientMessageId,
         conversationId: expectedConversation,
         stagedAttachmentIds,
+        // The draft the person is looking at; the server checks ownership and links it to this conversation.
+        targetDraftId: draftTargetId ?? undefined,
       });
       if (bootGen.current && expectedConversation !== conversationId) {
         // Stale response for a previous conversation — ignore UI open side-effects.
@@ -828,10 +805,11 @@ export function AiChatApp() {
 
       <div className={`flex min-h-0 flex-1 gap-0 ${showDocs ? '' : ''}`}>
         <section
-          className={`flex min-w-0 flex-col ${showDocs ? 'md:w-[min(100%,calc(100%-320px))]' : 'w-full'} ${
+          className={`flex min-w-0 flex-col ${showDocs ? 'w-full md:w-[min(100%,calc(100%-320px))] md:max-w-[var(--chat-max)]' : 'w-full'} ${
             mobilePane === 'chat' ? 'flex' : 'hidden md:flex'
           }`}
-          style={showDocs ? { flex: '1 1 auto', maxWidth: `calc(100% - ${docsWidth}px)` } : undefined}
+          // The docs pane only sits beside the chat from md up; on phones each pane is full width.
+          style={showDocs ? ({ flex: '1 1 auto', '--chat-max': `calc(100% - ${docsWidth}px)` } as React.CSSProperties) : undefined}
         >
           <div className="mb-2 flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-td-border bg-white">
             {hasOlder && conversationId && messages[0] && (
@@ -868,7 +846,7 @@ export function AiChatApp() {
                 載入更早訊息
               </button>
             )}
-            <div className="flex-1 space-y-3 overflow-y-auto p-4">
+            <div ref={messagesRef} className="flex-1 space-y-3 overflow-y-auto p-4">
               {messages.map((m) => (
                 <article
                   key={m.id}
@@ -888,11 +866,13 @@ export function AiChatApp() {
                     <MessageBlocks
                       blocks={m.blocks}
                       conversationId={conversationId}
-                      boundDraftId={boundDraft?.draftId ?? null}
-                      boundDraftVersion={boundDraft?.version ?? null}
+                      boundDraftId={boundDraft?.draftId ?? (activeTab?.resourceType === 'application_draft' ? activeTab.resourceId : null)}
+                      boundDraftVersion={boundDraft?.version ?? (activeTab?.resourceType === 'application_draft' ? (activeTab.version ?? 1) : null)}
                       onDraftOpened={openDraftMeta}
                       onOpenResources={applyOpenResources}
                       onIntent={handleIntent}
+                      onRefresh={() => loadConversation({ conversationId })}
+                      onSendText={(text) => onSend(text)}
                     />
                   )}
                 </article>
@@ -932,33 +912,28 @@ export function AiChatApp() {
                     )}
                 </div>
               )}
+              {attachNotice && (
+                <p role="status" className="mb-1 text-xs text-emerald-800">
+                  {attachNotice}
+                </p>
+              )}
               <ImageAttachmentStrip
                 items={attachments}
-                draftId={
-                  boundDraft?.draftId ??
-                  (activeTab?.resourceType === 'application_draft' ? activeTab.resourceId : null)
-                }
-                draftVersion={
-                  boundDraft?.version ??
-                  (activeTab?.resourceType === 'application_draft' ? activeTab.version : null)
-                }
+                conversationId={conversationId}
+                draftId={boundDraft?.draftId ?? (activeTab?.resourceType === 'application_draft' ? activeTab.resourceId : null)}
+                draftTitle={boundDraft?.title ?? (activeTab?.resourceType === 'application_draft' ? activeTab.title : null)}
+                draftVersion={boundDraft?.version ?? (activeTab?.resourceType === 'application_draft' ? activeTab.version : null)}
                 onRemove={removeAttachment}
                 onRetry={retryAttachment}
-                onConfirmed={(clientAttachmentId) =>
-                  patchAttachment(clientAttachmentId, { status: 'confirmed' })
-                }
-                onAttachedToDraft={({ draftId, version, count }) => {
-                  // Close the composer strip so the input stays usable.
-                  if (count > 0) setAttachments([]);
-                  setBoundDraft((prev) =>
-                    prev && prev.draftId === draftId ? { ...prev, version } : prev
-                  );
+                onPatch={patchAttachment}
+                onEdit={setEditingPhoto}
+                onAttachedToDraft={({ draftId, version, clientAttachmentIds, notice }) => {
+                  // Only the files the server linked leave the strip; the rest stay visible.
+                  setAttachments((prev) => prev.filter((a) => !clientAttachmentIds.includes(a.clientAttachmentId)));
+                  setAttachNotice(notice);
+                  setBoundDraft((prev) => (prev && prev.draftId === draftId ? { ...prev, version } : prev));
                   setTabs((prev) =>
-                    prev.map((t) =>
-                      t.resourceType === 'application_draft' && t.resourceId === draftId
-                        ? { ...t, version }
-                        : t
-                    )
+                    prev.map((t) => (t.resourceType === 'application_draft' && t.resourceId === draftId ? { ...t, version } : t))
                   );
                   setDrawerRefresh((n) => n + 1);
                   setMobilePane('docs');
@@ -1016,26 +991,39 @@ export function AiChatApp() {
                   disabled={
                     !conversationId ||
                     pending ||
-                    attachments.some((a) => a.status !== 'ready' && a.status !== 'failed') ||
-                    (attachments.length > 0 && attachments.every((a) => a.status === 'failed'))
+                    attachmentsBusy ||
+                    (attachments.length > 0 && attachments.every((a) => a.status === 'failed' || a.status === 'blocked'))
                   }
-                  title={
-                    attachments.some((a) => a.status !== 'ready' && a.status !== 'failed')
-                      ? '請等待圖片上傳與檢查完成'
-                      : undefined
-                  }
-                  onClick={onSend}
+                  title={attachmentsBusy ? '請等待檔案處理完成' : undefined}
+                  onClick={() => onSend()}
                 >
                   {pending
                     ? '傳送中…'
-                    : attachments.some((a) => a.status !== 'ready' && a.status !== 'failed')
-                      ? '上傳中…'
+                    : attachmentsBusy
+                      ? '處理中…'
                       : '傳送訊息'}
                 </button>
               </div>
             </div>
           </div>
         </section>
+
+        {editingPhoto?.stagedId && (
+          <PhotoEditor
+            target={{
+              kind: 'staged',
+              sourceId: editingPhoto.stagedId,
+              fileName: editingPhoto.fileName,
+              originalUrl: `/api/ai-chat/staged/${editingPhoto.stagedId}?original=1&preview=1`,
+            }}
+            onClose={() => setEditingPhoto(null)}
+            onSaved={() => {
+              // The AI result described the previous picture: back to waiting for 確認並檢查.
+              patchAttachment(editingPhoto.clientAttachmentId, { status: 'scanned', invoice: null, edited: (editingPhoto.edited ?? 0) + 1, error: undefined });
+              setEditingPhoto(null);
+            }}
+          />
+        )}
 
         {showDocs && (
           <>
@@ -1061,10 +1049,10 @@ export function AiChatApp() {
               }}
             />
             <aside
-              className={`min-w-0 flex-col border border-td-border bg-white ${
+              className={`w-full min-w-0 flex-col border border-td-border bg-white md:w-[var(--docs-w)] md:min-w-[280px] ${
                 mobilePane === 'docs' ? 'flex' : 'hidden md:flex'
               }`}
-              style={{ width: docsWidth, minWidth: 280 }}
+              style={{ '--docs-w': `${docsWidth}px` } as React.CSSProperties}
               aria-label="文件工作區"
             >
               <div className="flex items-center gap-1 border-b border-td-border p-1" role="tablist">
@@ -1157,6 +1145,7 @@ export function AiChatApp() {
                       )
                     }
                     onSubmitted={(info) => {
+                      setBoundDraft(null);
                       applyOpenResources([
                         {
                           type: 'open_resource',
@@ -1168,20 +1157,7 @@ export function AiChatApp() {
                           status: 'submitted',
                         },
                       ]);
-                      setTabs((prev) =>
-                        prev
-                          .filter((t) => t.tabId !== activeTab.tabId)
-                          .concat({
-                            tabId: tabKey('form_submission', info.submissionId),
-                            resourceType: 'form_submission',
-                            resourceId: info.submissionId,
-                            title: info.formNumber,
-                            formKey: info.formKey,
-                            status: 'submitted',
-                            loadState: 'ready',
-                            saveState: 'clean',
-                          })
-                      );
+                      setTabs((prev) => prev.filter((t) => t.tabId !== activeTab.tabId));
                     }}
                   />
                 )}

@@ -1,8 +1,13 @@
 'use server';
 
+export type { AiChatActionResult } from './turn';
+
+import { and, eq } from 'drizzle-orm';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { getDb } from '@/lib/db';
+import { attachments } from '@/lib/db/schema';
 import { hitRateLimit } from '@/lib/rate-limit';
-import { AiChatConfigError, requireAiChatConfig, loadAiChatConfig } from './config';
+import { loadAiChatConfig } from './config';
 import {
   appendMessage,
   archiveConversation,
@@ -19,95 +24,38 @@ import {
   getDraftForOwner,
   listDraftLibrary,
   loadDraftFormContext,
-  patchApplicationDraft,
   submitApplicationDraft,
   type ApplicationDraft,
 } from './drafts';
+import { loadFormFacts, loadReturnReason } from './form-facts';
 import { loadAssistantInbox, loadAssistantInboxMore, type AssistantInbox, type InboxItem } from './inbox';
 import { ackLauncherEvents, pollLauncherEvents, type LauncherEvent } from './launcher-events';
-import { assertAiChatMessageRate, releaseEmployeeTurn, tryAcquireEmployeeTurn, AI_CHAT_RATE_LIMITS } from './limits';
+import { startResubmission } from './resubmit';
+import { AI_CHAT_RATE_LIMITS } from './limits';
 import { executeNudge, previewNudge } from './nudge';
-import { mergeOpenResources, type OpenResourceEvent } from './open-resource';
-import { listRecentProjectsForEmployee, recordProjectUsage, searchProjectsPaged } from './projects';
-import { generateChatReply, type UserContentPart } from './vertex-client';
+import { type OpenResourceEvent } from './open-resource';
+import { listRecentProjectsForEmployee, searchProjectsPaged } from './projects';
 import { sanitizeBlocks, type AiMessageBlock } from './blocks';
+import {
+  IMAGE_MIME,
+  publicError,
+  runAssistantTurn,
+  type AiChatActionResult,
+  type AssistantTurnInput,
+} from './turn';
 import { buildWelcomeSummary, welcomeClientMessageId } from './welcome';
+import { saveDraftFromPanel, summarizeDrafts, type PanelSaveResult } from './draft-work';
+import {
+  chooseFormCard,
+  confirmChangeCard,
+  offerTripCarryOver,
+  pickProjectCard,
+  refreshFieldFormCard,
+  submitFieldFormCard,
+  type CardActionResult,
+} from './block-actions';
 import type { FormSchema } from '@/lib/custom-forms/schema';
-import type { PickerOptions } from '@/lib/custom-forms/queries';
-
-function openResourcesFromDraftBlocks(
-  blocks: AiMessageBlock[],
-  operation: OpenResourceEvent['operation']
-): OpenResourceEvent[] {
-  const out: OpenResourceEvent[] = [];
-  for (const b of blocks) {
-    if (b.kind !== 'draft_reference') continue;
-    out.push({
-      type: 'open_resource',
-      resourceType: 'application_draft',
-      resourceId: b.draftId,
-      title: b.formName,
-      version: b.version,
-      operation,
-      formKey: b.formKey,
-      status: b.status,
-    });
-  }
-  return mergeOpenResources(out);
-}
-
-function publicError(raw: string): string {
-  const code = raw.split('\n')[0] ?? raw;
-  switch (true) {
-    case code === 'rate_limited':
-      return '操作過於頻繁，請稍後再試。';
-    case code === 'busy':
-      return '上一個回覆還在處理中，請稍候再傳送。';
-    case code === 'task_timeout' || code.startsWith('task_timeout'):
-      return '這次回應逾時，請再試一次。';
-    case code === 'model_empty_text' || code.startsWith('model_empty_text'):
-      return '模型沒有回傳內容，請再試一次。';
-    case code === 'unauthenticated':
-      return '請先登入後再使用 AI 助手。';
-    case code === 'empty_user_content':
-      return '請輸入訊息或上傳圖片。';
-    case code === 'conversation_not_found' || code === 'conversation_forbidden':
-      return '找不到此對話或無權限存取。';
-    default:
-      if (code.startsWith('model_http_')) return '目前無法連線到語言模型，請稍後再試或聯絡管理員。';
-      if (
-        code.includes('憑證') ||
-        code.includes('ADC') ||
-        code.includes('default credentials') ||
-        code.includes('AI_CHAT_PROJECT')
-      ) {
-        // Local: actionable; production: hide internals.
-        if (loadAiChatConfig().isLocal) {
-          return '本機尚未設定 Vertex 開發憑證。請在終端機執行：gcloud auth application-default login';
-        }
-        return 'AI 助手設定尚未完成，請聯絡管理員。';
-      }
-      return '處理失敗，請稍後再試。';
-  }
-}
-
-export type AiChatActionResult =
-  | {
-      ok: true;
-      reply: string;
-      model: string;
-      toolsUsed: string[];
-      blocks: AiMessageBlock[];
-      conversationId: string;
-      userMessageId: string;
-      modelMessageId: string;
-      /**
-       * Controlled open events from successful tools only.
-       * Frontend must open tabs from this — never from model prose or “latest draft”.
-       */
-      openResources: OpenResourceEvent[];
-    }
-  | { ok: false; error: string };
+import { getFilableDefinitions, type PickerOptions } from '@/lib/custom-forms/queries';
 
 export async function getAiChatStatus(): Promise<{
   ok: boolean;
@@ -231,14 +179,6 @@ export async function bootstrapAssistantConversation(input?: {
   };
 }
 
-const IMAGE_MIME = new Set([
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'image/heic',
-  'image/heif',
-  'application/pdf',
-]);
 
 export async function stageAiChatImageAction(input: {
   conversationId: string;
@@ -256,7 +196,6 @@ export async function stageAiChatImageAction(input: {
       fileSizeBytes: number;
       width: number | null;
       height: number | null;
-      invoice: import('@/lib/attachments/invoice-check').InvoiceCheckResult | null;
     }
   | { ok: false; error: string; code?: string }
 > {
@@ -285,38 +224,6 @@ export async function stageAiChatImageAction(input: {
       bytes,
     });
     if (!result.ok) return { ok: false, error: result.error, code: result.code };
-    let invoice: import('@/lib/attachments/invoice-check').InvoiceCheckResult | null = null;
-    try {
-      const { analyzeStagedAttachment } = await import('./staged-invoice');
-      const analyzed = await analyzeStagedAttachment({
-        ownerEmployeeId: employee.id,
-        stagedId: result.staged.id,
-      });
-      if (analyzed.ok) {
-        invoice = analyzed.result;
-      } else {
-        invoice = {
-          complete: false,
-          pagesAnalysed: 0,
-          pagesTotal: null,
-          overallStatus: 'analysis_failed',
-          summary: '無法完成發票／統編檢查；安全掃描已通過，確認後仍可夾帶',
-          pages: [],
-          usedVision: false,
-        };
-      }
-    } catch (err) {
-      console.warn('[ai-chat] invoice analyze after stage:', (err as Error).message);
-      invoice = {
-        complete: false,
-        pagesAnalysed: 0,
-        pagesTotal: null,
-        overallStatus: 'analysis_failed',
-        summary: '發票檢查發生錯誤；安全掃描已通過，確認後仍可夾帶',
-        pages: [],
-        usedVision: false,
-      };
-    }
     return {
       ok: true,
       stagedId: result.staged.id,
@@ -326,7 +233,6 @@ export async function stageAiChatImageAction(input: {
       fileSizeBytes: result.staged.fileSizeBytes,
       width: result.staged.width,
       height: result.staged.height,
-      invoice,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'stage_failed';
@@ -352,7 +258,8 @@ export async function attachApprovedPdfAction(input: {
   sourceFormId: string;
   draftId: string;
   expectedVersion: number;
-  fillTripOrderNo?: boolean;
+  /** Conversation of the picker card; the carry-over offer is posted there. */
+  conversationId: string;
 }): Promise<
   | {
       ok: true;
@@ -366,35 +273,27 @@ export async function attachApprovedPdfAction(input: {
 > {
   const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: publicError('unauthenticated') };
+  if (!(await getOwnedConversation(employee.id, input.conversationId))) return { ok: false, error: publicError('conversation_not_found') };
   const actor = { id: employee.id, role: employee.role };
   const { getOrCreateApprovedPdfSnapshot } = await import('./approved-pdf');
   const { attachApprovedSnapshotToDraft } = await import('./attach-approved');
-  const snap = await getOrCreateApprovedPdfSnapshot({
-    actor,
-    formType: 'custom',
-    formId: input.sourceFormId,
-  });
+  const snap = await getOrCreateApprovedPdfSnapshot({ actor, formType: 'custom', formId: input.sourceFormId });
   if (!snap.ok) return { ok: false, error: snap.error };
   try {
-    const linked = await attachApprovedSnapshotToDraft({
-      actor,
-      draftId: input.draftId,
-      expectedVersion: input.expectedVersion,
-      snapshotId: snap.snapshot.id,
-    });
-    if (!linked.ok) return { ok: false, error: '草稿版本衝突，請重新整理。' };
-    if (input.fillTripOrderNo) {
-      const { patchApplicationDraft } = await import('./drafts');
-      const draft = linked.draft;
-      const currentNo = draft.data.tripOrderNo;
-      if (currentNo == null || currentNo === '') {
-        await patchApplicationDraft({
-          draftId: draft.id,
-          ownerEmployeeId: employee.id,
-          expectedVersion: linked.draft.version,
-          patch: { tripOrderNo: snap.snapshot.sourceFormNumber },
-        });
-      }
+    // Adding a fixed PDF touches no field, so a newer draft version is safe to build on.
+    let linked = await attachApprovedSnapshotToDraft({ actor, draftId: input.draftId, expectedVersion: input.expectedVersion, snapshotId: snap.snapshot.id });
+    if (!linked.ok) {
+      linked = await attachApprovedSnapshotToDraft({ actor, draftId: input.draftId, expectedVersion: linked.conflict.draft.version, snapshotId: snap.snapshot.id });
+    }
+    if (!linked.ok) return { ok: false, error: '草稿剛被更新，請再按一次。' };
+    if (linked.created) {
+      await offerTripCarryOver({
+        draftId: input.draftId,
+        ownerEmployeeId: employee.id,
+        conversationId: input.conversationId,
+        sourceFormId: input.sourceFormId,
+        sourceFormNumber: snap.snapshot.sourceFormNumber,
+      });
     }
     return {
       ok: true,
@@ -406,213 +305,14 @@ export async function attachApprovedPdfAction(input: {
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'attach_failed';
-    return { ok: false, error: msg === 'snapshot_not_found' ? '找不到核准快照。' : '附加失敗。' };
+    return { ok: false, error: msg === 'snapshot_not_found' ? '找不到核准快照。' : msg === 'draft_not_editable' ? '草稿已送出，無法再夾帶。' : '附加失敗。' };
   }
 }
 
-export async function sendAiChatMessage(input: {
-  message: string;
-  clientMessageId: string;
-  conversationId?: string | null;
-  /** Preferred: staged attachment IDs (already scanned). */
-  stagedAttachmentIds?: string[];
-  /** Legacy inline images (base64). Prefer stagedAttachmentIds. */
-  images?: Array<{ mimeType: string; base64: string; fileName?: string }>;
-}): Promise<AiChatActionResult> {
+export async function sendAiChatMessage(input: AssistantTurnInput): Promise<AiChatActionResult> {
   const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: publicError('unauthenticated') };
-
-  if (!tryAcquireEmployeeTurn(employee.id)) {
-    return { ok: false, error: publicError('busy') };
-  }
-
-  try {
-    try {
-      await assertAiChatMessageRate(employee.id);
-    } catch {
-      return { ok: false, error: publicError('rate_limited') };
-    }
-
-    const cfg = requireAiChatConfig();
-    const message = typeof input.message === 'string' ? input.message.trim() : '';
-    const clientMessageId =
-      typeof input.clientMessageId === 'string' ? input.clientMessageId.trim() : '';
-
-    if (!input.conversationId) {
-      return { ok: false, error: '請先開啟對話再傳送訊息。' };
-    }
-    const conversation = await getOwnedConversation(employee.id, input.conversationId);
-    if (!conversation) {
-      return { ok: false, error: publicError('conversation_not_found') };
-    }
-
-    const stagedIds = (input.stagedAttachmentIds ?? [])
-      .filter((id) => typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id))
-      .slice(0, 3);
-    const { getReadyStagedImagesForOwner } = await import('./staged-images');
-    const staged = stagedIds.length
-      ? await getReadyStagedImagesForOwner(employee.id, conversation.id, stagedIds)
-      : [];
-    if (stagedIds.length > 0 && staged.length !== stagedIds.length) {
-      return {
-        ok: false,
-        error: '部分圖片尚未就緒或無權限，請等待掃描完成或重新上傳後再送出。',
-      };
-    }
-
-    const legacyImages = (input.images ?? [])
-      .filter(
-        (img) =>
-          IMAGE_MIME.has(img.mimeType) &&
-          typeof img.base64 === 'string' &&
-          img.base64.length > 0 &&
-          img.base64.length <= 4_000_000
-      )
-      .slice(0, 3);
-
-    const imageCount = staged.length || legacyImages.length;
-    if (!message && imageCount === 0) return { ok: false, error: '請輸入訊息或上傳圖片。' };
-    if (message.length > cfg.maxInputChars) {
-      return { ok: false, error: `訊息過長（上限 ${cfg.maxInputChars} 字）。` };
-    }
-    if (!/^[0-9a-f-]{36}$/i.test(clientMessageId)) {
-      return { ok: false, error: '訊息識別無效，請重新整理後再試。' };
-    }
-
-    const userTextForStore =
-      message || (imageCount > 0 ? `（上傳 ${imageCount} 張圖片）` : '');
-
-    const userAppend = await appendMessage({
-      conversationId: conversation.id,
-      ownerEmployeeId: employee.id,
-      role: 'user',
-      contentText: userTextForStore,
-      clientMessageId,
-      blocks:
-        staged.length > 0
-          ? staged.map((img) => ({
-              kind: 'attachment_status',
-              id: `staged_${img.id}`,
-              fileName: img.fileName,
-              state: 'ready',
-              detail: `staged:${img.id}`,
-            }))
-          : legacyImages.map((img, i) => ({
-              kind: 'attachment_status',
-              id: `img_${clientMessageId}_${i}`,
-              fileName: img.fileName ?? `image-${i + 1}`,
-              state: 'ready',
-              detail: '已交給模型辨識（尚未寫入正式單據附件）',
-            })),
-    });
-
-    if (userAppend.replayed) {
-      const { messages: msgs } = await listMessages(conversation.id, employee.id, 80);
-      const idx = msgs.findIndex((m) => m.id === userAppend.id);
-      const following = idx >= 0 ? msgs.slice(idx + 1).find((m) => m.role === 'model') : undefined;
-      if (following) {
-        const replayBlocks = sanitizeBlocks(following.blocks, conversation.id);
-        return {
-          ok: true,
-          reply: following.contentText,
-          model: cfg.model,
-          toolsUsed: following.toolsUsed,
-          blocks: replayBlocks,
-          conversationId: conversation.id,
-          userMessageId: userAppend.id,
-          modelMessageId: following.id,
-          openResources: openResourcesFromDraftBlocks(replayBlocks, 'opened'),
-        };
-      }
-    }
-
-    const { messages: historyRows } = await listMessages(
-      conversation.id,
-      employee.id,
-      cfg.maxHistoryTurns * 2
-    );
-    const history = historyRows
-      .filter((m) => m.role === 'user' || m.role === 'model')
-      .filter((m) => m.id !== userAppend.id)
-      .slice(-cfg.maxHistoryTurns)
-      .map((m) => ({ role: m.role as 'user' | 'model', text: m.contentText }));
-
-    const userParts: UserContentPart[] = [];
-    if (message) userParts.push({ type: 'text', text: message });
-    else if (imageCount > 0) {
-      userParts.push({
-        type: 'text',
-        text: '使用者上傳了圖片。請先辨識文件類型與可讀內容；若要建單請先確認表單種類，不要自動正式送件。看不清楚的金額／日期／統編標示待確認，不要猜測。無關圖片（例如測試動物照）請說明無法辨識報支資料，不可捏造金額。若使用者要求夾到草稿，請呼叫 attach_staged_files_to_draft。',
-      });
-    }
-    if (staged.length > 0) {
-      userParts.push({
-        type: 'text',
-        text: `本回合可附加的 staged_attachment_ids：${staged.map((s) => s.id).join(', ')}（檔名：${staged.map((s) => s.fileName).join('、')}）。`,
-      });
-    }
-    // Inline vision only for reasonably small files. Large photos stay staged-only
-    // (model still gets staged ids + attach tool). Avoids model_empty / payload failures.
-    const INLINE_RAW_MAX = 7 * 1024 * 1024;
-    if (staged.length > 0) {
-      for (const img of staged) {
-        if (img.bytes.length > INLINE_RAW_MAX) continue;
-        let binary = '';
-        for (let i = 0; i < img.bytes.length; i++) binary += String.fromCharCode(img.bytes[i]!);
-        userParts.push({ type: 'image', mimeType: img.mimeType, base64: btoa(binary) });
-      }
-    } else {
-      for (const img of legacyImages) {
-        if (img.base64.length > 10_000_000) continue;
-        userParts.push({ type: 'image', mimeType: img.mimeType, base64: img.base64 });
-      }
-    }
-
-    const { text, toolsUsed, blocks, openResources } = await generateChatReply(
-      cfg,
-      history,
-      userParts,
-      {
-        conversationId: conversation.id,
-        ownerEmployeeId: employee.id,
-        turnId: clientMessageId,
-        recentStagedIds: staged.map((s) => s.id),
-      }
-    );
-
-    const safeBlocks = sanitizeBlocks(blocks, conversation.id);
-    const modelAppend = await appendMessage({
-      conversationId: conversation.id,
-      ownerEmployeeId: employee.id,
-      role: 'model',
-      contentText: text,
-      toolsUsed,
-      blocks: safeBlocks,
-    });
-
-    return {
-      ok: true,
-      reply: text,
-      model: cfg.model,
-      toolsUsed,
-      blocks: safeBlocks,
-      conversationId: conversation.id,
-      userMessageId: userAppend.id,
-      modelMessageId: modelAppend.id,
-      openResources: mergeOpenResources(openResources),
-    };
-  } catch (err) {
-    const raw =
-      err instanceof AiChatConfigError
-        ? err.message
-        : err instanceof Error
-          ? err.message
-          : 'unknown';
-    console.error('[ai-chat]', { employeeId: employee.id, error: raw.slice(0, 500) });
-    return { ok: false, error: publicError(raw) };
-  } finally {
-    releaseEmployeeTurn(employee.id);
-  }
+  return runAssistantTurn(employee, input);
 }
 
 export async function answerChoiceAction(input: {
@@ -622,7 +322,7 @@ export async function answerChoiceAction(input: {
   optionValue: string;
   optionLabel: string;
 }): Promise<
-  | { ok: true; draftId?: string; openResources?: OpenResourceEvent[]; intent?: string }
+  | { ok: true; draftId?: string; openResources?: OpenResourceEvent[]; intent?: string; sendText?: string }
   | { ok: false; error: string }
 > {
   const employee = await getCurrentEmployee();
@@ -648,66 +348,55 @@ export async function answerChoiceAction(input: {
     return { ok: true, intent: input.optionValue };
   }
 
+  // Form type: same create path as typed requests, plus a card for the key fields.
+  const res = await chooseFormCard({ employeeId: employee.id, conversationId: input.conversationId, blockId: input.blockId, optionId: input.optionId });
+  if (res.ok && res.draftId) return { ok: true, draftId: res.draftId, openResources: res.openResources };
+  if (!res.ok && res.code !== 'invalid') return { ok: false, error: res.error };
+  // Any other choice is an answer to the assistant: send it as the person's message.
+  return { ok: true, sendText: input.optionLabel };
+}
+
+/** Field form card submitted (same fill service as typed requests). */
+export async function submitFieldFormAction(input: { conversationId: string; blockId: string; values: Record<string, string> }): Promise<CardActionResult> {
+  const employee = await getCurrentEmployee();
+  if (!employee) return { ok: false, code: 'not_found', error: publicError('unauthenticated') };
+  return submitFieldFormCard({ employeeId: employee.id, ...input });
+}
+
+export async function confirmChangeAction(input: { conversationId: string; blockId: string; accept: boolean }): Promise<CardActionResult> {
+  const employee = await getCurrentEmployee();
+  if (!employee) return { ok: false, code: 'not_found', error: publicError('unauthenticated') };
+  return confirmChangeCard({ employeeId: employee.id, ...input });
+}
+
+export async function refreshCardAction(input: { conversationId: string; blockId: string }): Promise<CardActionResult> {
+  const employee = await getCurrentEmployee();
+  if (!employee) return { ok: false, code: 'not_found', error: publicError('unauthenticated') };
+  return refreshFieldFormCard({ employeeId: employee.id, ...input });
+}
+
+/** 「建立單據」: a card listing the forms this person may file (no typing needed). */
+export async function presentFormChoicesAction(input: { conversationId: string }): Promise<{ ok: true } | { ok: false; error: string }> {
+  const employee = await getCurrentEmployee();
+  if (!employee) return { ok: false, error: publicError('unauthenticated') };
+  if (!(await getOwnedConversation(employee.id, input.conversationId))) return { ok: false, error: publicError('conversation_not_found') };
+  const forms = await getFilableDefinitions();
   await appendMessage({
     conversationId: input.conversationId,
     ownerEmployeeId: employee.id,
-    role: 'user',
-    contentText: `選擇：${input.optionLabel}`,
-    clientMessageId: crypto.randomUUID(),
+    role: 'model',
+    contentText: '要建立哪一種單據？',
     blocks: [
       {
-        kind: 'action_result',
-        id: `choice_ans_${input.blockId}`,
-        action: 'choice',
-        ok: true,
-        message: `已選擇「${input.optionLabel}」`,
+        kind: 'choice',
+        id: `forms_${crypto.randomUUID().slice(0, 8)}`,
+        prompt: '選擇表單類型',
+        options: forms.slice(0, 20).map((f) => ({ id: f.key, label: f.name, value: f.key })),
+        conversationId: input.conversationId,
+        status: 'open',
       },
     ],
   });
-
-  // If value looks like a form key, create draft (idempotent per choice block).
-  if (/^[a-z0-9-]{2,40}$/i.test(input.optionValue) && input.optionValue.includes('-')) {
-    const { createApplicationDraft } = await import('./drafts');
-    try {
-      const { draft } = await createApplicationDraft({
-        conversationId: input.conversationId,
-        ownerEmployeeId: employee.id,
-        formDefinitionKey: input.optionValue,
-        createIdempotencyKey: `choice:${input.blockId}:${input.optionValue}`,
-        title: input.optionLabel,
-      });
-      const open: OpenResourceEvent = {
-        type: 'open_resource',
-        resourceType: 'application_draft',
-        resourceId: draft.id,
-        title: input.optionLabel,
-        version: draft.version,
-        operation: 'created',
-        formKey: draft.formDefinitionKey,
-        status: draft.status,
-      };
-      await appendMessage({
-        conversationId: input.conversationId,
-        ownerEmployeeId: employee.id,
-        role: 'model',
-        contentText: `已建立「${input.optionLabel}」草稿。請在文件工作區確認欄位後按「送出單據」。`,
-        blocks: [
-          {
-            kind: 'draft_reference',
-            id: `draft_${draft.id}`,
-            draftId: draft.id,
-            formKey: draft.formDefinitionKey,
-            formName: input.optionLabel,
-            version: draft.version,
-            status: draft.status,
-          },
-        ],
-      });
-      return { ok: true, draftId: draft.id, openResources: [open] };
-    } catch {
-      // not a form key — just record the choice
-    }
-  }
   return { ok: true };
 }
 
@@ -727,6 +416,7 @@ export async function searchProjectsAction(input: {
   if (!allowed) return { ok: false, error: publicError('rate_limited') };
   const page = await searchProjectsPaged({
     query: input.query,
+    employeeId: employee.id,
     offset: input.offset ?? 0,
     limit: 20,
   });
@@ -745,50 +435,38 @@ export async function listRecentProjectsAction(): Promise<
 
 export async function selectProjectAction(input: {
   conversationId: string;
+  blockId: string;
   projectId: string;
-  draftId?: string;
-  draftVersion?: number;
-  fieldId?: string;
-}): Promise<{ ok: true; label: string; draft?: ApplicationDraft } | { ok: false; error: string }> {
+}): Promise<CardActionResult> {
   const employee = await getCurrentEmployee();
-  if (!employee) return { ok: false, error: publicError('unauthenticated') };
+  if (!employee) return { ok: false, code: 'not_found', error: publicError('unauthenticated') };
+  return pickProjectCard({ employeeId: employee.id, ...input });
+}
 
-  const { getDb } = await import('@/lib/db');
-  const { projects } = await import('@/lib/db/schema');
-  const { eq } = await import('drizzle-orm');
-  const db = getDb();
-  const [row] = await db
-    .select({ id: projects.id, code: projects.code, name: projects.name })
-    .from(projects)
-    .where(eq(projects.id, input.projectId))
-    .limit(1);
-  if (!row) return { ok: false, error: '找不到專案。' };
-
-  await recordProjectUsage(employee.id, row.id);
-  const label = `${row.code} ${row.name}`;
-
-  let draft: ApplicationDraft | undefined;
-  if (input.draftId && typeof input.draftVersion === 'number') {
-    const fieldId = input.fieldId || 'projectId';
-    const patched = await patchApplicationDraft({
-      draftId: input.draftId,
-      ownerEmployeeId: employee.id,
-      expectedVersion: input.draftVersion,
-      patch: { [fieldId]: row.id, projectLabel: label },
-    });
-    if (!patched.ok) return { ok: false, error: '草稿版本衝突，請重新整理。' };
-    draft = patched.draft;
-  }
-
-  await appendMessage({
-    conversationId: input.conversationId,
-    ownerEmployeeId: employee.id,
-    role: 'user',
-    contentText: `已選擇專案：${label}`,
-    clientMessageId: crypto.randomUUID(),
-  });
-
-  return { ok: true, label, draft };
+/** What the returned form already carries: stays on it, shown read-only next to new files. */
+async function listAttachmentsForDraftPanel(submissionId: string) {
+  const rows = await getDb()
+    .select({
+      id: attachments.id,
+      fileName: attachments.fileName,
+      mimeType: attachments.mimeType,
+      fileSizeBytes: attachments.fileSizeBytes,
+      createdAt: attachments.createdAt,
+    })
+    .from(attachments)
+    .where(and(eq(attachments.formType, 'custom'), eq(attachments.formId, submissionId)));
+  return rows.map((a) => ({
+    id: a.id,
+    fileName: a.fileName,
+    mimeType: a.mimeType,
+    fileSizeBytes: a.fileSizeBytes,
+    sourceStagedId: null,
+    attachedAt: a.createdAt.toISOString(),
+    activeEditId: null,
+    checkState: 'done' as const,
+    checkSummary: '原單已有的附件，會保留',
+    href: `/api/attachments/${a.id}/preview`,
+  }));
 }
 
 export async function getDraftPanelAction(draftId: string): Promise<
@@ -803,6 +481,8 @@ export async function getDraftPanelAction(draftId: string): Promise<
       currentEmployeeId: string;
       versionMismatch: boolean;
       today: string;
+      /** 補件: the returned form behind this draft. */
+      resubmit: { formNumber: string; href: string; reason: string | null } | null;
       /** Chat→draft staged copies (shown in draft panel; submitted with the form). */
       files: Array<{
         id: string;
@@ -811,6 +491,11 @@ export async function getDraftPanelAction(draftId: string): Promise<
         fileSizeBytes: number;
         sourceStagedId: string | null;
         attachedAt: string;
+        activeEditId: string | null;
+        checkState: 'none' | 'running' | 'done';
+        checkSummary: string | null;
+        /** Set on approved-document PDFs: a fixed copy, opened through this link. */
+        href?: string;
       }>;
     }
   | { ok: false; error: string }
@@ -821,8 +506,20 @@ export async function getDraftPanelAction(draftId: string): Promise<
   if (!ctx) return { ok: false, error: '找不到草稿或無權限。' };
   const { listDraftFiles } = await import('./attach-staged');
   const files = await listDraftFiles(draftId, employee.id);
+  const { listDraftSnapshots } = await import('./attach-approved');
+  const snapshots = await listDraftSnapshots(draftId, employee.id);
+  const resubmitOf = ctx.draft.resubmitOfSubmissionId;
+  const kept = resubmitOf ? await listAttachmentsForDraftPanel(resubmitOf) : [];
+  const facts = resubmitOf ? await loadFormFacts([{ formType: 'custom', formId: resubmitOf }]) : null;
   return {
     ok: true,
+    resubmit: resubmitOf
+      ? {
+          formNumber: facts?.get(`custom:${resubmitOf}`)?.formNumber ?? '',
+          href: `/f/${ctx.formKey}/${resubmitOf}`,
+          reason: await loadReturnReason({ formType: 'custom', formId: resubmitOf }),
+        }
+      : null,
     draft: ctx.draft,
     formKey: ctx.formKey,
     name: ctx.name,
@@ -832,14 +529,32 @@ export async function getDraftPanelAction(draftId: string): Promise<
     currentEmployeeId: ctx.currentEmployeeId,
     versionMismatch: ctx.versionMismatch,
     today: ctx.today,
-    files: files.map((f) => ({
+    files: [
+      ...kept,
+      ...snapshots.map((s) => ({
+        id: s.snapshotId,
+        fileName: s.fileName,
+        mimeType: 'application/pdf',
+        fileSizeBytes: s.fileSizeBytes,
+        sourceStagedId: null,
+        attachedAt: s.attachedAt.toISOString(),
+        activeEditId: null,
+        checkState: 'done' as const,
+        checkSummary: `核准單 ${s.sourceFormNumber} 的固定版本`,
+        href: `/api/ai-chat/approved-snapshots/${s.snapshotId}`,
+      })),
+      ...files.map((f) => ({
       id: f.id,
       fileName: f.fileName,
       mimeType: f.mimeType,
       fileSizeBytes: f.fileSizeBytes,
       sourceStagedId: f.sourceStagedId,
       attachedAt: f.attachedAt.toISOString(),
-    })),
+      activeEditId: f.activeEditId ?? null,
+      checkState: f.checkState ?? 'none',
+      checkSummary: f.checkSummary ?? null,
+      })),
+    ],
   };
 }
 
@@ -847,32 +562,16 @@ export async function saveDraftAction(input: {
   draftId: string;
   expectedVersion: number;
   data: Record<string, unknown>;
-}): Promise<
-  | { ok: true; draft: ApplicationDraft }
-  | { ok: false; error: string; draft?: ApplicationDraft; code?: string }
-> {
+  /** Draft data the panel loaded at expectedVersion; enables field-level merge. */
+  baseData?: Record<string, unknown> | null;
+}): Promise<PanelSaveResult> {
   const employee = await getCurrentEmployee();
-  if (!employee) return { ok: false, error: publicError('unauthenticated') };
+  if (!employee) return { ok: false, code: 'not_found', error: publicError('unauthenticated') };
   try {
-    const result = await patchApplicationDraft({
-      draftId: input.draftId,
-      ownerEmployeeId: employee.id,
-      expectedVersion: input.expectedVersion,
-      patch: input.data,
-      replace: true,
-    });
-    if (!result.ok) {
-      return {
-        ok: false,
-        error: '草稿已被其他操作更新，請重新載入後再儲存。',
-        code: 'version_conflict',
-        draft: result.conflict.draft,
-      };
-    }
-    return { ok: true, draft: result.draft };
+    return await saveDraftFromPanel({ ...input, ownerEmployeeId: employee.id });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'save_failed';
-    return { ok: false, error: msg === 'draft_not_editable' ? '草稿已送出，無法再修改。' : '儲存失敗。' };
+    console.error('[ai-chat] save draft failed', err instanceof Error ? err.message : err);
+    return { ok: false, code: 'version_conflict', error: '儲存失敗，請再試一次；您的輸入仍保留在畫面上。' };
   }
 }
 
@@ -904,14 +603,18 @@ export async function submitDraftAction(input: {
       conversationId: draft.conversationId,
       ownerEmployeeId: employee.id,
       role: 'model',
-      contentText: `單據已送出：${result.formNumber}`,
+      contentText: result.copyFailures
+        ? `單據已送出：${result.formNumber}，但有 ${result.copyFailures} 個附件沒有複製成功，請到單據頁補傳。`
+        : `單據已送出：${result.formNumber}`,
       blocks: [
         {
           kind: 'action_result',
           id: `submit_${result.submissionId}`,
           action: 'submit',
-          ok: true,
-          message: `已送出 ${result.formNumber}`,
+          ok: !result.copyFailures,
+          message: result.copyFailures
+            ? `已送出 ${result.formNumber}；${result.copyFailures} 個附件未複製成功`
+            : `已送出 ${result.formNumber}`,
           formNumber: result.formNumber,
           href: `/f/${result.formKey}/${result.submissionId}`,
         },
@@ -964,15 +667,6 @@ export async function confirmNudgeAction(input: {
     ownerEmployeeId: employee.id,
     role: 'model',
     contentText: message,
-    blocks: [
-      {
-        kind: 'action_result',
-        id: `nudge_${result.eventId || 'x'}`,
-        action: 'nudge',
-        ok: true,
-        message,
-      },
-    ],
   });
 
   return {
@@ -1112,6 +806,8 @@ export async function listDraftLibraryAction(input?: {
         version: number;
         updatedAt: string;
         conversationId: string;
+        /** Header fields (dates, place, purpose…) to tell drafts apart. */
+        summary: string;
       }>;
       total: number;
     }
@@ -1126,10 +822,12 @@ export async function listDraftLibraryAction(input?: {
     offset: input?.offset ?? 0,
     limit: 20,
   });
+  const summaries = await summarizeDrafts(page.items);
   return {
     ok: true,
     total: page.total,
     items: page.items.map((d) => ({
+      summary: summaries.get(d.id) ?? '',
       id: d.id,
       title: d.title,
       formKey: d.formDefinitionKey,
@@ -1151,10 +849,11 @@ export async function abandonDraftAction(input: {
   return { ok: true };
 }
 
-export async function pollLauncherEventsAction(input?: {
-  cursorCreatedAt?: string | null;
+export async function pollLauncherEventsAction(input: {
+  scope: 'fresh' | 'delivered';
+  after?: string | null;
 }): Promise<
-  | { ok: true; events: LauncherEvent[]; nextCursor: string | null }
+  | { ok: true; events: LauncherEvent[]; hasMore: boolean; nextAfter: string | null }
   | { ok: false; error: string }
 > {
   const employee = await getCurrentEmployee();
@@ -1164,11 +863,20 @@ export async function pollLauncherEventsAction(input?: {
     windowSeconds: 600,
   });
   if (!allowed) return { ok: false, error: publicError('rate_limited') };
-  const page = await pollLauncherEvents({
-    employeeId: employee.id,
-    cursorCreatedAt: input?.cursorCreatedAt,
-  });
+  const scope = input?.scope === 'delivered' ? 'delivered' : 'fresh';
+  const page = await pollLauncherEvents({ actor: employee, scope, after: input?.after });
   return { ok: true, ...page };
+}
+
+/** 補件 from a reminder: opens (or reopens) a draft of the returned form in a new conversation. */
+export async function startResubmissionAction(input: {
+  submissionId: string;
+}): Promise<{ ok: true; conversationId: string; draftId: string; title: string } | { ok: false; error: string }> {
+  const employee = await getCurrentEmployee();
+  if (!employee) return { ok: false, error: publicError('unauthenticated') };
+  const result = await startResubmission({ ownerEmployeeId: employee.id, submissionId: input.submissionId });
+  if (!result.ok) return { ok: false, error: result.error };
+  return { ok: true, conversationId: result.conversationId, draftId: result.draft.id, title: result.draft.title };
 }
 
 export async function ackLauncherEventsAction(input: {
