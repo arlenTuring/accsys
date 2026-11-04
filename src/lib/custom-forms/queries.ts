@@ -304,6 +304,7 @@ export type CustomQueueItem = {
   applicantName: string;
   totalAmount: number | null;
   label: string;
+  formKey: string;
 };
 
 export async function getMyCustomApprovalQueue(): Promise<CustomQueueItem[]> {
@@ -317,6 +318,7 @@ export async function getMyCustomApprovalQueue(): Promise<CustomQueueItem[]> {
       applicantName: applicant.name,
       totalAmount: formSubmissions.totalAmount,
       label: formDefinitions.name,
+      formKey: formDefinitions.key,
     })
     .from(approvalSteps)
     .innerJoin(formSubmissions, eq(formSubmissions.id, approvalSteps.formId))

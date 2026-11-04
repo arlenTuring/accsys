@@ -237,6 +237,29 @@ export async function listMessagesFlat(
   return messages;
 }
 
+/** Model message in this conversation that the owner may quote as a reply target. */
+export async function getOwnedModelMessage(
+  conversationId: string,
+  ownerEmployeeId: string,
+  messageId: string
+): Promise<{ id: string; contentText: string } | null> {
+  if (!isUuid(messageId)) return null;
+  const db = getDb();
+  const [owned] = await db
+    .select({ id: aiConversations.id })
+    .from(aiConversations)
+    .where(and(eq(aiConversations.id, conversationId), eq(aiConversations.ownerEmployeeId, ownerEmployeeId)))
+    .limit(1);
+  if (!owned) return null;
+  const [row] = await db
+    .select({ id: aiMessages.id, contentText: aiMessages.contentText, role: aiMessages.role })
+    .from(aiMessages)
+    .where(and(eq(aiMessages.id, messageId), eq(aiMessages.conversationId, conversationId)))
+    .limit(1);
+  if (!row || row.role !== 'model') return null;
+  return { id: row.id, contentText: row.contentText };
+}
+
 export async function appendMessage(input: {
   conversationId: string;
   ownerEmployeeId: string;

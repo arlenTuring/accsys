@@ -18,6 +18,7 @@ export const AI_BLOCK_KINDS = [
   'approved_pdf_card',
   'field_form',
   'change_confirm',
+  'submission_card',
 ] as const;
 
 /** One input of a field_form card; built by the server from the form schema, never by the model. */
@@ -177,6 +178,39 @@ export type AiMessageBlock =
       contentHash: string;
       draftId?: string;
       previewHref: string;
+    }
+  | {
+      /** Outline of a filed form with 詳情 / 簽核 actions (server-built only). */
+      kind: 'submission_card';
+      id: string;
+      formType: string;
+      formId: string;
+      formKey?: string;
+      formNumber: string;
+      formName: string;
+      /** approve = in my queue; mine = I filed it. */
+      mode: 'approve' | 'mine';
+      status: string;
+      summary: string;
+      lines: Array<{ label: string; value: string }>;
+      applicantName?: string;
+      canApprove: boolean;
+      href: string;
+      /** Approval chain progress for the stepper. */
+      progress?: {
+        done: number;
+        total: number;
+        remaining: number;
+        percent: number;
+        currentLabel?: string;
+        waitingNames?: string[];
+        steps?: Array<{
+          key: string;
+          label: string;
+          name: string | null;
+          state: 'done' | 'current' | 'waiting' | 'returned';
+        }>;
+      };
     };
 
 const KIND_SET = new Set<string>(AI_BLOCK_KINDS);
@@ -521,6 +555,103 @@ export function sanitizeBlocks(raw: unknown, conversationId: string): AiMessageB
           contentHash,
           draftId: asUuid(item.draftId) ?? undefined,
           previewHref,
+        });
+        break;
+      }
+      case 'submission_card': {
+        const formType = asString(item.formType, 40);
+        const formId = asUuid(item.formId);
+        const formNumber = asString(item.formNumber, 40);
+        const formName = asString(item.formName, 120);
+        const summary = asString(item.summary, 400);
+        const href = asString(item.href, 200);
+        const status = asString(item.status, 40);
+        if (!formType || !formId || !formNumber || !formName || !summary || !href || !status) break;
+        if (item.mode !== 'approve' && item.mode !== 'mine') break;
+        const lines: Array<{ label: string; value: string }> = [];
+        if (Array.isArray(item.lines)) {
+          for (const raw of item.lines.slice(0, 12)) {
+            if (!isRecord(raw)) continue;
+            const label = asString(raw.label, 40);
+            const value = asString(raw.value, 240);
+            if (label && value) lines.push({ label, value });
+          }
+        }
+        let progress:
+          | {
+              done: number;
+              total: number;
+              remaining: number;
+              percent: number;
+              currentLabel?: string;
+              waitingNames?: string[];
+              steps?: Array<{
+                key: string;
+                label: string;
+                name: string | null;
+                state: 'done' | 'current' | 'waiting' | 'returned';
+              }>;
+            }
+          | undefined;
+        if (isRecord(item.progress)) {
+          const done = typeof item.progress.done === 'number' ? item.progress.done : null;
+          const total = typeof item.progress.total === 'number' ? item.progress.total : null;
+          const remaining = typeof item.progress.remaining === 'number' ? item.progress.remaining : null;
+          const percent = typeof item.progress.percent === 'number' ? item.progress.percent : null;
+          if (done != null && total != null && remaining != null && percent != null && total >= 0) {
+            const waitingNames: string[] = [];
+            if (Array.isArray(item.progress.waitingNames)) {
+              for (const n of item.progress.waitingNames.slice(0, 8)) {
+                const s = asString(n, 40);
+                if (s) waitingNames.push(s);
+              }
+            }
+            const steps: NonNullable<typeof progress>['steps'] = [];
+            if (Array.isArray(item.progress.steps)) {
+              for (const raw of item.progress.steps.slice(0, 20)) {
+                if (!isRecord(raw)) continue;
+                const key = asString(raw.key, 40);
+                const label = asString(raw.label, 80);
+                if (!key || !label) continue;
+                const state =
+                  raw.state === 'done' ||
+                  raw.state === 'current' ||
+                  raw.state === 'waiting' ||
+                  raw.state === 'returned'
+                    ? raw.state
+                    : null;
+                if (!state) continue;
+                const name = asString(raw.name, 80);
+                steps.push({ key, label, name, state });
+              }
+            }
+            progress = {
+              done: Math.max(0, Math.floor(done)),
+              total: Math.max(0, Math.floor(total)),
+              remaining: Math.max(0, Math.floor(remaining)),
+              percent: Math.min(100, Math.max(0, Math.round(percent))),
+              currentLabel: asString(item.progress.currentLabel, 80) ?? undefined,
+              waitingNames: waitingNames.length ? waitingNames : undefined,
+              steps: steps.length ? steps : undefined,
+            };
+          }
+        }
+        out.push({
+          kind: 'submission_card',
+          id,
+          formType,
+          formId,
+          formKey: asString(item.formKey, 40) ?? undefined,
+          formNumber,
+          formName,
+          mode: item.mode,
+          status,
+          summary,
+          lines,
+          applicantName: asString(item.applicantName, 80) ?? undefined,
+          canApprove: item.canApprove === true,
+          href,
+          progress,
         });
         break;
       }

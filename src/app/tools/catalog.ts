@@ -7,7 +7,7 @@ export type ToolDefinition = {
   badge: string;
 };
 
-/** 工具區目錄：之後新增小工具只要加一筆即可 */
+/** 工具區目錄：AI 助手已提升為左側第一主導覽，此處集中實用輔助工具 */
 export const TOOL_CATALOG: ToolDefinition[] = [
   {
     id: 'pdf-editor',
@@ -16,14 +16,6 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     description: '上傳 PDF、疊加文字／圖章／螢光筆，匯出或依頁數拆分檔案。',
     status: 'ready',
     badge: '可用',
-  },
-  {
-    id: 'ai-chat',
-    href: '/tools/ai-chat',
-    title: 'AI 助手',
-    description: '待簽核與進度、自然語言查詢與建單協助；正式送出仍走系統權限與表單驗證。',
-    status: 'ready',
-    badge: '助手',
   },
   {
     id: 'coming-soon',

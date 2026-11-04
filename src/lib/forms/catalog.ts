@@ -73,19 +73,36 @@ export const FORM_CATEGORIES: FormCategory[] = [
   },
 ];
 
+/** Links that belong under「我的申請」for every signed-in employee. */
+export const MY_APPLICATION_LINKS: RecordLink[] = [
+  { label: '申請進度總覽', href: '/applications' },
+  { label: '草稿庫', href: '/applications/drafts' },
+];
+
 export const FINANCE_LINKS: RecordLink[] = [
   { label: '簽核追蹤', href: '/case-tracking' },
   { label: '預算編號管理', href: '/budget-codes' },
-  { label: '財產保管清冊', href: '/assets' },
+  { label: '全公司財產清冊', href: '/assets' },
 ];
 
 export const ADMIN_LINKS: RecordLink[] = [
+  { label: '公司資料', href: '/admin/company' },
   { label: '主檔資料', href: '/admin/master-data' },
-  { label: '公司資訊', href: '/admin/company' },
   { label: '帳號與權限', href: '/admin/accounts' },
   { label: '組織與簽核', href: '/admin/org' },
   { label: '表單設計器', href: '/admin/form-builder' },
+  { label: '系統日誌', href: '/admin/system-logs' },
   { label: '系統操作教學', href: '/admin/guide' },
+  { label: '公告管理', href: '/admin/announcements' },
+  { label: '規章管理', href: '/admin/regulations' },
+  { label: '問卷管理', href: '/admin/surveys' },
+];
+
+/** Company-wide info links every employee can open (read / respond). */
+export const COMPANY_INFO_LINKS: RecordLink[] = [
+  { label: '公司公告', href: '/announcements' },
+  { label: '公司規章', href: '/regulations' },
+  { label: '內部問卷', href: '/surveys' },
 ];
 
 /** A published designer form the viewer may file (from the database). */
@@ -148,4 +165,9 @@ export const isNewFormPage = (pathname: string) =>
   pathname === '/forms' || DESIGNER_NEW.test(pathname) || FORM_CATEGORIES.some((c) => c.forms.some((f) => isUnder(pathname, f.href)));
 
 export const isRecordPage = (pathname: string) =>
-  !isNewFormPage(pathname) && (isUnder(pathname, '/f') || FORM_CATEGORIES.some((c) => c.records.some((r) => isUnder(pathname, r.href))));
+  !isNewFormPage(pathname) &&
+  (isUnder(pathname, '/f') ||
+    isUnder(pathname, '/approvals') ||
+    isUnder(pathname, '/applications') ||
+    MY_APPLICATION_LINKS.some((l) => isUnder(pathname, l.href)) ||
+    FORM_CATEGORIES.some((c) => c.records.some((r) => isUnder(pathname, r.href))));

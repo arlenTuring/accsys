@@ -9,18 +9,23 @@ import {
   loadOlderMessagesAction,
   presentFormChoicesAction,
   purgeStagedAiChatImageAction,
-  sendAiChatMessage,
+  refreshWelcomeAction,
 } from '@/lib/ai-chat/actions';
 import { attachStagedFilesToDraftAction, listPendingStagedAction } from '@/lib/ai-chat/actions-staged-invoice';
 import type { AiMessageBlock } from '@/lib/ai-chat/blocks';
 import type { OpenResourceEvent } from '@/lib/ai-chat/open-resource';
 import {
   ConversationSidebar,
+  SIDEBAR_WIDTH_DEFAULT,
+  SIDEBAR_WIDTH_MAX,
+  SIDEBAR_WIDTH_MIN,
   loadSidebarCollapsedPref,
+  loadSidebarWidthPref,
   saveSidebarCollapsedPref,
+  saveSidebarWidthPref,
 } from './conversation-sidebar';
+import { ChatComposer } from './chat-composer';
 import {
-  AI_CHAT_IMAGE_ACCEPT,
   AI_CHAT_IMAGE_MAX_BYTES,
   AI_CHAT_IMAGE_MAX_COUNT,
   type ClientImageAttachment,
@@ -38,15 +43,19 @@ import { PhotoEditor } from './photo-editor';
 import {
   type DocTab,
   loadDocTabsPref,
-  openDraftLibraryTab,
   openFromEvent,
   saveDocTabsPref,
   tabKey,
 } from './document-tabs';
-import { DraftLibraryPanel } from './draft-library-panel';
 import { DraftPanel } from './draft-panel';
 import { MessageBlocks } from './message-blocks';
+import { SubmissionActionsProvider } from './submission-actions';
+import { SubmissionPanel } from './submission-panel';
+import { TurnProgressList, upsertProgressStep } from './turn-progress';
+import { formatSizeCompare, optimizeChatImage } from './optimize-chat-image';
 import { SafeMarkdown } from './safe-markdown';
+import type { ChatProgressStep } from '@/lib/ai-chat/progress';
+import type { AiChatActionResult } from '@/lib/ai-chat/turn';
 
 type UiMessage = {
   id: string;
@@ -67,7 +76,7 @@ function newClientId(): string {
 
 /** User wants chat photos copied onto the open draft (not only model tool calls). */
 function wantsDraftAttach(text: string): boolean {
-  return /夾帶|夾進|附加到草稿|放到草稿|附上草稿|附到草稿/.test(text);
+  return /夾帶|夾進|附加到草稿|放到草稿|附上草稿|附到草稿|加入附件|加進去|加進草稿/.test(text);
 }
 
 function stagedIdsFromMessageBlocks(msgs: UiMessage[]): string[] {
@@ -100,16 +109,92 @@ function restoredStatus(
   return statusAfterInvoiceCheck(invoice) === 'ready' ? 'attach_failed' : 'needs_confirm';
 }
 
+async function streamAssistantTurn(
+  body: {
+    message: string;
+    clientMessageId: string;
+    conversationId: string;
+    stagedAttachmentIds: string[];
+    targetDraftId?: string;
+    replyToMessageId?: string;
+  },
+  onStep: (step: ChatProgressStep) => void
+): Promise<AiChatActionResult> {
+  const res = await fetch('/api/ai-chat/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    credentials: 'same-origin',
+  });
+  if (!res.ok || !res.body) {
+    let error = '傳送失敗，請稍後再試。';
+    try {
+      const j = (await res.json()) as { error?: string };
+      if (j.error) error = j.error;
+    } catch {
+      /* keep */
+    }
+    return { ok: false, error };
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let final: AiChatActionResult | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const chunks = buffer.split('\n\n');
+    buffer = chunks.pop() ?? '';
+    for (const chunk of chunks) {
+      const line = chunk
+        .split('\n')
+        .map((l) => l.trim())
+        .find((l) => l.startsWith('data:'));
+      if (!line) continue;
+      let payload: unknown;
+      try {
+        payload = JSON.parse(line.replace(/^data:\s*/, ''));
+      } catch {
+        continue;
+      }
+      if (!payload || typeof payload !== 'object') continue;
+      const ev = payload as {
+        type?: string;
+        step?: ChatProgressStep;
+        result?: AiChatActionResult;
+        error?: string;
+      };
+      if (ev.type === 'step' && ev.step) onStep(ev.step);
+      else if (ev.type === 'result' && ev.result) final = ev.result;
+      else if (ev.type === 'error' && typeof ev.error === 'string') {
+        final = { ok: false, error: ev.error };
+      }
+    }
+  }
+
+  return final ?? { ok: false, error: '沒有收到助手回覆，請再試一次。' };
+}
+
 export function AiChatApp() {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [title, setTitle] = useState('AI 助手');
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [hasOlder, setHasOlder] = useState(false);
   const [input, setInput] = useState('');
+  /** When set, composer is editing this user message; send clears it. */
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  /** When set, composer is a reply aimed at this model message. */
+  const [replyingTo, setReplyingTo] = useState<{ id: string; preview: string } | null>(null);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<ClientImageAttachment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const [, startNav] = useTransition();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_WIDTH_DEFAULT);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [drawerRefresh, setDrawerRefresh] = useState(0);
   /** Bumps when chat tools write a draft so the right panel reloads even if version looks unchanged. */
@@ -126,8 +211,10 @@ export function AiChatApp() {
   const [mobilePane, setMobilePane] = useState<'chat' | 'docs'>('chat');
   const [statusMeta, setStatusMeta] = useState<{ model: string; ok: boolean } | null>(null);
   const [inboxHint, setInboxHint] = useState<string | null>(null);
+  const [turnSteps, setTurnSteps] = useState<ChatProgressStep[]>([]);
   const bootGen = useRef(0);
-  const dragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const docsDragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const sidebarDragRef = useRef<{ startX: number; startW: number } | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
@@ -139,7 +226,6 @@ export function AiChatApp() {
   const pendingPurgeRef = useRef<string[]>([]);
   const [purgeTick, setPurgeTick] = useState(0);
   /** First Enter arms send; second Enter sends. Enter never inserts a newline (use Shift+Enter). */
-  const enterArmedRef = useRef(false);
 
   useObjectUrlCleanup(attachments);
 
@@ -326,8 +412,10 @@ export function AiChatApp() {
 
   const [attachNotice, setAttachNotice] = useState<string | null>(null);
   const [editingPhoto, setEditingPhoto] = useState<ClientImageAttachment | null>(null);
-  // Files waiting for 確認並檢查 do not hold the chat back; only work in progress does.
-  const attachmentsBusy = attachments.some((a) => ['processing', 'selected', 'uploading', 'scanning', 'checking', 'attaching'].includes(a.status));
+  // Compression / upload / attach may run; AI checking must not lock the chat composer.
+  const attachmentsBusy = attachments.some((a) =>
+    ['processing', 'selected', 'uploading', 'scanning', 'attaching'].includes(a.status)
+  );
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const lastMessageId = messages[messages.length - 1]?.id;
   // Follow the newest message (sent, answered, or added by a card) — older pages loaded above do not move it.
@@ -339,7 +427,7 @@ export function AiChatApp() {
   const loadConversation = useCallback(
     (opts?: { conversationId?: string | null; forceNew?: boolean }) => {
       const gen = ++bootGen.current;
-      start(async () => {
+      startNav(async () => {
         setError(null);
         const boot = await bootstrapAssistantConversation({
           conversationId: opts?.conversationId,
@@ -368,29 +456,35 @@ export function AiChatApp() {
         } catch {
           /* ignore */
         }
-        // Files still waiting in the composer come back from the server after a reload.
-        const pending = await listPendingStagedAction({ conversationId: boot.conversationId }).catch(() => null);
-        if (pending?.ok && gen === bootGen.current) {
-          setAttachments((prev) => {
-            const have = new Set(prev.map((a) => a.stagedId));
-            const restored = pending.items.filter((i) => !have.has(i.id)).map((i): ClientImageAttachment => {
-              const invoice = invoiceReminderFromCheck(i.analysisResult as Parameters<typeof invoiceReminderFromCheck>[0]);
-              return {
-                clientAttachmentId: i.clientAttachmentId,
-                fileName: i.fileName,
-                mimeType: i.mimeType,
-                sizeBytes: i.fileSizeBytes,
-                previewUrl: `/api/ai-chat/staged/${i.id}?preview=1`,
-                stagedId: i.id,
-                invoice,
-                edited: i.activeEditId ? 1 : undefined,
-                target: i.targetDraftId ? { draftId: i.targetDraftId, title: '先前選定的草稿' } : undefined,
-                status: restoredStatus(i.analysisStatus, Boolean(i.targetDraftId), invoice),
-              };
+        // Files still waiting in the composer come back from the server after a reload (non-blocking).
+        void listPendingStagedAction({ conversationId: boot.conversationId })
+          .then((pendingRes) => {
+            if (!pendingRes?.ok || gen !== bootGen.current) return;
+            setAttachments((prev) => {
+              const have = new Set(prev.map((a) => a.stagedId));
+              const restored = pendingRes.items
+                .filter((i) => !have.has(i.id))
+                .map((i): ClientImageAttachment => {
+                  const invoice = invoiceReminderFromCheck(
+                    i.analysisResult as Parameters<typeof invoiceReminderFromCheck>[0]
+                  );
+                  return {
+                    clientAttachmentId: i.clientAttachmentId,
+                    fileName: i.fileName,
+                    mimeType: i.mimeType,
+                    sizeBytes: i.fileSizeBytes,
+                    previewUrl: `/api/ai-chat/staged/${i.id}?preview=1`,
+                    stagedId: i.id,
+                    invoice,
+                    edited: i.activeEditId ? 1 : undefined,
+                    target: i.targetDraftId ? { draftId: i.targetDraftId, title: '先前選定的草稿' } : undefined,
+                    status: restoredStatus(i.analysisStatus, Boolean(i.targetDraftId), invoice),
+                  };
+                });
+              return restored.length ? [...prev, ...restored] : prev;
             });
-            return restored.length ? [...prev, ...restored] : prev;
-          });
-        }
+          })
+          .catch(() => null);
       });
     },
     []
@@ -400,6 +494,7 @@ export function AiChatApp() {
     let preferred: string | null = null;
     try {
       setSidebarCollapsed(loadSidebarCollapsedPref(SIDEBAR_PREF_USER));
+      setSidebarWidth(loadSidebarWidthPref(SIDEBAR_PREF_USER));
       preferred = sessionStorage.getItem(CONV_PREF);
       const bound = sessionStorage.getItem(BOUND_DRAFT_PREF);
       if (bound) {
@@ -424,13 +519,17 @@ export function AiChatApp() {
     }
     const params = new URLSearchParams(window.location.search);
     const fromUrl = params.get('c');
+    const draftFromUrl = params.get('draft');
     loadConversation({ conversationId: fromUrl || preferred });
-    // Arriving from a reminder: the draft to work on, not whatever was bound last.
+    // Arriving from a reminder / 我的申請草稿庫: open the named draft.
     try {
       const handed = sessionStorage.getItem('accsys.ai.openDraft');
       sessionStorage.removeItem('accsys.ai.openDraft');
       const draft = handed ? (JSON.parse(handed) as { draftId?: string; title?: string }) : null;
       if (draft?.draftId) openDraftRef.current(draft.draftId, { title: draft.title ?? '草稿' });
+      else if (draftFromUrl && /^[0-9a-f-]{36}$/i.test(draftFromUrl)) {
+        openDraftRef.current(draftFromUrl, { title: '草稿' });
+      }
     } catch {
       /* ignore */
     }
@@ -448,15 +547,19 @@ export function AiChatApp() {
 
   function handleIntent(intent: string) {
     if (intent === 'open_draft_library') {
-      const r = openDraftLibraryTab(tabs);
-      setTabs(r.tabs);
-      setActiveTabId(r.activeTabId);
-      setDocsCollapsed(false);
-      setMobilePane('docs');
+      window.location.href = '/applications/drafts';
+      return;
+    }
+    if (intent === 'view_announcements') {
+      window.location.href = '/announcements';
+      return;
+    }
+    if (intent === 'view_surveys') {
+      window.location.href = '/surveys';
       return;
     }
     if (intent === 'view_pending' || intent === 'view_mine') {
-      start(async () => {
+      startNav(async () => {
         const res = await getAssistantInboxAction();
         if (!res.ok) {
           setInboxHint('待辦載入失敗，請稍後重試。（不是「沒有待辦」）');
@@ -487,7 +590,7 @@ export function AiChatApp() {
     }
     if (intent === 'create_form' && conversationId) {
       // A form-type card straight away: building a draft needs no typing.
-      start(async () => {
+      startNav(async () => {
         const res = await presentFormChoicesAction({ conversationId });
         if (!res.ok) setError(res.error);
         loadConversation({ conversationId });
@@ -532,10 +635,11 @@ export function AiChatApp() {
   async function onFilesSelected(fileList: FileList | null) {
     if (!fileList?.length) return;
     if (!conversationId) {
-      setError('請先開啟對話再上傳圖片。');
+      setError('請先開啟對話再上傳檔案。');
       return;
     }
     const picked = [...fileList];
+    const videoCount = picked.filter((f) => f.type.startsWith('video/') || /\.(mp4|webm|mov)$/i.test(f.name)).length;
     const { candidates: rawCandidates, invalid } = buildImageCandidates(picked, newClientId);
     const processing = rawCandidates.map((c) => ({ ...c, status: 'processing' as const }));
     const { accepted: provisional, overLimit } = planAcceptedAttachments(
@@ -551,7 +655,9 @@ export function AiChatApp() {
     }
     if (provisional.length === 0) {
       setError(
-        `無法加入選取的檔案（僅 JPEG/PNG/WebP/HEIC/PDF、單檔 ≤ ${formatBytes(AI_CHAT_IMAGE_MAX_BYTES)}、最多 ${AI_CHAT_IMAGE_MAX_COUNT} 張）。`
+        videoCount > 0 && invalid === videoCount
+          ? '影片選取介面已就緒，但目前對話附件管線尚僅支援 JPEG/PNG/WebP/HEIC/PDF；影片上傳會接著接上。'
+          : `無法加入選取的檔案（僅 JPEG/PNG/WebP/HEIC/PDF、單檔 ≤ ${formatBytes(AI_CHAT_IMAGE_MAX_BYTES)}、最多 ${AI_CHAT_IMAGE_MAX_COUNT} 個）。`
       );
       return;
     }
@@ -563,14 +669,119 @@ export function AiChatApp() {
       const unique = take.filter((a) => !existing.has(a.clientAttachmentId));
       return unique.length ? [...prev, ...unique] : prev;
     });
-    if (invalid > 0 || overLimit > 0) {
-      setError(
-        `部分檔案未加入（僅 JPEG/PNG/WebP/HEIC/PDF、單檔 ≤ ${formatBytes(AI_CHAT_IMAGE_MAX_BYTES)}、最多 ${AI_CHAT_IMAGE_MAX_COUNT} 張）。`
-      );
+    if (invalid > 0 || overLimit > 0 || videoCount > 0) {
+      const parts: string[] = [];
+      if (videoCount > 0) parts.push('影片暫未接入附件管線，已略過');
+      if (invalid > videoCount || overLimit > 0) {
+        parts.push(
+          `部分檔案未加入（僅 JPEG/PNG/WebP/HEIC/PDF、單檔 ≤ ${formatBytes(AI_CHAT_IMAGE_MAX_BYTES)}、最多 ${AI_CHAT_IMAGE_MAX_COUNT} 個）`
+        );
+      }
+      if (parts.length) setError(parts.join('；') + '。');
     }
 
-    // The original goes up unchanged: previews and analysis copies never replace the file of record.
-    for (const item of provisional) patchAttachment(item.clientAttachmentId, { status: 'selected' });
+    // Compress immediately on pick (before upload / AI). Original File is kept in memory for size notes.
+    for (const item of provisional) {
+      void (async () => {
+        const original = item.file;
+        if (!original) {
+          patchAttachment(item.clientAttachmentId, { status: 'selected' });
+          return;
+        }
+        try {
+          const opt = await optimizeChatImage(original);
+          const working = opt.workingFile;
+          const note = formatSizeCompare(opt.originalBytes, opt.workingBytes);
+          // Refresh preview if working blob differs.
+          let previewUrl = item.previewUrl;
+          if (working !== original) {
+            try {
+              URL.revokeObjectURL(previewUrl);
+            } catch {
+              /* ignore */
+            }
+            previewUrl = URL.createObjectURL(working);
+          }
+          patchAttachment(item.clientAttachmentId, {
+            status: 'selected',
+            file: working,
+            fileName: working.name || item.fileName,
+            mimeType: working.type || item.mimeType,
+            sizeBytes: working.size,
+            originalSizeBytes: opt.originalBytes,
+            workingSizeBytes: opt.workingBytes,
+            sizeNote: note,
+            previewUrl,
+          });
+        } catch {
+          patchAttachment(item.clientAttachmentId, {
+            status: 'selected',
+            sizeNote: formatSizeCompare(original.size, original.size),
+          });
+        }
+      })();
+    }
+  }
+
+  function focusComposer(selectEnd = true) {
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      if (!selectEnd) return;
+      const len = el.value.length;
+      el.setSelectionRange(len, len);
+    });
+  }
+
+  function beginEdit(message: UiMessage) {
+    if (pending || message.role !== 'user') return;
+    setReplyingTo(null);
+    setEditingMessageId(message.id);
+    setInput(message.text);
+    setError(null);
+    focusComposer(true);
+  }
+
+  function cancelEdit() {
+    setEditingMessageId(null);
+    setInput('');
+  }
+
+  function beginReplyToModel(message: UiMessage) {
+    if (pending || message.role !== 'model') return;
+    const preview = message.text.replace(/\s+/g, ' ').trim().slice(0, 80);
+    setEditingMessageId(null);
+    setReplyingTo({
+      id: message.id,
+      preview: preview ? `${preview}${message.text.trim().length > 80 ? '…' : ''}` : '（助手回覆）',
+    });
+    setError(null);
+    focusComposer(false);
+  }
+
+  function cancelReply() {
+    setReplyingTo(null);
+  }
+
+  function resendUserMessage(message: UiMessage) {
+    if (pending || message.role !== 'user' || !message.text.trim()) return;
+    setEditingMessageId(null);
+    setReplyingTo(null);
+    onSend(message.text);
+  }
+
+  async function copyModelReply(message: UiMessage) {
+    if (!message.text) return;
+    try {
+      await navigator.clipboard.writeText(message.text);
+      setCopiedMessageId(message.id);
+      window.setTimeout(() => {
+        setCopiedMessageId((id) => (id === message.id ? null : id));
+      }, 1600);
+    } catch {
+      setError('無法複製到剪貼簿，請手動選取文字。');
+    }
   }
 
   /** `override`: text from a choice card, sent exactly as if typed (attachments are not included). */
@@ -603,6 +814,7 @@ export function AiChatApp() {
       (activeTab?.resourceType === 'application_draft' ? activeTab.version : undefined) ??
       1;
     const clientMessageId = newClientId();
+    const replyToMessageId = override === undefined ? replyingTo?.id ?? null : null;
     const optimistic: UiMessage = {
       id: clientMessageId,
       role: 'user',
@@ -610,9 +822,16 @@ export function AiChatApp() {
     };
     setMessages((prev) => [...prev, optimistic]);
     setError(null);
+    setTurnSteps([]);
     const expectedConversation = conversationId;
     const keptAttachments = attachments;
     const keptInput = override === undefined ? input : '';
+    const keptReplyingTo = override === undefined ? replyingTo : null;
+    const keptEditingId = override === undefined ? editingMessageId : null;
+    if (override === undefined) {
+      setReplyingTo(null);
+      setEditingMessageId(null);
+    }
     const attachIntent = wantsDraftAttach(text);
     start(async () => {
       // Copy checked files onto the draft in the browser — do not wait for the model tool.
@@ -631,7 +850,8 @@ export function AiChatApp() {
               conversationId: expectedConversation!,
               expectedVersion: draftTargetVersion >= 1 ? draftTargetVersion : 1,
               stagedIds,
-              confirmReminders: false,
+              confirmReminders: true,
+              userNote: '對話要求加入附件（提醒不阻擋）',
             });
             if (attached.ok) {
               attachedOk = true;
@@ -649,8 +869,6 @@ export function AiChatApp() {
               );
               setDrawerRefresh((n) => n + 1);
               setMobilePane('docs');
-            } else if (attached.error === 'confirmation_required') {
-              setError(attached.message ?? '請先在圖片上確認「仍要夾帶」再夾入草稿。');
             } else if (attached.error !== 'version_conflict') {
               setError(attached.message ?? attached.error);
             }
@@ -658,14 +876,18 @@ export function AiChatApp() {
         }
       }
 
-      const result = await sendAiChatMessage({
-        message: text,
-        clientMessageId,
-        conversationId: expectedConversation,
-        stagedAttachmentIds,
-        // The draft the person is looking at; the server checks ownership and links it to this conversation.
-        targetDraftId: draftTargetId ?? undefined,
-      });
+      const result = await streamAssistantTurn(
+        {
+          message: text,
+          clientMessageId,
+          conversationId: expectedConversation!,
+          stagedAttachmentIds,
+          // The draft the person is looking at; the server checks ownership and links it to this conversation.
+          targetDraftId: draftTargetId ?? undefined,
+          replyToMessageId: replyToMessageId ?? undefined,
+        },
+        (step) => setTurnSteps((prev) => upsertProgressStep(prev, step))
+      );
       if (bootGen.current && expectedConversation !== conversationId) {
         // Stale response for a previous conversation — ignore UI open side-effects.
       }
@@ -674,10 +896,15 @@ export function AiChatApp() {
         setMessages((prev) => prev.filter((m) => m.id !== clientMessageId));
         setInput(keptInput);
         setAttachments(keptAttachments);
+        setReplyingTo(keptReplyingTo);
+        setEditingMessageId(keptEditingId);
+        setTurnSteps([]);
         return;
       }
       if (result.conversationId !== expectedConversation) return;
       setInput('');
+      setEditingMessageId(null);
+      setReplyingTo(null);
       // Clear strip after attach / send so the composer stays usable.
       // Keep only unresolved business-reminder cards when attach did not complete.
       if (attachedOk) {
@@ -716,25 +943,21 @@ export function AiChatApp() {
       // and CustomForm must remount from DB data.
       setDraftSyncTick((n) => n + 1);
       setDrawerRefresh((n) => n + 1);
+      // Keep the finished timeline briefly, then clear so the next turn starts fresh.
+      window.setTimeout(() => setTurnSteps([]), 2500);
     });
   }
 
   const activeTab = tabs.find((t) => t.tabId === activeTabId) ?? null;
   const showDocs = tabs.length > 0 && !docsCollapsed;
 
-  const openDraftLibrary = () => {
-    const r = openDraftLibraryTab(tabs);
-    setTabs(r.tabs);
-    setActiveTabId(r.activeTabId);
-    setDocsCollapsed(false);
-    setMobilePane('docs');
-  };
-
   return (
-    <main className="flex h-[calc(100vh-4rem)] w-full max-w-none flex-col overflow-hidden">
+    <SubmissionActionsProvider>
+    <main className="flex h-screen w-full max-w-none flex-col overflow-hidden text-base">
       <div className="flex min-h-0 flex-1 flex-row gap-0">
         <ConversationSidebar
           collapsed={sidebarCollapsed}
+          width={sidebarWidth}
           onCollapsedChange={(collapsed) => {
             setSidebarCollapsed(collapsed);
             saveSidebarCollapsedPref(SIDEBAR_PREF_USER, collapsed);
@@ -749,7 +972,7 @@ export function AiChatApp() {
           }}
           onNew={() => {
             setMobileDrawerOpen(false);
-            start(async () => {
+            startNav(async () => {
               const res = await createConversationAction();
               if (!res.ok) {
                 setError(res.error);
@@ -760,24 +983,74 @@ export function AiChatApp() {
               setDrawerRefresh((n) => n + 1);
             });
           }}
-          onOpenDraftLibrary={openDraftLibrary}
         />
+        {!sidebarCollapsed && (
+          <div
+            className="hidden w-1.5 shrink-0 cursor-col-resize bg-transparent hover:bg-td-blue/20 md:block"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="調整對話清單寬度"
+            title="拖曳調整左側寬度"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              sidebarDragRef.current = { startX: e.clientX, startW: sidebarWidth };
+              const prevSelect = document.body.style.userSelect;
+              document.body.style.userSelect = 'none';
+              const onMove = (ev: MouseEvent) => {
+                if (!sidebarDragRef.current) return;
+                const next = sidebarDragRef.current.startW + (ev.clientX - sidebarDragRef.current.startX);
+                setSidebarWidth(Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, next)));
+              };
+              const onUp = () => {
+                sidebarDragRef.current = null;
+                document.body.style.userSelect = prevSelect;
+                setSidebarWidth((w) => {
+                  saveSidebarWidthPref(SIDEBAR_PREF_USER, w);
+                  return w;
+                });
+                window.removeEventListener('mousemove', onMove);
+                window.removeEventListener('mouseup', onUp);
+              };
+              window.addEventListener('mousemove', onMove);
+              window.addEventListener('mouseup', onUp);
+            }}
+          />
+        )}
 
-        <div className="flex min-w-0 flex-1 flex-col px-3 pt-3 sm:px-4">
+        <div className={`flex min-w-0 flex-1 flex-col px-3 pt-3 sm:px-4 ${showDocs ? '' : 'items-center'}`}>
+      {/* No docs pane: keep the whole thread (title + messages + composer) centered like Codex/Gemini. */}
+      <div className={`flex min-h-0 w-full flex-1 flex-col ${showDocs ? '' : 'max-w-[60rem]'}`}>
       <header className="mb-3 flex flex-wrap items-center gap-2 border-b border-td-border pb-3">
         <button
           type="button"
-          className="btn-secondary text-sm md:hidden"
+          className="btn-secondary text-base md:hidden"
           aria-expanded={mobileDrawerOpen}
           onClick={() => setMobileDrawerOpen(true)}
         >
           對話清單
         </button>
-        <h1 className="min-w-0 flex-1 truncate text-lg font-semibold text-td-blue-dark">{title}</h1>
+        <h1 className="min-w-0 flex-1 truncate text-xl font-semibold text-td-blue-dark">{title}</h1>
+        {conversationId && (
+          <button
+            type="button"
+            className="rounded-lg border border-td-border bg-white px-3 py-1.5 text-xs font-semibold text-td-blue transition hover:bg-slate-50"
+            disabled={pending}
+            onClick={() => {
+              startNav(async () => {
+                const res = await refreshWelcomeAction({ conversationId });
+                if (res.ok) {
+                  loadConversation({ conversationId });
+                }
+              });
+            }}
+          >
+            🔔 待簽與公告播報
+          </button>
+        )}
         {docsCollapsed && tabs.length > 0 && (
           <button
             type="button"
-            className="btn-secondary text-sm"
+            className="btn-secondary text-base"
             onClick={() => setDocsCollapsed(false)}
           >
             顯示文件
@@ -803,7 +1076,7 @@ export function AiChatApp() {
         </button>
       </div>
 
-      <div className={`flex min-h-0 flex-1 gap-0 ${showDocs ? '' : ''}`}>
+      <div className="flex min-h-0 flex-1 gap-0">
         <section
           className={`flex min-w-0 flex-col ${showDocs ? 'w-full md:w-[min(100%,calc(100%-320px))] md:max-w-[var(--chat-max)]' : 'w-full'} ${
             mobilePane === 'chat' ? 'flex' : 'hidden md:flex'
@@ -815,10 +1088,10 @@ export function AiChatApp() {
             {hasOlder && conversationId && messages[0] && (
               <button
                 type="button"
-                className="border-b border-td-border px-3 py-2 text-xs text-td-blue underline"
+                className="border-b border-td-border px-3 py-2 text-base text-td-blue underline"
                 onClick={() => {
                   const first = messages[0]!;
-                  start(async () => {
+                  startNav(async () => {
                     const res = await loadOlderMessagesAction({
                       conversationId,
                       beforeCreatedAt: first.createdAt || new Date().toISOString(),
@@ -846,48 +1119,123 @@ export function AiChatApp() {
                 載入更早訊息
               </button>
             )}
-            <div ref={messagesRef} className="flex-1 space-y-3 overflow-y-auto p-4">
-              {messages.map((m) => (
-                <article
-                  key={m.id}
-                  className={`max-w-4xl rounded-xl px-3 py-2 text-sm ${
-                    m.role === 'user'
-                      ? 'ml-auto bg-td-blue text-white'
-                      : m.role === 'system'
-                        ? 'bg-td-blue-light/50 text-td-blue-dark'
-                        : 'bg-slate-50 text-td-blue-dark'
-                  }`}
-                >
-                  <SafeMarkdown text={m.text} />
-                  {m.toolsUsed && m.toolsUsed.length > 0 && (
-                    <p className="mt-1 text-[10px] opacity-70">工具：{m.toolsUsed.join('、')}</p>
-                  )}
-                  {m.blocks && conversationId && (
-                    <MessageBlocks
-                      blocks={m.blocks}
-                      conversationId={conversationId}
-                      boundDraftId={boundDraft?.draftId ?? (activeTab?.resourceType === 'application_draft' ? activeTab.resourceId : null)}
-                      boundDraftVersion={boundDraft?.version ?? (activeTab?.resourceType === 'application_draft' ? (activeTab.version ?? 1) : null)}
-                      onDraftOpened={openDraftMeta}
-                      onOpenResources={applyOpenResources}
-                      onIntent={handleIntent}
-                      onRefresh={() => loadConversation({ conversationId })}
-                      onSendText={(text) => onSend(text)}
-                    />
-                  )}
-                </article>
-              ))}
+            <div ref={messagesRef} className="flex-1 space-y-5 overflow-y-auto px-4 py-5 sm:px-6">
+              {messages.map((m) => {
+                const isUser = m.role === 'user';
+                const isModel = m.role === 'model';
+                const actionBtn =
+                  'rounded px-1.5 py-0.5 text-sm text-td-muted transition hover:bg-slate-100 hover:text-td-blue-dark disabled:cursor-not-allowed disabled:opacity-40';
+                return (
+                  <div
+                    key={m.id}
+                    className={
+                      isUser
+                        ? 'ml-auto flex w-fit max-w-[min(100%,45rem)] flex-col items-end gap-1'
+                        : 'mr-auto flex w-full max-w-[60rem] flex-col items-start gap-1'
+                    }
+                  >
+                    <article
+                      className={
+                        isUser
+                          ? `w-fit max-w-full rounded-[1.75rem] px-4 py-2.5 text-base leading-relaxed text-td-blue-dark ${
+                              editingMessageId === m.id ? 'bg-td-blue-light ring-1 ring-td-blue/40' : 'bg-slate-100'
+                            }`
+                          : `w-full space-y-2 rounded-lg text-base leading-relaxed text-td-blue-dark ${
+                              replyingTo?.id === m.id ? 'bg-td-blue-light/40 ring-1 ring-td-blue/30 px-3 py-2' : ''
+                            }`
+                      }
+                    >
+                      <SafeMarkdown text={m.text} />
+                      {m.toolsUsed && m.toolsUsed.length > 0 && (
+                        <p className="text-sm text-td-muted">工具：{m.toolsUsed.join('、')}</p>
+                      )}
+                      {m.blocks && conversationId && (
+                        <MessageBlocks
+                          blocks={m.blocks}
+                          conversationId={conversationId}
+                          boundDraftId={boundDraft?.draftId ?? (activeTab?.resourceType === 'application_draft' ? activeTab.resourceId : null)}
+                          boundDraftVersion={boundDraft?.version ?? (activeTab?.resourceType === 'application_draft' ? (activeTab.version ?? 1) : null)}
+                          onDraftOpened={openDraftMeta}
+                          onOpenResources={applyOpenResources}
+                          onIntent={handleIntent}
+                          onRefresh={() => loadConversation({ conversationId })}
+                          onSendText={(text) => onSend(text)}
+                        />
+                      )}
+                    </article>
+                    {isUser && (
+                      <div className="flex flex-wrap justify-end gap-1 px-1">
+                        <button
+                          type="button"
+                          className={actionBtn}
+                          disabled={pending}
+                          onClick={() => beginEdit(m)}
+                        >
+                          編輯
+                        </button>
+                        <button
+                          type="button"
+                          className={actionBtn}
+                          disabled={pending || !m.text.trim()}
+                          onClick={() => resendUserMessage(m)}
+                        >
+                          重送
+                        </button>
+                      </div>
+                    )}
+                    {isModel && (
+                      <div className="flex flex-wrap gap-1 px-0.5">
+                        <button
+                          type="button"
+                          className={actionBtn}
+                          disabled={!m.text}
+                          onClick={() => void copyModelReply(m)}
+                        >
+                          {copiedMessageId === m.id ? '已複製' : '複製回應'}
+                        </button>
+                        <button
+                          type="button"
+                          className={actionBtn}
+                          disabled={pending}
+                          aria-pressed={replyingTo?.id === m.id}
+                          onClick={() => beginReplyToModel(m)}
+                        >
+                          {replyingTo?.id === m.id ? '回覆中' : '接續回覆'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
               {inboxHint && (
-                <div className="max-w-4xl whitespace-pre-wrap rounded-xl border border-td-border bg-white px-3 py-2 text-sm">
+                <div className="mr-auto w-full max-w-[60rem] whitespace-pre-wrap text-base leading-relaxed text-td-blue-dark">
                   {inboxHint}
                 </div>
               )}
-              {pending && <p className="text-sm text-td-muted">助手處理中…</p>}
+              {turnSteps.length > 0 && <TurnProgressList steps={turnSteps} />}
+              {pending && turnSteps.length === 0 && (
+                <div
+                  className="mr-auto flex items-center gap-2 text-base text-td-muted"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span
+                    className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-td-border border-t-td-blue"
+                    aria-hidden
+                  />
+                  <span>
+                    正在想怎麼回你
+                    <span className="inline-flex w-4 justify-start">
+                      <span className="animate-pulse">…</span>
+                    </span>
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="border-t border-td-border p-3">
               {boundDraft && (
-                <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+                <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
                   <span className="rounded-full bg-td-blue-light/60 px-2 py-1 text-td-blue-dark">
                     AI 目標草稿：{boundDraft.title}
                   </span>
@@ -913,7 +1261,7 @@ export function AiChatApp() {
                 </div>
               )}
               {attachNotice && (
-                <p role="status" className="mb-1 text-xs text-emerald-800">
+                <p role="status" className="mb-1 text-sm text-emerald-800">
                   {attachNotice}
                 </p>
               )}
@@ -939,71 +1287,57 @@ export function AiChatApp() {
                   setMobilePane('docs');
                 }}
               />
-              {error && <p className="mb-2 text-sm text-amber-800">{error}</p>}
+              {error && <p className="mb-2 text-base text-amber-800">{error}</p>}
               {!statusMeta?.ok && (
-                <p className="mb-2 text-xs text-td-muted">語言模型尚未就緒時仍可查看對話與草稿庫。</p>
+                <p className="mb-2 text-sm text-td-muted">語言模型尚未就緒時仍可查看對話與草稿庫。</p>
               )}
-              <div className="flex gap-2">
-                <label className="btn-secondary cursor-pointer text-sm">
-                  圖片
-                  <input
-                    type="file"
-                    accept={AI_CHAT_IMAGE_ACCEPT}
-                    className="hidden"
-                    multiple
-                    disabled={!conversationId || pending}
-                    onChange={(e) => {
-                      void onFilesSelected(e.target.files);
-                      e.target.value = '';
-                    }}
-                  />
-                </label>
-                <textarea
-                  ref={inputRef}
-                  className="min-h-[44px] flex-1 resize-y rounded-lg border border-td-border px-3 py-2 text-sm"
-                  rows={2}
-                  value={input}
-                  onChange={(e) => {
-                    enterArmedRef.current = false;
-                    setInput(e.target.value);
-                  }}
-                  onBlur={() => {
-                    enterArmedRef.current = false;
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
-                    if (e.shiftKey) return; // Shift+Enter keeps newline
-                    e.preventDefault();
-                    if (enterArmedRef.current) {
-                      enterArmedRef.current = false;
-                      onSend();
-                    } else {
-                      enterArmedRef.current = true;
-                    }
-                  }}
-                  placeholder="輸入訊息…（按兩次 Enter 傳送）"
-                  aria-label="訊息"
-                  disabled={!conversationId || pending}
-                />
-                <button
-                  type="button"
-                  className="btn-primary self-end"
-                  disabled={
-                    !conversationId ||
-                    pending ||
-                    attachmentsBusy ||
-                    (attachments.length > 0 && attachments.every((a) => a.status === 'failed' || a.status === 'blocked'))
-                  }
-                  title={attachmentsBusy ? '請等待檔案處理完成' : undefined}
-                  onClick={() => onSend()}
-                >
-                  {pending
-                    ? '傳送中…'
-                    : attachmentsBusy
-                      ? '處理中…'
-                      : '傳送訊息'}
-                </button>
-              </div>
+              {editingMessageId && (
+                <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-td-blue/25 bg-td-blue-light/50 px-3 py-1.5 text-sm text-td-blue-dark">
+                  <span>正在編輯先前訊息，送出後會再問一次助手</span>
+                  <button type="button" className="underline" onClick={cancelEdit}>
+                    取消
+                  </button>
+                </div>
+              )}
+              {replyingTo && !editingMessageId && (
+                <div className="mb-2 flex flex-wrap items-start justify-between gap-2 rounded-lg border border-td-blue/25 bg-td-blue-light/50 px-3 py-1.5 text-sm text-td-blue-dark">
+                  <div className="min-w-0">
+                    <p className="font-semibold">正在回覆助手訊息</p>
+                    <p className="mt-0.5 truncate text-td-muted">{replyingTo.preview}</p>
+                  </div>
+                  <button type="button" className="shrink-0 underline" onClick={cancelReply}>
+                    取消
+                  </button>
+                </div>
+              )}
+              <ChatComposer
+                inputRef={inputRef}
+                value={input}
+                onChange={setInput}
+                onSend={() => onSend()}
+                onFilesSelected={(files) => void onFilesSelected(files)}
+                disabled={!conversationId || pending}
+                pending={pending}
+                attachmentsBusy={attachmentsBusy}
+                sendDisabled={
+                  !conversationId ||
+                  pending ||
+                  attachmentsBusy ||
+                  (attachments.length > 0 && attachments.every((a) => a.status === 'failed' || a.status === 'blocked'))
+                }
+                sendTitle={attachmentsBusy ? '請等待檔案處理完成' : undefined}
+                placeholder={
+                  replyingTo
+                    ? '輸入你要回覆的內容…（按兩次 Enter 傳送）'
+                    : editingMessageId
+                      ? '修改後按兩次 Enter 傳送…'
+                      : '輸入訊息，或把檔案拖進來…（按兩次 Enter 傳送）'
+                }
+                sendLabel={
+                  pending ? '傳送中…' : attachmentsBusy ? '處理中…' : replyingTo ? '送出回覆' : '傳送'
+                }
+                modelLabel={statusMeta?.model ? String(statusMeta.model) : 'AI 助手'}
+              />
             </div>
           </div>
         </section>
@@ -1033,14 +1367,18 @@ export function AiChatApp() {
               aria-orientation="vertical"
               aria-label="調整文件區寬度"
               onMouseDown={(e) => {
-                dragRef.current = { startX: e.clientX, startW: docsWidth };
+                e.preventDefault();
+                docsDragRef.current = { startX: e.clientX, startW: docsWidth };
+                const prevSelect = document.body.style.userSelect;
+                document.body.style.userSelect = 'none';
                 const onMove = (ev: MouseEvent) => {
-                  if (!dragRef.current) return;
-                  const delta = dragRef.current.startX - ev.clientX;
-                  setDocsWidth(Math.min(720, Math.max(280, dragRef.current.startW + delta)));
+                  if (!docsDragRef.current) return;
+                  const delta = docsDragRef.current.startX - ev.clientX;
+                  setDocsWidth(Math.min(720, Math.max(280, docsDragRef.current.startW + delta)));
                 };
                 const onUp = () => {
-                  dragRef.current = null;
+                  docsDragRef.current = null;
+                  document.body.style.userSelect = prevSelect;
                   window.removeEventListener('mousemove', onMove);
                   window.removeEventListener('mouseup', onUp);
                 };
@@ -1063,7 +1401,7 @@ export function AiChatApp() {
                         type="button"
                         role="tab"
                         aria-selected={t.tabId === activeTabId}
-                        className={`max-w-[10rem] truncate rounded px-2 py-1 text-xs ${
+                        className={`max-w-[10rem] truncate rounded px-2 py-1 text-sm ${
                           t.tabId === activeTabId ? 'bg-td-blue-light font-semibold' : 'hover:bg-slate-50'
                         }`}
                         onClick={() => {
@@ -1087,7 +1425,7 @@ export function AiChatApp() {
                 </div>
                 <button
                   type="button"
-                  className="shrink-0 rounded px-2 py-1 text-xs text-td-muted hover:bg-slate-50"
+                  className="shrink-0 rounded px-2 py-1 text-sm text-td-muted hover:bg-slate-50"
                   aria-label="收合文件區"
                   title="收合文件區"
                   onClick={() => setDocsCollapsed(true)}
@@ -1096,21 +1434,10 @@ export function AiChatApp() {
                 </button>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto">
-                {activeTab?.resourceType === 'draft_library' && (
-                  <DraftLibraryPanel
-                    onOpenDraft={(d) =>
-                      openDraftMeta(d.id, {
-                        title: d.title,
-                        version: d.version,
-                        formKey: d.formKey,
-                        status: d.status,
-                      })
-                    }
-                  />
-                )}
-                {activeTab?.resourceType === 'application_draft' && (
+                {activeTab?.resourceType === 'application_draft' && conversationId && (
                   <DraftPanel
                     draftId={activeTab.resourceId}
+                    conversationId={conversationId}
                     refreshKey={`${activeTab.version ?? 0}:${draftSyncTick}`}
                     allowRemoteRefresh={activeTab.saveState === 'clean'}
                     onDirtyChange={(dirty) =>
@@ -1162,25 +1489,20 @@ export function AiChatApp() {
                   />
                 )}
                 {activeTab?.resourceType === 'form_submission' && (
-                  <div className="space-y-2 p-4 text-sm">
-                    <p className="font-medium text-td-blue-dark">單據已送出：{activeTab.title}</p>
-                    {activeTab.formKey && (
-                      <a
-                        className="text-td-blue underline"
-                        href={`/f/${activeTab.formKey}/${activeTab.resourceId}`}
-                      >
-                        開啟正式單據
-                      </a>
-                    )}
-                  </div>
+                  <SubmissionPanel
+                    submissionId={activeTab.resourceId}
+                    focusApprove={activeTab.status === 'approve'}
+                  />
                 )}
               </div>
             </aside>
           </>
         )}
       </div>
+      </div>
         </div>
       </div>
     </main>
+    </SubmissionActionsProvider>
   );
 }

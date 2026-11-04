@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { restoreOriginalAction, startStagedCheckAction } from '@/lib/ai-chat/actions-staged-invoice';
+import { useState, useTransition } from 'react';
+import { removeDraftFileAction } from '@/lib/ai-chat/actions';
 import { formatBytesLabel } from '@/lib/attachments/policy';
 import { PhotoEditor } from './photo-editor';
 
@@ -21,42 +21,110 @@ export type DraftAttachedFile = {
 
 type Props = {
   draftId: string;
+  draftVersion: number;
+  conversationId: string;
   files: DraftAttachedFile[];
-  /** A saved edit, a restore or a recheck changed the draft. */
-  onChanged?: () => void;
+  /** A saved edit, a restore or a remove changed the draft. */
+  onChanged?: (info?: { version?: number }) => void;
 };
 
-/** Files copied from chat staging onto this draft (server-backed). */
-export function DraftAttachedFiles({ draftId, files, onChanged }: Props) {
+/** Compact draft attachment cards: thumb, name, size, edit, ×. */
+export function DraftAttachedFiles({ draftId, draftVersion, conversationId, files, onChanged }: Props) {
   const [editing, setEditing] = useState<DraftAttachedFile | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+
   if (files.length === 0) {
     return (
       <section className="rounded-xl border border-dashed border-td-border bg-slate-50/80 px-3 py-2 text-sm">
-        <p className="font-semibold text-td-blue-dark">已夾帶預覽</p>
+        <p className="font-semibold text-td-blue-dark">附件</p>
         <p className="mt-1 text-xs text-td-muted">
-          尚無檔案。在對話中選檔後按「確認並檢查」，通過後預覽會出現在這裡。
+          尚無檔案。在對話選檔後會自動壓縮並檢查，再按「加入附件」。
         </p>
       </section>
     );
   }
 
+  function removeOne(file: DraftAttachedFile) {
+    setError(null);
+    setBusyId(file.id);
+    start(async () => {
+      const res = await removeDraftFileAction({
+        conversationId,
+        draftId,
+        expectedVersion: draftVersion,
+        fileId: file.id,
+      });
+      setBusyId(null);
+      if (!res.ok) {
+        setError(res.message ?? res.error);
+        return;
+      }
+      onChanged?.({ version: res.draft.version });
+    });
+  }
+
   return (
     <section className="space-y-2 rounded-xl border border-td-border bg-white px-3 py-3 text-sm">
-      <div className="flex items-baseline justify-between gap-2">
-        <p className="font-semibold text-td-blue-dark">已夾帶預覽（{files.length}）</p>
-        <p className="text-xs text-td-muted">送出時會寫入正式單據</p>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="font-semibold text-td-blue-dark">附件（{files.length}）</p>
+        <div className="flex items-center gap-2 text-xs">
+          <p className="text-td-muted">送出時寫入正式單據</p>
+          <button
+            type="button"
+            className="underline"
+            disabled={pending || busyId !== null}
+            onClick={() => {
+              if (!window.confirm(`確定移除這張草稿的全部 ${files.length} 個附件？`)) return;
+              setError(null);
+              setBusyId('all');
+              start(async () => {
+                const res = await removeDraftFileAction({
+                  conversationId,
+                  draftId,
+                  expectedVersion: draftVersion,
+                  removeAll: true,
+                });
+                setBusyId(null);
+                if (!res.ok) {
+                  setError(res.message ?? res.error);
+                  return;
+                }
+                onChanged?.({ version: res.draft.version });
+              });
+            }}
+          >
+            移除全部
+          </button>
+        </div>
       </div>
+      {error && (
+        <p role="alert" className="text-xs text-amber-800">
+          {error}
+        </p>
+      )}
       <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3" aria-label="草稿已夾帶附件">
         {files.map((f) => {
           const href = f.href ?? `/api/ai-chat/draft-files/${draftId}/${f.id}`;
           const isHeic = /^image\/hei[cf]/.test(f.mimeType);
           const isImage = isHeic || /^image\/(jpeg|png|webp)/.test(f.mimeType);
+          const busy = busyId === f.id || pending;
           return (
             <li
               key={f.id}
-              className="flex flex-col overflow-hidden rounded-lg border border-td-border bg-slate-50 text-xs"
+              className="relative flex flex-col overflow-hidden rounded-lg border border-td-border bg-slate-50 text-xs"
             >
+              <button
+                type="button"
+                className="absolute right-1 top-1 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-slate-800/90 text-base text-white disabled:opacity-50"
+                aria-label={`移除附件 ${f.fileName}`}
+                disabled={busy || !!f.href}
+                title={f.href ? '核准文件請用對話工具移除' : '移除'}
+                onClick={() => removeOne(f)}
+              >
+                {busyId === f.id ? '…' : '×'}
+              </button>
               <a
                 href={href}
                 target="_blank"
@@ -66,67 +134,26 @@ export function DraftAttachedFiles({ draftId, files, onChanged }: Props) {
               >
                 {isImage ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={`${href}?preview=1&v=${f.activeEditId ?? 'orig'}`} alt={f.fileName} className="h-full w-full object-cover" />
+                  <img
+                    src={`${href}?preview=1&v=${f.activeEditId ?? 'orig'}`}
+                    alt={f.fileName}
+                    className="h-full w-full object-cover"
+                  />
                 ) : (
                   <span className="px-2 text-center text-td-muted">
                     {f.mimeType.includes('pdf') ? 'PDF' : '檔案'}
                   </span>
                 )}
               </a>
-              <div className="space-y-0.5 p-2">
+              <div className="space-y-1 p-2">
                 <p className="truncate font-medium text-td-blue-dark" title={f.fileName}>
                   {f.fileName}
                 </p>
-                <p className="text-td-muted">
-                  {formatBytesLabel(f.fileSizeBytes)}
-                  {f.activeEditId ? ' · 已編輯' : ''}
-                </p>
-                {f.activeEditId && (
-                  <a className="underline" href={`${href}?original=1${isHeic ? '&preview=1' : ''}`} target="_blank" rel="noreferrer">
-                    看原圖
-                  </a>
-                )}
-                {f.sourceStagedId && f.checkState === 'none' && (
-                  <p className="text-amber-800">
-                    圖片已變更，先前的 AI 檢查已失效。
-                    <button
-                      type="button"
-                      className="ml-1 underline"
-                      disabled={busy === f.id}
-                      onClick={async () => {
-                        setBusy(f.id);
-                        await startStagedCheckAction({ stagedIds: [f.sourceStagedId!], targetDraftId: draftId });
-                        setBusy(null);
-                        onChanged?.();
-                      }}
-                    >
-                      重新檢查
-                    </button>
-                  </p>
-                )}
-                {f.checkState === 'running' && <p className="text-td-muted">AI 檢查中…（重新載入草稿可看結果）</p>}
-                {f.checkState === 'done' && f.checkSummary && <p className="text-td-muted">{f.checkSummary}</p>}
+                <p className="text-td-muted">{formatBytesLabel(f.fileSizeBytes)}</p>
                 {isImage && !f.href && (
-                  <div className="flex gap-2 pt-0.5">
-                    <button type="button" className="underline" onClick={() => setEditing(f)}>
-                      編輯
-                    </button>
-                    {f.activeEditId && (
-                      <button
-                        type="button"
-                        className="underline"
-                        disabled={busy === f.id}
-                        onClick={async () => {
-                          setBusy(f.id);
-                          await restoreOriginalAction({ kind: 'draft_file', sourceId: f.id });
-                          setBusy(null);
-                          onChanged?.();
-                        }}
-                      >
-                        還原原圖
-                      </button>
-                    )}
-                  </div>
+                  <button type="button" className="underline" onClick={() => setEditing(f)}>
+                    編輯
+                  </button>
                 )}
               </div>
             </li>

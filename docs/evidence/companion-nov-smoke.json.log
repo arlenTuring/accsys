@@ -1,0 +1,71 @@
+npm warn Unknown env config "devdir". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+{
+  "at": "2026-11-01T09:43:56.056Z",
+  "target": {
+    "start": "2026-11-10",
+    "end": "2026-11-12",
+    "location": "台南",
+    "project": "測試專案 A"
+  },
+  "nearDays": 3,
+  "scopeNote": "搜尋範圍：全公司公出差旅（±3 天；僅摘要欄位）。",
+  "candidateCount": 8,
+  "candidates": [
+    {
+      "code": "TEST005",
+      "name": "測試同仁戊",
+      "kind": "full_overlap",
+      "diff": "無日期差異",
+      "reason": "同地點，日期完全符合"
+    },
+    {
+      "code": "TEST001",
+      "name": "測試同仁甲",
+      "kind": "full_overlap",
+      "diff": "無日期差異",
+      "reason": "同地點，日期完全符合"
+    },
+    {
+      "code": "TEST009",
+      "name": "測試同仁甲",
+      "kind": "full_overlap",
+      "diff": "無日期差異",
+      "reason": "同地點，日期完全符合"
+    },
+    {
+      "code": "TEST008",
+      "name": "測試同仁辛",
+      "kind": "full_overlap",
+      "diff": "無日期差異",
+      "reason": "同地點，日期完全符合"
+    },
+    {
+      "code": "TEST002",
+      "name": "測試同仁乙",
+      "kind": "partial_overlap",
+      "diff": "提早 1 天抵達",
+      "reason": "同地點，日期重疊 2 天"
+    },
+    {
+      "code": "TEST003",
+      "name": "測試同仁丙",
+      "kind": "partial_overlap",
+      "diff": "晚 2 天出發",
+      "reason": "同地點，日期重疊 1 天"
+    },
+    {
+      "code": "TEST004",
+      "name": "測試同仁丁",
+      "kind": "near",
+      "diff": "晚於目標行程 2 天",
+      "reason": "同地點，鄰近日期（無重疊）"
+    },
+    {
+      "code": "TEST006",
+      "name": "測試同仁己",
+      "kind": "same_dates_diff_project",
+      "diff": "對方地點：新竹",
+      "reason": "日期重疊但地點不同"
+    }
+  ]
+}

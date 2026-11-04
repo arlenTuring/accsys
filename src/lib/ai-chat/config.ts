@@ -62,8 +62,8 @@ export function loadAiChatConfig(env: Env = process.env): AiChatConfig {
     impersonateServiceAccount,
     maxHistoryTurns: 20,
     maxInputChars: 6000,
-    maxToolRounds: 4,
-    maxToolsPerRound: 3,
+    maxToolRounds: 8,
+    maxToolsPerRound: 5,
     taskTimeoutMs: 120_000,
   };
 }

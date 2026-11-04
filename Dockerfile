@@ -2,8 +2,8 @@
 # Uses only the built-in BuildKit frontend (no remote `# syntax=` image).
 # No cloud-provider services are required at build or run time.
 #
-# Build needs outbound HTTPS to the npm registry only (fonts come from the
-# @fontsource packages in the lockfile).
+# Build needs outbound HTTPS to the npm registry (fonts come from the @fontsource
+# packages in the lockfile) and to the Debian mirrors (LibreOffice, runner stage).
 
 # Pinned by digest so a rebuilt tag cannot silently change the base image.
 # Refresh deliberately (see README「更新基底映像」) to pick up OS security patches.
@@ -46,6 +46,11 @@ ENV NODE_ENV=production \
     HOSTNAME=0.0.0.0 \
     PORT=3000 \
     STORAGE_LOCAL_PATH=/data/attachments
+# Office → PDF previews; the CJK fonts keep Chinese documents readable.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui fonts-noto-cjk \
+ && rm -rf /var/lib/apt/lists/*
 # App files stay root-owned (read-only for the runtime user); only the
 # attachment directory and Next's cache are writable, and only by `node`.
 COPY --from=builder /app/.next/standalone ./

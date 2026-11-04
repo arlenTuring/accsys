@@ -8,7 +8,9 @@ import { UserMenu, type MenuEmployee } from '@/app/components/user-menu';
 import { ADMIN_NAV_PERMISSIONS, FINANCE_NAV_PERMISSIONS, hasAnyPermission } from '@/lib/authz/permissions';
 import {
   ADMIN_LINKS,
+  COMPANY_INFO_LINKS,
   FINANCE_LINKS,
+  MY_APPLICATION_LINKS,
   isNewFormPage,
   isRecordPage,
   isUnder,
@@ -23,10 +25,21 @@ type TopNavProps = {
   categories: FormCategory[];
 };
 
-function NavItem({ href, label, badge }: { href: string; label: string; badge?: number }) {
+function NavItem({
+  href,
+  label,
+  badge,
+  active,
+}: {
+  href: string;
+  label: string;
+  badge?: number;
+  active?: boolean;
+}) {
   const pathname = usePathname();
+  const isActive = active ?? isUnder(pathname, href);
   return (
-    <Link href={href} className={isUnder(pathname, href) ? 'nav-link-active nav-link' : 'nav-link'}>
+    <Link href={href} className={isActive ? 'nav-link-active nav-link' : 'nav-link'}>
       {label}
       {badge != null && badge > 0 && (
         <span className="ml-1.5 rounded-full bg-td-apex px-1.5 py-0.5 text-[10px] font-bold text-td-blue-dark">{badge}</span>
@@ -133,11 +146,19 @@ function MobileMenu({
       title: '常用',
       links: [
         { label: '工作台', href: '/dashboard' },
-        { label: pendingApprovalCount > 0 ? `待簽核（${pendingApprovalCount}）` : '待簽核', href: '/approvals' },
+        {
+          label:
+            pendingApprovalCount > 0
+              ? `簽核管理（${pendingApprovalCount}）`
+              : '簽核管理',
+          href: '/applications',
+        },
+        { label: '草稿庫', href: '/applications/drafts' },
         { label: '申請表單', href: '/forms' },
+        ...COMPANY_INFO_LINKS,
       ],
     },
-    { title: '我的申請', links: categories.flatMap((c) => c.records) },
+    { title: '我的申請', links: [...MY_APPLICATION_LINKS, ...categories.flatMap((c) => c.records)] },
     ...(showFinance ? [{ title: '財會管理', links: FINANCE_LINKS }] : []),
     ...(showAdmin ? [{ title: '系統管理', links: ADMIN_LINKS }] : []),
     { title: '其他', links: [{ label: '工具區', href: '/tools' }] },
@@ -179,7 +200,6 @@ export function TopNav({ employee, pendingApprovalCount = 0, categories }: TopNa
 
         <nav className="hidden items-center gap-0.5 md:flex">
           <NavItem href="/dashboard" label="工作台" />
-          <NavItem href="/approvals" label="待簽核" badge={pendingApprovalCount} />
 
           <NavMenu label="申請表單" active={isNewFormPage(pathname)} wide>
             <div className="grid grid-cols-2 gap-x-2 gap-y-4 p-4 lg:grid-cols-4">
@@ -201,19 +221,18 @@ export function TopNav({ employee, pendingApprovalCount = 0, categories }: TopNa
             </div>
           </NavMenu>
 
-          <NavMenu label="我的申請" active={isRecordPage(pathname)}>
-            <div className="max-h-[70vh] w-56 space-y-3 overflow-y-auto p-2 pt-3">
-              {categories.map((c) => (
-                <div key={c.id}>
-                  <p className={menuHeading}>{c.title}</p>
-                  {c.records.map((r) => (
-                    <Link key={r.href} href={r.href} className={menuLink}>
-                      {r.label}
-                    </Link>
-                  ))}
-                </div>
-              ))}
-            </div>
+          <NavItem
+            href="/applications"
+            label="簽核管理"
+            badge={pendingApprovalCount}
+            active={isRecordPage(pathname)}
+          />
+
+          <NavMenu
+            label="公司資訊"
+            active={COMPANY_INFO_LINKS.some((l) => isUnder(pathname, l.href))}
+          >
+            <LinkList links={COMPANY_INFO_LINKS} />
           </NavMenu>
 
           {showFinance && (

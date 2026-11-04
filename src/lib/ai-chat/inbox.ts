@@ -26,12 +26,16 @@ export type InboxItem = {
   applicantName?: string;
   totalAmount: number | null;
   href: string;
+  /** Designer form key when formType is custom. */
+  formKey?: string;
   currentNodeLabel?: string | null;
   pendingApproverNames?: string[];
   waitingSinceIso?: string | null;
   waitingFor?: string | null;
   /** Purpose, place, date, amount: what lets a person recognise the form without its number. */
   summary?: string;
+  /** Attached when inbox enrichment runs (for card progress bars). */
+  snapshot?: import('./approval-snapshot').ApprovalSnapshot | null;
 };
 
 export type AssistantInbox = {
@@ -61,6 +65,7 @@ function asQueueItem(q: ApprovalQueueItem): InboxItem {
     applicantName: q.applicantName,
     totalAmount: q.totalAmount,
     href: q.href,
+    formKey: q.formKey,
   };
 }
 
@@ -94,13 +99,14 @@ async function countProgressToday(mine: InboxItem[]): Promise<number> {
 }
 
 function applySnapshot(item: InboxItem, snapshot: ApprovalSnapshot | null): InboxItem {
-  if (!snapshot) return item;
+  if (!snapshot) return { ...item, snapshot: null };
   return {
     ...item,
     currentNodeLabel: snapshot.currentNodeLabel,
     pendingApproverNames: snapshot.pendingApproverNames,
     waitingSinceIso: snapshot.waitingSinceIso,
     waitingFor: formatWaitingDuration(snapshot.waitingSinceIso),
+    snapshot,
   };
 }
 
@@ -170,6 +176,7 @@ export async function loadAssistantInbox(limitPerSection = 8): Promise<Assistant
           status: s.status,
           totalAmount: s.totalAmount === null ? null : Number(s.totalAmount),
           href: `/f/${s.key}/${s.id}`,
+          formKey: s.key,
         })),
     ];
 

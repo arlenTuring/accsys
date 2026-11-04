@@ -14,6 +14,7 @@ import { DraftAttachedFiles, type DraftAttachedFile } from './draft-attached-fil
 
 type Props = {
   draftId: string;
+  conversationId: string;
   /** Change this when the server draft version advances (e.g. after AI patch). */
   refreshKey?: number | string;
   /** @deprecated Remote writes always remount; kept for call-site compatibility. */
@@ -46,6 +47,7 @@ function fmt(v: unknown): string {
 
 export function DraftPanel({
   draftId,
+  conversationId,
   refreshKey = 0,
   onSubmitted,
   onVersionChange,
@@ -213,13 +215,13 @@ export function DraftPanel({
   }
 
   if (loading && !panel) {
-    return <p className="p-4 text-sm text-td-muted">載入草稿…</p>;
+    return <p className="p-4 text-base text-td-muted">載入草稿…</p>;
   }
   if (error || !panel) {
     return (
       <div className="space-y-2 p-4">
-        <p className="text-sm text-amber-800">{error ?? '無法載入草稿'}</p>
-        <button type="button" className="btn-secondary text-sm" onClick={() => void reload()}>
+        <p className="text-base text-amber-800">{error ?? '無法載入草稿'}</p>
+        <button type="button" className="btn-secondary text-base" onClick={() => void reload()}>
           重試載入
         </button>
       </div>
@@ -228,7 +230,7 @@ export function DraftPanel({
 
   if (panel.draft.status === 'submitted') {
     return (
-      <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+      <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-base text-emerald-900">
         此草稿已送出
         {panel.draft.submissionId && (
           <a className="mt-2 block underline" href={`/f/${panel.formKey}/${panel.draft.submissionId}`}>
@@ -258,7 +260,7 @@ export function DraftPanel({
         }
       }}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-td-muted">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-sm text-td-muted">
         <span>
           資料庫欄位 {filledCount} 項 · v{panel.draft.version}
           {loading ? ' · 重新載入中…' : ''}
@@ -273,17 +275,17 @@ export function DraftPanel({
         </button>
       </div>
       {confirming && (
-        <div ref={(el) => el?.scrollIntoView({ block: 'center' })} role="dialog" aria-modal="true" aria-labelledby="submit-confirm-title" className="rounded-lg border-2 border-td-blue bg-white px-4 py-3 text-sm shadow">
+        <div ref={(el) => el?.scrollIntoView({ block: 'center' })} role="dialog" aria-modal="true" aria-labelledby="submit-confirm-title" className="rounded-lg border-2 border-td-blue bg-white px-4 py-3 text-base shadow">
           <p id="submit-confirm-title" className="font-semibold text-td-blue-dark">
             {panel?.resubmit ? `確認重新送出「${panel.name}」？` : `確認正式送出「${panel?.name}」？`}
           </p>
-          <p className="mt-1 text-xs text-td-muted">
+          <p className="mt-1 text-sm text-td-muted">
             {panel?.resubmit
               ? `會更新原單 ${panel.resubmit.formNumber} 並重新進入簽核，不會產生新單號。`
               : '送出後會建立正式單據並進入簽核，不能再以草稿修改。'}
           </p>
           {confirming.rows.length > 0 && (
-            <ul className="mt-2 space-y-0.5 text-xs">
+            <ul className="mt-2 space-y-0.5 text-sm">
               {confirming.rows.map((r) => (
                 <li key={r.label}>
                   <span className="text-td-muted">{r.label}：</span>
@@ -293,17 +295,17 @@ export function DraftPanel({
             </ul>
           )}
           <div className="mt-3 flex gap-2">
-            <button type="button" className="btn-primary text-sm" autoFocus onClick={() => confirming.resolve(true)}>
+            <button type="button" className="btn-primary text-base" autoFocus onClick={() => confirming.resolve(true)}>
               {panel?.resubmit ? '確認重新送出' : '確認送出'}
             </button>
-            <button type="button" className="btn-secondary text-sm" onClick={() => confirming.resolve(false)}>
+            <button type="button" className="btn-secondary text-base" onClick={() => confirming.resolve(false)}>
               返回修改
             </button>
           </div>
         </div>
       )}
       {pendingRemote && (
-        <div role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+        <div role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-base text-amber-950">
           助手已把草稿更新到 v{pendingRemote.version}
           {pendingRemote.fields.length > 0 ? `（${pendingRemote.fields.join('、')}）` : ''}。您有尚未儲存的修改，畫面沒有自動套用。
           按「儲存草稿」會合併不同欄位；同一欄位兩邊都改時會請您選擇。
@@ -313,7 +315,7 @@ export function DraftPanel({
         </div>
       )}
       {conflict && (
-        <div role="alert" className="space-y-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-950">
+        <div role="alert" className="space-y-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-base text-red-950">
           <p>同一欄位已被修改（目前 v{conflict.latest.version}），尚未儲存：</p>
           <ul className="list-disc pl-5">
             {conflict.items.map((c) => (
@@ -325,19 +327,19 @@ export function DraftPanel({
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              className="btn-secondary text-sm"
+              className="btn-secondary text-base"
               onClick={() => void save({ ...conflict.latest.data, ...conflict.mine }, conflict.latest.version, conflict.latest.data).catch(() => {})}
             >
               保留我的值並儲存
             </button>
-            <button type="button" className="btn-secondary text-sm" onClick={() => void reload({ soft: true, fromRemote: true, discardLocal: true })}>
+            <button type="button" className="btn-secondary text-base" onClick={() => void reload({ soft: true, fromRemote: true, discardLocal: true })}>
               改用最新值（放棄我的修改）
             </button>
           </div>
         </div>
       )}
       {remoteNotice && (
-        <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-950">
+        <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-base text-sky-950">
           {remoteNotice}
           <button type="button" className="ml-2 underline" onClick={() => setRemoteNotice(null)}>
             知道了
@@ -345,23 +347,54 @@ export function DraftPanel({
         </div>
       )}
       {panel.resubmit && (
-        <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-base text-amber-950">
           <p className="font-medium">
             補件：原單{' '}
             <a className="underline" href={panel.resubmit.href} target="_blank" rel="noreferrer">
               {panel.resubmit.formNumber}
             </a>
           </p>
-          <p className="mt-1 whitespace-pre-wrap text-xs">退回原因：{panel.resubmit.reason ?? '退回時未提供原因'}</p>
+          <p className="mt-1 whitespace-pre-wrap text-sm">退回原因：{panel.resubmit.reason ?? '退回時未提供原因'}</p>
         </div>
       )}
       {panel.versionMismatch && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-base text-amber-900">
           表單已發布新版本。請重新整理草稿內容後再送出，系統不會把舊預覽默默套到新 schema。
         </div>
       )}
+      <div className="flex flex-wrap items-center gap-2 border-b border-td-border pb-2">
+        <a
+          className="btn-secondary text-base"
+          href={`/applications/drafts/${panel.draft.id}`}
+          target="_blank"
+          rel="noreferrer"
+          onClick={async (e) => {
+            if (dirty) {
+              e.preventDefault();
+              setSaveNote('請先儲存或捨棄未存修改，再開啟自行編輯。');
+              setSaveState('error');
+              return;
+            }
+            // Popup blockers: still leave a clickable link.
+            const opened = window.open(`/applications/drafts/${panel.draft.id}`, '_blank', 'noopener,noreferrer');
+            if (!opened) {
+              e.preventDefault();
+              setSaveNote('無法開啟新分頁，請點連結：自行編輯頁');
+            }
+          }}
+        >
+          自行編輯
+        </a>
+        <span className="text-sm text-td-muted">同一草稿開啟完整編輯頁（新分頁）</span>
+      </div>
       {!panel.schema.sections.some((s) => s.fields.some((f) => f.type === 'attachments')) && (
-        <DraftAttachedFiles draftId={panel.draft.id} files={panel.files} onChanged={() => void reload({ soft: true, fromRemote: true })} />
+        <DraftAttachedFiles
+          draftId={panel.draft.id}
+          draftVersion={panel.draft.version}
+          conversationId={conversationId}
+          files={panel.files}
+          onChanged={() => void reload({ soft: true, fromRemote: true })}
+        />
       )}
       <CustomForm
         key={`${panel.draft.id}:${formMountId}`}
@@ -377,6 +410,7 @@ export function DraftPanel({
           kind: 'ai_draft',
           draftId: panel.draft.id,
           expectedVersion: panel.draft.version,
+          conversationId,
           attachedFiles: panel.files,
           submitLabel: panel.resubmit ? '重新送出' : undefined,
           saveState,
@@ -436,6 +470,10 @@ export function DraftPanel({
       files,
     });
     if (!res.ok) throw new Error(res.error);
+    if (res.warning) {
+      setSaveNote(res.warning);
+      setSaveState('error');
+    }
     onDirtyChange?.(false);
     onSubmitted?.({
       formNumber: res.formNumber,

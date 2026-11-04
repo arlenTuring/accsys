@@ -1,0 +1,26 @@
+{
+  "at": "2026-11-01T10:09:00+08:00",
+  "adc": "application-default login OK (adc_exit:0)",
+  "conversation": "新對話 2026-11-01 ~18:08",
+  "draftId": "d037e8b8-9410-4e2d-a7f6-69a6415561d0",
+  "draftTitle": "出差報告暨旅費報支單（副本）",
+  "cases": [
+    {
+      "id": 1,
+      "user": "請幫我把全部附件刪除",
+      "toolLabel": "移除草稿附件",
+      "result": "已成功清空…共移除 1 個檔案：smoke-pixel.png；右側附件區顯示尚無檔案",
+      "shot": "docs/evidence/shots/20-vertex-remove-all-tool.png",
+      "pass": true
+    },
+    {
+      "id": "11-14",
+      "user": "幫我找一下這次出差有沒有其他同行者一起出差？",
+      "toolLabel": "搜尋同行候選",
+      "result": "說明搜尋範圍 ±3 天（2026-10-23～2026-10-29），未找到候選；未因草稿欄位「無」而略過工具",
+      "shot": "docs/evidence/shots/21-vertex-companion-search-tool.png",
+      "pass": true,
+      "note": "此草稿日期為 10/26；TEST seed 為 11/10，0 候選屬預期。種子日期命中見 companion-nov-smoke.json（8 筆）"
+    }
+  ]
+}

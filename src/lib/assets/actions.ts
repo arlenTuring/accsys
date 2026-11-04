@@ -41,3 +41,59 @@ export async function importAssetsFromExcel(formData: FormData): Promise<{ ok: t
     summary: { ...result.summary, errors: [...errors, ...result.summary.errors].sort((a, b) => a.row - b.row) },
   };
 }
+
+export async function previewPropertyRegisterImport(formData: FormData) {
+  const actor = await getCurrentEmployee();
+  if (!service.canMaintainRegister(actor)) return { ok: false as const, error: '只有財會或管理員可以匯入財產清冊' };
+  const file = formData.get('file');
+  if (!(file instanceof File)) return { ok: false as const, error: '請選擇檔案' };
+  const { MAX_PROPERTY_FILE_BYTES } = await import('@/lib/assets/parse-property-workbook');
+  if (file.size > MAX_PROPERTY_FILE_BYTES) return { ok: false as const, error: '檔案過大' };
+  try {
+    const { buildPropertyImportPreview } = await import('@/lib/assets/property-import');
+    const preview = await buildPropertyImportPreview(Buffer.from(await file.arrayBuffer()));
+    // Do not send every row to the client — summary + unresolved + sample failures.
+    return {
+      ok: true as const,
+      preview: {
+        sheetName: preview.sheetName,
+        counts: preview.counts,
+        unresolvedCustodians: preview.unresolvedCustodians,
+        unresolvedDepartments: preview.unresolvedDepartments,
+        issueCount: preview.issues.length,
+        sampleIssues: preview.issues.slice(0, 20),
+        sampleFails: preview.rows
+          .filter((r) => r.action === 'fail' || r.action === 'skip')
+          .slice(0, 30)
+          .map((r) => ({ row: r.rowNumber, tag: r.tag, action: r.action, reason: r.reason })),
+      },
+      fileName: file.name,
+    };
+  } catch (err) {
+    return {
+      ok: false as const,
+      error: err instanceof Error ? err.message : '無法解析此 Excel',
+    };
+  }
+}
+
+export async function confirmPropertyRegisterImport(formData: FormData) {
+  const actor = await getCurrentEmployee();
+  if (!service.canMaintainRegister(actor)) return { ok: false as const, error: '只有財會或管理員可以匯入財產清冊' };
+  const file = formData.get('file');
+  const idempotencyKey = String(formData.get('idempotencyKey') ?? '');
+  if (!(file instanceof File)) return { ok: false as const, error: '請選擇檔案' };
+  if (!/^[0-9a-f-]{36}$/i.test(idempotencyKey)) return { ok: false as const, error: '缺少匯入識別' };
+  const { confirmPropertyImport } = await import('@/lib/assets/property-import');
+  const res = await confirmPropertyImport({
+    actor,
+    buffer: Buffer.from(await file.arrayBuffer()),
+    idempotencyKey,
+    sourceWorkbook: file.name,
+  });
+  if (!res.ok) return res;
+  revalidatePath('/assets');
+  revalidatePath('/assets/mine');
+  revalidatePath('/assets/import');
+  return res;
+}

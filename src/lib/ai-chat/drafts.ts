@@ -201,6 +201,73 @@ export async function abandonDraft(draftId: string, ownerEmployeeId: string): Pr
   return row ? mapDraft(row) : null;
 }
 
+/** Duplicate an owned draft (data only; attachments are not copied). Same form + conversation. */
+export async function duplicateApplicationDraft(input: {
+  draftId: string;
+  ownerEmployeeId: string;
+  titleSuffix?: string;
+}): Promise<ApplicationDraft | null> {
+  const source = await getDraftForOwner(input.draftId, input.ownerEmployeeId);
+  if (!source || source.status === 'abandoned') return null;
+  const published = await resolvePublishedForm(source.formDefinitionKey, input.ownerEmployeeId);
+  if (!published) return null;
+  const db = getDb();
+  const title = `${source.title}${input.titleSuffix ?? '（副本）'}`.slice(0, 160);
+  const [row] = await db
+    .insert(aiApplicationDrafts)
+    .values({
+      conversationId: source.conversationId,
+      ownerEmployeeId: input.ownerEmployeeId,
+      formDefinitionKey: source.formDefinitionKey,
+      formVersionId: published.versionId,
+      title,
+      data: source.data,
+      version: 1,
+      status: 'draft',
+      createIdempotencyKey: `dup:${source.id}:${Date.now()}`,
+    })
+    .returning();
+  if (!row) return null;
+  await db
+    .insert(aiConversationDraftLinks)
+    .values({ conversationId: source.conversationId, draftId: row.id, ownerEmployeeId: input.ownerEmployeeId })
+    .onConflictDoNothing();
+  await recordAudit(db, {
+    actorEmployeeId: input.ownerEmployeeId,
+    action: 'ai_draft.duplicated',
+    entityType: 'ai_application_draft',
+    entityId: row.id,
+    details: { sourceDraftId: source.id },
+  });
+  return mapDraft(row);
+}
+
+export async function renameApplicationDraft(input: {
+  draftId: string;
+  ownerEmployeeId: string;
+  title: string;
+  expectedVersion: number;
+}): Promise<ApplicationDraft | { conflict: ApplicationDraft } | null> {
+  const title = input.title.trim().slice(0, 160);
+  if (!title) return null;
+  const existing = await getDraftForOwner(input.draftId, input.ownerEmployeeId);
+  if (!existing || existing.status !== 'draft') return null;
+  if (existing.version !== input.expectedVersion) return { conflict: existing };
+  const db = getDb();
+  const [row] = await db
+    .update(aiApplicationDrafts)
+    .set({ title, version: sql`${aiApplicationDrafts.version} + 1`, updatedAt: sql`now()` })
+    .where(
+      and(
+        eq(aiApplicationDrafts.id, input.draftId),
+        eq(aiApplicationDrafts.ownerEmployeeId, input.ownerEmployeeId),
+        eq(aiApplicationDrafts.version, input.expectedVersion)
+      )
+    )
+    .returning();
+  return row ? mapDraft(row) : null;
+}
+
 export function mapDraft(row: {
   id: string;
   conversationId: string;
@@ -692,42 +759,16 @@ export async function submitApplicationDraft(input: {
     );
 
   // Copy linked approved PDF snapshots + draft files onto the formal submission.
+  // Working version only (active edit replaces the upload for the form; do not double-attach).
   let copyFailures = 0;
   if (!result.replayed) {
-    const { readSnapshotBytes } = await import('./approved-pdf');
-    const { readEditOutput } = await import('./file-edits');
-    const { uploadAttachmentFor } = await import('@/lib/attachments/service');
-    const actor = { id: input.ownerEmployeeId, role: employee.role };
-    const put = async (file: File) => {
-      try {
-        const r = await uploadAttachmentFor(actor, 'custom', result.submissionId, file);
-        if (!r.ok) copyFailures += 1;
-      } catch (err) {
-        copyFailures += 1;
-        console.error('[ai-chat] copy draft attachment failed', err instanceof Error ? err.message : err);
-      }
-    };
-    for (const f of files) await put(f);
-    for (const s of snaps) {
-      const file = await readSnapshotBytes(s.snapshotId);
-      if (file) await put(new File([new Uint8Array(file.bytes)], s.fileName, { type: 'application/pdf' }));
-      else copyFailures += 1;
-    }
-    for (const meta of draftFiles) {
-      const file = await readDraftFileBytes(draft.id, meta.id);
-      if (!file) {
-        copyFailures += 1;
-        continue;
-      }
-      // Copies, so later edits of the draft cannot change what was submitted.
-      const edited = file.activeEditId ? await readEditOutput(file.activeEditId, input.ownerEmployeeId) : null;
-      if (edited) {
-        const ext = edited.mimeType === 'image/png' ? 'png' : 'jpg';
-        const name = `${file.fileName.replace(/\.[^.]+$/, '')}（編輯版）.${ext}`;
-        await put(new File([new Uint8Array(edited.bytes)], name, { type: edited.mimeType }));
-      }
-      await put(new File([new Uint8Array(file.bytes)], file.fileName, { type: file.mimeType }));
-    }
+    copyFailures = await copyDraftAttachmentsToSubmission({
+      ownerEmployeeId: input.ownerEmployeeId,
+      ownerRole: employee.role,
+      draftId: draft.id,
+      submissionId: result.submissionId,
+      extraFiles: files,
+    });
   }
 
   return {
@@ -738,4 +779,115 @@ export async function submitApplicationDraft(input: {
     replayed: result.replayed,
     copyFailures,
   };
+}
+
+async function putWithRetry(
+  actor: { id: string; role: string },
+  submissionId: string,
+  file: File,
+  attempts = 3
+): Promise<boolean> {
+  const { uploadAttachmentFor } = await import('@/lib/attachments/service');
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const r = await uploadAttachmentFor(actor, 'custom', submissionId, file);
+      if (r.ok) return true;
+      console.error('[ai-chat] copy attachment attempt failed', r.error);
+    } catch (err) {
+      console.error('[ai-chat] copy draft attachment failed', err instanceof Error ? err.message : err);
+    }
+    if (i + 1 < attempts) await new Promise((r) => setTimeout(r, 200 * (i + 1)));
+  }
+  return false;
+}
+
+/** Copy draft-linked files onto a custom form submission. Returns failure count. */
+export async function copyDraftAttachmentsToSubmission(input: {
+  ownerEmployeeId: string;
+  ownerRole: string;
+  draftId: string;
+  submissionId: string;
+  extraFiles?: File[];
+}): Promise<number> {
+  const { listDraftSnapshots } = await import('./attach-approved');
+  const { listDraftFiles, readDraftFileBytes } = await import('./attach-staged');
+  const { readSnapshotBytes } = await import('./approved-pdf');
+  const { readEditOutput } = await import('./file-edits');
+  const actor = { id: input.ownerEmployeeId, role: input.ownerRole };
+  let failures = 0;
+
+  for (const f of input.extraFiles ?? []) {
+    if (!(await putWithRetry(actor, input.submissionId, f))) failures += 1;
+  }
+
+  const snaps = await listDraftSnapshots(input.draftId, input.ownerEmployeeId);
+  for (const s of snaps) {
+    const file = await readSnapshotBytes(s.snapshotId);
+    if (!file) {
+      failures += 1;
+      continue;
+    }
+    const ok = await putWithRetry(
+      actor,
+      input.submissionId,
+      new File([new Uint8Array(file.bytes)], s.fileName, { type: 'application/pdf' })
+    );
+    if (!ok) failures += 1;
+  }
+
+  const draftFiles = await listDraftFiles(input.draftId, input.ownerEmployeeId);
+  for (const meta of draftFiles) {
+    const file = await readDraftFileBytes(input.draftId, meta.id);
+    if (!file) {
+      failures += 1;
+      continue;
+    }
+    const edited = file.activeEditId ? await readEditOutput(file.activeEditId, input.ownerEmployeeId) : null;
+    const working = edited
+      ? {
+          bytes: edited.bytes,
+          mimeType: edited.mimeType,
+          fileName: `${file.fileName.replace(/\.[^.]+$/, '')}.${edited.mimeType === 'image/png' ? 'png' : 'jpg'}`,
+        }
+      : { bytes: file.bytes, mimeType: file.mimeType, fileName: file.fileName };
+    const ok = await putWithRetry(
+      actor,
+      input.submissionId,
+      new File([new Uint8Array(working.bytes)], working.fileName, { type: working.mimeType })
+    );
+    if (!ok) failures += 1;
+  }
+
+  if (failures > 0) {
+    const db = getDb();
+    await recordAudit(db, {
+      actorEmployeeId: input.ownerEmployeeId,
+      action: 'ai_draft.attachment_copy_partial',
+      entityType: 'form_submission',
+      entityId: input.submissionId,
+      details: { draftId: input.draftId, copyFailures: failures },
+    });
+  }
+  return failures;
+}
+
+/**
+ * Retry copying draft attachments onto an already-submitted form (repair after partial failure).
+ */
+export async function repairDraftAttachmentCopy(input: {
+  draftId: string;
+  ownerEmployeeId: string;
+  ownerRole: string;
+}): Promise<{ ok: true; copyFailures: number; submissionId: string } | { ok: false; error: string }> {
+  const draft = await getDraftForOwner(input.draftId, input.ownerEmployeeId);
+  if (!draft?.submissionId || draft.status !== 'submitted') {
+    return { ok: false, error: '僅已送出且有單據的草稿可重試附件複製' };
+  }
+  const failures = await copyDraftAttachmentsToSubmission({
+    ownerEmployeeId: input.ownerEmployeeId,
+    ownerRole: input.ownerRole,
+    draftId: draft.id,
+    submissionId: draft.submissionId,
+  });
+  return { ok: true, copyFailures: failures, submissionId: draft.submissionId };
 }

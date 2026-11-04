@@ -6,11 +6,11 @@ import '@fontsource/noto-sans-tc/700.css';
 import './globals.css';
 import { getPendingApprovalCount } from '@/lib/approvals/pending-count';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { getSidebarEmployeeProfile } from '@/lib/auth/sidebar-profile';
 import { getFormCatalog } from '@/lib/forms/catalog-server';
+import { AppShell } from '@/app/components/app-shell';
 import { DialogHost } from '@/app/components/dialog';
 import { GlobalAssistantHost } from '@/app/components/global-assistant';
-import { TopNav } from '@/app/components/top-nav';
-import type { MenuEmployee } from '@/app/components/user-menu';
 
 export const metadata: Metadata = {
   title: 'ACCSYS · 台灣智慧駕駛 電子採購與簽核',
@@ -19,28 +19,30 @@ export const metadata: Metadata = {
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const employee = await getCurrentEmployee();
-  const [pendingApprovalCount, categories] = employee ? await Promise.all([getPendingApprovalCount(), getFormCatalog()]) : [0, []];
-  // Only what the menu shows is serialized to the browser (no session id or login time).
-  const menuEmployee: MenuEmployee | null = employee && {
-    name: employee.name,
-    email: employee.email,
-    employeeCode: employee.employeeCode,
-    title: employee.title,
-    departmentName: employee.departmentName,
-    departmentCode: employee.departmentCode,
-    role: employee.role,
-    permissions: employee.permissions,
-    isGeneralManager: employee.isGeneralManager,
-    isChairman: employee.isChairman,
-  };
+  const [pendingApprovalCount, categories, sidebarProfile] = employee
+    ? await Promise.all([
+        getPendingApprovalCount(),
+        getFormCatalog(),
+        getSidebarEmployeeProfile(employee),
+      ])
+    : [0, [], null];
 
   return (
     <html lang="zh-Hant" suppressHydrationWarning>
       <body className="font-sans" suppressHydrationWarning>
-        {menuEmployee && <TopNav employee={menuEmployee} pendingApprovalCount={pendingApprovalCount} categories={categories} />}
-        {children}
+        {sidebarProfile ? (
+          <AppShell
+            profile={sidebarProfile}
+            pendingApprovalCount={pendingApprovalCount}
+            categories={categories}
+          >
+            {children}
+          </AppShell>
+        ) : (
+          children
+        )}
         <DialogHost />
-        <GlobalAssistantHost enabled={Boolean(menuEmployee)} />
+        <GlobalAssistantHost enabled={Boolean(sidebarProfile)} />
       </body>
     </html>
   );

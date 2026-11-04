@@ -84,6 +84,9 @@ docker build --target migrator -t accsys-migrate:<commit> .
 - 有公司 registry：push 後以 `accsys-app@sha256:<digest>` 填入 `accsys.env`。
 - 沒有 registry：`docker save accsys-app:<commit> accsys-migrate:<commit> | gzip > accsys-<commit>.tar.gz`，記錄 `sha256sum`，傳到主機後核對再 `docker load`；`accsys.env` 填 `accsys-app:<commit>`，並以 `docker image inspect --format '{{.Id}}'` 確認與建置機相同。
 - ClamAV、nginx、PostgreSQL 映像也以 digest 固定（ClamAV 在 `accsys.env` 的 `ACCSYS_CLAMAV_IMAGE` 指定；用 `clamav/clamav-debian`，它有 amd64 與 arm64，`clamav/clamav` 只有 amd64）。ClamAV 載入病毒碼約需 1.5–3 GB 記憶體。
+- 目前驗證過 `clamav/clamav-debian:1.4.6`（1.4 LTS，修補支援到 2027-08-15）；舊 patch 版可能被擋下病毒碼更新，請定期更新。
+- app 映像內含 LibreOffice 與 `fonts-noto-cjk`，用於 Office 預覽，映像約 880 MB；因此 app 的 `mem_limit` 為 2g，`/tmp` 為 256 MB。
+- 授權：ClamAV（GPLv2）、LibreOffice（MPL 2.0）、Noto CJK（OFL）、Linux 上的 Docker Engine（Apache 2.0）都免費，不需購買授權。主機請裝 Docker Engine，不要用 Docker Desktop：員工 250 人以上或年營收 1000 萬美元以上的公司，Docker Desktop 需付費訂閱。
 
 ## 首次安裝
 

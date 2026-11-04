@@ -42,7 +42,10 @@ export async function POST(request: Request) {
     );
   }
 
-  // Deterministic checks only (real file type, size, security scan). The AI check
-  // starts when the person presses 確認並檢查, never on upload.
+  // After security scan passes, start AI analysis in the background (no confirm gate).
+  if (result.staged.scanStatus === 'ready') {
+    const { startStagedChecks } = await import('@/lib/ai-chat/staged-invoice');
+    void startStagedChecks(employee.id, [result.staged.id]).catch(() => undefined);
+  }
   return NextResponse.json({ ok: true, staged: result.staged, scanStatus: result.staged.scanStatus });
 }

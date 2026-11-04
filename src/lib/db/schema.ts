@@ -986,23 +986,45 @@ export const assets = pgTable(
   'assets',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    /** 財產編號 on the property label. */
+    /** 財產編號 on the property label — always text (leading zeros / hyphens). */
     tag: text('tag').notNull().unique('assets_tag_key'),
     name: text('name').notNull(),
+    /** 帳載數量 (book quantity). Physical count lives on inventory lines. */
     quantity: integer('quantity').notNull().default(1),
     custodianEmployeeId: uuid('custodian_employee_id').notNull(),
+    /**
+     * 保管部門 — independent of the custodian's current job department.
+     * Employee transfers must not silently move asset custody department.
+     */
+    custodyDepartmentId: uuid('custody_department_id'),
     location: text('location').notNull().default(''),
     /** in_custody / lent are in the register; merged / sold / scrapped have left it. */
     status: text('status').notNull().default('in_custody'),
     remark: text('remark'),
+    /** 項目種類 */
+    itemKind: text('item_kind'),
+    /** 說明 */
+    description: text('description'),
+    /** 單位 */
+    unit: text('unit'),
+    /**
+     * Values for active custom / mapped configurable fields, keyed by
+     * asset_field_definitions.id. Validated against definitions server-side.
+     */
+    extraValues: jsonb('extra_values').$type<Record<string, unknown>>().notNull().default({}),
+    fieldSchemaVersion: integer('field_schema_version').notNull().default(1),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t): PgTableExtraConfigValue[] => [
     fk('assets_custodian_employee_id_fkey', t.custodianEmployeeId, employees.id),
+    fk('assets_custody_department_id_fkey', t.custodyDepartmentId, departments.id),
     check('assets_quantity_check', sql`quantity > 0`),
     check('assets_status_check', sql`status in (${sqlList(ASSET_STATUSES)})`),
+    check('assets_field_schema_version_check', sql`field_schema_version > 0`),
+    check('assets_extra_values_object_check', sql`jsonb_typeof(${t.extraValues}) = 'object'`),
     index('assets_custodian_employee_id_idx').on(t.custodianEmployeeId),
+    index('assets_custody_department_id_idx').on(t.custodyDepartmentId),
   ]
 );
 
@@ -1798,7 +1820,7 @@ export const aiChatStagedAttachments = pgTable(
     analysisStatus: text('analysis_status'),
     analysisResult: jsonb('analysis_result').$type<Record<string, unknown> | null>(),
     analysisCompletedAt: timestamp('analysis_completed_at', { withTimezone: true }),
-    /** Set when the person pressed 確認並檢查; no AI analysis runs before this. */
+    /** When AI analysis started (after security scan; no confirm gate). */
     analysisStartedAt: timestamp('analysis_started_at', { withTimezone: true }),
     /** What the stored result was computed from: file content, company profile, rules. */
     analysisContentSha256: text('analysis_content_sha256'),
@@ -1806,7 +1828,7 @@ export const aiChatStagedAttachments = pgTable(
     analysisRulesVersion: text('analysis_rules_version'),
     /** Current photo edit (ai_file_edit_versions); null = the original as uploaded. */
     activeEditId: uuid('active_edit_id'),
-    /** Draft chosen at 確認並檢查. */
+    /** Optional draft pinned when analysis/attach was requested. */
     targetDraftId: uuid('target_draft_id'),
     /** Set once sent to the model with a message: no longer a pending file of the composer. */
     sentAt: timestamp('sent_at', { withTimezone: true }),
@@ -2186,3 +2208,494 @@ export const aiFileEditVersions = pgTable(
     index('ai_file_edit_versions_source_idx').on(t.sourceId),
   ]
 );
+
+// ---------------------------------------------------------------------------
+// Asset field definitions, inventory batches, and import / purge jobs.
+// Configurable columns never use dynamic DDL — values live in assets.extra_values
+// (asset scope) or asset_inventory_lines.answers (inventory scope).
+// ---------------------------------------------------------------------------
+
+export const ASSET_FIELD_TYPES = [
+  'text',
+  'textarea',
+  'integer',
+  'decimal',
+  'date',
+  'select',
+  'multiselect',
+  'tristate',
+  'employee',
+  'department',
+  'project',
+] as const;
+export type AssetFieldType = (typeof ASSET_FIELD_TYPES)[number];
+
+export const ASSET_FIELD_SECTIONS = [
+  'basic',
+  'accounting',
+  'custody',
+  'status_qty',
+  'notes',
+  'inventory',
+  'custom',
+] as const;
+export type AssetFieldSection = (typeof ASSET_FIELD_SECTIONS)[number];
+
+export const assetFieldDefinitions = pgTable(
+  'asset_field_definitions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** Immutable machine key; rename changes label only. */
+    stableKey: text('stable_key').notNull(),
+    label: text('label').notNull(),
+    help: text('help').notNull().default(''),
+    fieldType: text('field_type').notNull(),
+    section: text('section').notNull(),
+    sortOrder: integer('sort_order').notNull().default(0),
+    required: boolean('required').notNull().default(false),
+    showInList: boolean('show_in_list').notNull().default(false),
+    searchable: boolean('searchable').notNull().default(false),
+    filterable: boolean('filterable').notNull().default(false),
+    exportable: boolean('exportable').notNull().default(true),
+    status: text('status').notNull().default('active'),
+    options: jsonb('options').$type<Array<{ id: string; label: string; active?: boolean }>>().notNull().default([]),
+    viewPermission: text('view_permission'),
+    editPermission: text('edit_permission'),
+    /** When set, value is mirrored to a core assets column (e.g. item_kind). */
+    systemBinding: text('system_binding'),
+    storageScope: text('storage_scope').notNull().default('asset'),
+    version: integer('version').notNull().default(1),
+    hiddenAt: timestamp('hidden_at', { withTimezone: true }),
+    hiddenByEmployeeId: uuid('hidden_by_employee_id'),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    deletedByEmployeeId: uuid('deleted_by_employee_id'),
+    deleteJobId: uuid('delete_job_id'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('asset_field_definitions_stable_key_key').on(t.stableKey),
+    check('asset_field_definitions_stable_key_check', sql`stable_key ~ '^[a-z][a-z0-9_]{0,63}$'`),
+    check('asset_field_definitions_label_check', sql`char_length(btrim(label)) between 1 and 80`),
+    check(
+      'asset_field_definitions_type_check',
+      sql`field_type in (${sqlList(ASSET_FIELD_TYPES)})`
+    ),
+    check(
+      'asset_field_definitions_section_check',
+      sql`section in (${sqlList(ASSET_FIELD_SECTIONS)})`
+    ),
+    check('asset_field_definitions_status_check', sql`status in ('active', 'hidden', 'deleted')`),
+    check('asset_field_definitions_scope_check', sql`storage_scope in ('asset', 'inventory')`),
+    check('asset_field_definitions_version_check', sql`version > 0`),
+    check('asset_field_definitions_options_array_check', sql`jsonb_typeof(${t.options}) = 'array'`),
+    fk('asset_field_definitions_hidden_by_fkey', t.hiddenByEmployeeId, employees.id),
+    fk('asset_field_definitions_deleted_by_fkey', t.deletedByEmployeeId, employees.id),
+    index('asset_field_definitions_status_idx').on(t.status),
+    index('asset_field_definitions_section_sort_idx').on(t.section, t.sortOrder),
+  ]
+);
+
+export const assetInventoryBatches = pgTable(
+  'asset_inventory_batches',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    label: text('label').notNull(),
+    sourceWorkbook: text('source_workbook'),
+    sourceSheet: text('source_sheet'),
+    asOfDate: date('as_of_date'),
+    status: text('status').notNull().default('open'),
+    rowCount: integer('row_count').notNull().default(0),
+    createdByEmployeeId: uuid('created_by_employee_id').notNull(),
+    lockedAt: timestamp('locked_at', { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    check('asset_inventory_batches_status_check', sql`status in ('open', 'locked')`),
+    check('asset_inventory_batches_label_check', sql`char_length(btrim(label)) between 1 and 160`),
+    fk('asset_inventory_batches_created_by_fkey', t.createdByEmployeeId, employees.id),
+  ]
+);
+
+export const assetInventoryLines = pgTable(
+  'asset_inventory_lines',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    batchId: uuid('batch_id').notNull(),
+    assetId: uuid('asset_id'),
+    assetTag: text('asset_tag').notNull(),
+    physicalQuantity: integer('physical_quantity'),
+    answers: jsonb('answers').$type<Record<string, unknown>>().notNull().default({}),
+    sourceRow: integer('source_row'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('asset_inventory_lines_batch_tag_key').on(t.batchId, t.assetTag),
+    check('asset_inventory_lines_answers_object_check', sql`jsonb_typeof(${t.answers}) = 'object'`),
+    fk('asset_inventory_lines_batch_fkey', t.batchId, assetInventoryBatches.id).onDelete('cascade'),
+    fk('asset_inventory_lines_asset_fkey', t.assetId, assets.id).onDelete('set null'),
+    index('asset_inventory_lines_asset_id_idx').on(t.assetId),
+  ]
+);
+
+export const assetImportBatches = pgTable(
+  'asset_import_batches',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    sourceWorkbook: text('source_workbook').notNull(),
+    sourceSheet: text('source_sheet').notNull(),
+    mapping: jsonb('mapping').$type<Record<string, unknown>>().notNull().default({}),
+    status: text('status').notNull().default('draft'),
+    counts: jsonb('counts').$type<Record<string, number>>().notNull().default({}),
+    inventoryBatchId: uuid('inventory_batch_id'),
+    createdByEmployeeId: uuid('created_by_employee_id').notNull(),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('asset_import_batches_idempotency_key').on(t.idempotencyKey),
+    check('asset_import_batches_status_check', sql`status in ('draft', 'validated', 'confirmed', 'failed')`),
+    fk('asset_import_batches_created_by_fkey', t.createdByEmployeeId, employees.id),
+    fk('asset_import_batches_inventory_fkey', t.inventoryBatchId, assetInventoryBatches.id).onDelete('set null'),
+  ]
+);
+
+export const assetFieldPurgeJobs = pgTable(
+  'asset_field_purge_jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    fieldDefinitionId: uuid('field_definition_id').notNull(),
+    status: text('status').notNull().default('queued'),
+    requestedByEmployeeId: uuid('requested_by_employee_id').notNull(),
+    expectedVersion: integer('expected_version').notNull(),
+    progress: jsonb('progress').$type<Record<string, unknown>>().notNull().default({}),
+    backupPath: text('backup_path'),
+    error: text('error'),
+    idempotencyKey: text('idempotency_key').notNull(),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('asset_field_purge_jobs_idempotency_key').on(t.idempotencyKey),
+    check(
+      'asset_field_purge_jobs_status_check',
+      sql`status in ('queued', 'running', 'completed', 'failed', 'cancelled')`
+    ),
+    fk('asset_field_purge_jobs_field_fkey', t.fieldDefinitionId, assetFieldDefinitions.id),
+    fk('asset_field_purge_jobs_requested_by_fkey', t.requestedByEmployeeId, employees.id),
+  ]
+);
+
+// ---------------------------------------------------------------------------
+// Company announcements + named surveys
+// ---------------------------------------------------------------------------
+
+export const companyAnnouncements = pgTable(
+  'company_announcements',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    category: text('category').notNull().default('general'),
+    audienceType: text('audience_type').notNull().default('company'),
+    audienceDepartmentIds: jsonb('audience_department_ids').$type<string[]>().notNull().default([]),
+    audienceEmployeeIds: jsonb('audience_employee_ids').$type<string[]>().notNull().default([]),
+    status: text('status').notNull().default('draft'),
+    priority: text('priority').notNull().default('normal'),
+    pinned: boolean('pinned').notNull().default(false),
+    version: integer('version').notNull().default(1),
+    summaryCache: text('summary_cache'),
+    summarySourceVersion: integer('summary_source_version'),
+    publishAt: timestamp('publish_at', { withTimezone: true }),
+    expireAt: timestamp('expire_at', { withTimezone: true }),
+    publishedAt: timestamp('published_at', { withTimezone: true }),
+    withdrawnAt: timestamp('withdrawn_at', { withTimezone: true }),
+    createdByEmployeeId: uuid('created_by_employee_id').notNull(),
+    updatedByEmployeeId: uuid('updated_by_employee_id'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    check('company_announcements_title_check', sql`char_length(btrim(${t.title})) between 1 and 200`),
+    check('company_announcements_body_check', sql`char_length(${t.body}) between 1 and 50000`),
+    check('company_announcements_audience_check', sql`${t.audienceType} in ('company', 'department', 'employees')`),
+    check(
+      'company_announcements_status_check',
+      sql`${t.status} in ('draft', 'scheduled', 'published', 'expired', 'withdrawn')`
+    ),
+    check('company_announcements_priority_check', sql`${t.priority} in ('normal', 'important', 'urgent')`),
+    check('company_announcements_version_check', sql`${t.version} > 0`),
+    check('company_announcements_dept_ids_array_check', sql`jsonb_typeof(${t.audienceDepartmentIds}) = 'array'`),
+    check('company_announcements_emp_ids_array_check', sql`jsonb_typeof(${t.audienceEmployeeIds}) = 'array'`),
+    fk('company_announcements_created_by_fkey', t.createdByEmployeeId, employees.id),
+    fk('company_announcements_updated_by_fkey', t.updatedByEmployeeId, employees.id),
+    index('company_announcements_status_publish_idx').on(t.status, t.publishAt),
+  ]
+);
+
+export const companyAnnouncementReads = pgTable(
+  'company_announcement_reads',
+  {
+    announcementId: uuid('announcement_id').notNull(),
+    employeeId: uuid('employee_id').notNull(),
+    readAt: timestamp('read_at', { withTimezone: true }),
+    acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    primaryKey({ columns: [t.announcementId, t.employeeId], name: 'company_announcement_reads_pkey' }),
+    fk('company_announcement_reads_announcement_fkey', t.announcementId, companyAnnouncements.id).onDelete('cascade'),
+    fk('company_announcement_reads_employee_fkey', t.employeeId, employees.id).onDelete('cascade'),
+    index('company_announcement_reads_employee_idx').on(t.employeeId),
+  ]
+);
+
+export const companyAnnouncementVersions = pgTable(
+  'company_announcement_versions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    announcementId: uuid('announcement_id').notNull(),
+    version: integer('version').notNull(),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    snapshot: jsonb('snapshot').$type<Record<string, unknown>>().notNull().default({}),
+    createdByEmployeeId: uuid('created_by_employee_id').notNull(),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('company_announcement_versions_unique').on(t.announcementId, t.version),
+    fk('company_announcement_versions_announcement_fkey', t.announcementId, companyAnnouncements.id).onDelete(
+      'cascade'
+    ),
+    fk('company_announcement_versions_created_by_fkey', t.createdByEmployeeId, employees.id),
+  ]
+);
+
+/** Files linked to a company announcement (storage/scan aligned with form attachments). */
+export const companyAnnouncementAttachments = pgTable(
+  'company_announcement_attachments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    announcementId: uuid('announcement_id').notNull(),
+    uploadedByEmployeeId: uuid('uploaded_by_employee_id').notNull(),
+    storagePath: text('storage_path').notNull(),
+    fileName: text('file_name').notNull(),
+    mimeType: text('mime_type').notNull(),
+    fileSizeBytes: bigint('file_size_bytes', { mode: 'number' }).notNull(),
+    sha256: text('sha256'),
+    scanStatus: text('scan_status').notNull().default('pending'),
+    scannedAt: timestamp('scanned_at', { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('company_announcement_attachments_path_uidx').on(t.storagePath),
+    fk('company_announcement_attachments_announcement_fkey', t.announcementId, companyAnnouncements.id).onDelete(
+      'cascade'
+    ),
+    fk('company_announcement_attachments_uploader_fkey', t.uploadedByEmployeeId, employees.id),
+    check(
+      'company_announcement_attachments_size_check',
+      sql`file_size_bytes > 0 AND file_size_bytes <= 52428800`
+    ),
+    check(
+      'company_announcement_attachments_scan_check',
+      sql`scan_status in ('pending', 'clean', 'infected', 'scan_failed', 'unscanned')`
+    ),
+    index('company_announcement_attachments_announcement_idx').on(t.announcementId, t.createdAt),
+  ]
+);
+
+export const companySurveys = pgTable(
+  'company_surveys',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    title: text('title').notNull(),
+    description: text('description').notNull().default(''),
+    status: text('status').notNull().default('draft'),
+    audienceType: text('audience_type').notNull().default('company'),
+    audienceDepartmentIds: jsonb('audience_department_ids').$type<string[]>().notNull().default([]),
+    audienceEmployeeIds: jsonb('audience_employee_ids').$type<string[]>().notNull().default([]),
+    opensAt: timestamp('opens_at', { withTimezone: true }),
+    closesAt: timestamp('closes_at', { withTimezone: true }),
+    version: integer('version').notNull().default(1),
+    publishedQuestionSnapshot: jsonb('published_question_snapshot').$type<unknown>(),
+    createdByEmployeeId: uuid('created_by_employee_id').notNull(),
+    updatedByEmployeeId: uuid('updated_by_employee_id'),
+    publishedAt: timestamp('published_at', { withTimezone: true }),
+    closedAt: timestamp('closed_at', { withTimezone: true }),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    check('company_surveys_title_check', sql`char_length(btrim(${t.title})) between 1 and 200`),
+    check('company_surveys_status_check', sql`${t.status} in ('draft', 'scheduled', 'open', 'closed', 'archived')`),
+    check('company_surveys_audience_check', sql`${t.audienceType} in ('company', 'department', 'employees')`),
+    check('company_surveys_version_check', sql`${t.version} > 0`),
+    check('company_surveys_dept_ids_array_check', sql`jsonb_typeof(${t.audienceDepartmentIds}) = 'array'`),
+    check('company_surveys_emp_ids_array_check', sql`jsonb_typeof(${t.audienceEmployeeIds}) = 'array'`),
+    fk('company_surveys_created_by_fkey', t.createdByEmployeeId, employees.id),
+    fk('company_surveys_updated_by_fkey', t.updatedByEmployeeId, employees.id),
+    index('company_surveys_status_idx').on(t.status),
+  ]
+);
+
+export const companySurveyQuestions = pgTable(
+  'company_survey_questions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    surveyId: uuid('survey_id').notNull(),
+    stableKey: text('stable_key').notNull(),
+    prompt: text('prompt').notNull(),
+    help: text('help').notNull().default(''),
+    questionType: text('question_type').notNull(),
+    required: boolean('required').notNull().default(false),
+    sortOrder: integer('sort_order').notNull().default(0),
+    options: jsonb('options').$type<Array<{ id: string; label: string }>>().notNull().default([]),
+    validation: jsonb('validation').$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    check('company_survey_questions_stable_key_check', sql`${t.stableKey} ~ '^[a-z][a-z0-9_]{0,63}$'`),
+    check(
+      'company_survey_questions_type_check',
+      sql`${t.questionType} in ('single_choice', 'multi_choice', 'short_text', 'long_text', 'number', 'date', 'rating')`
+    ),
+    check('company_survey_questions_options_array_check', sql`jsonb_typeof(${t.options}) = 'array'`),
+    unique('company_survey_questions_survey_key_unique').on(t.surveyId, t.stableKey),
+    fk('company_survey_questions_survey_fkey', t.surveyId, companySurveys.id).onDelete('cascade'),
+    index('company_survey_questions_survey_sort_idx').on(t.surveyId, t.sortOrder),
+  ]
+);
+
+/** Images / videos shown with a survey question (not respondent uploads). */
+export const companySurveyQuestionMedia = pgTable(
+  'company_survey_question_media',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    surveyId: uuid('survey_id').notNull(),
+    questionId: uuid('question_id').notNull(),
+    uploadedByEmployeeId: uuid('uploaded_by_employee_id').notNull(),
+    storagePath: text('storage_path').notNull(),
+    fileName: text('file_name').notNull(),
+    mimeType: text('mime_type').notNull(),
+    fileSizeBytes: bigint('file_size_bytes', { mode: 'number' }).notNull(),
+    sha256: text('sha256'),
+    scanStatus: text('scan_status').notNull().default('pending'),
+    scannedAt: timestamp('scanned_at', { withTimezone: true }),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('company_survey_question_media_path_uidx').on(t.storagePath),
+    fk('company_survey_question_media_survey_fkey', t.surveyId, companySurveys.id).onDelete('cascade'),
+    fk('company_survey_question_media_question_fkey', t.questionId, companySurveyQuestions.id).onDelete('cascade'),
+    fk('company_survey_question_media_uploader_fkey', t.uploadedByEmployeeId, employees.id),
+    check(
+      'company_survey_question_media_size_check',
+      sql`file_size_bytes > 0 AND file_size_bytes <= 52428800`
+    ),
+    check(
+      'company_survey_question_media_mime_check',
+      sql`${t.mimeType} in ('image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/webm')`
+    ),
+    check(
+      'company_survey_question_media_scan_check',
+      sql`scan_status in ('pending', 'clean', 'infected', 'scan_failed', 'unscanned')`
+    ),
+    index('company_survey_question_media_question_idx').on(t.questionId, t.sortOrder, t.createdAt),
+    index('company_survey_question_media_survey_idx').on(t.surveyId),
+  ]
+);
+
+export const companySurveyResponses = pgTable(
+  'company_survey_responses',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    surveyId: uuid('survey_id').notNull(),
+    employeeId: uuid('employee_id').notNull(),
+    status: text('status').notNull().default('draft'),
+    answers: jsonb('answers').$type<Record<string, unknown>>().notNull().default({}),
+    surveyVersion: integer('survey_version').notNull().default(1),
+    submittedAt: timestamp('submitted_at', { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    check('company_survey_responses_status_check', sql`${t.status} in ('draft', 'submitted')`),
+    check('company_survey_responses_answers_object_check', sql`jsonb_typeof(${t.answers}) = 'object'`),
+    unique('company_survey_responses_one_per_employee').on(t.surveyId, t.employeeId),
+    fk('company_survey_responses_survey_fkey', t.surveyId, companySurveys.id).onDelete('cascade'),
+    fk('company_survey_responses_employee_fkey', t.employeeId, employees.id).onDelete('cascade'),
+    index('company_survey_responses_survey_status_idx').on(t.surveyId, t.status),
+  ]
+);
+
+// ---------------------------------------------------------------------------
+// Company Regulations & Policies (公司規章與管理辦法)
+// ---------------------------------------------------------------------------
+
+export const companyRegulations = pgTable(
+  'company_regulations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    code: text('code').notNull(),
+    title: text('title').notNull(),
+    category: text('category').notNull().default('general'),
+    versionLabel: text('version_label').notNull().default('1.0'),
+    effectiveDate: text('effective_date').notNull().default(''),
+    ownerDepartment: text('owner_department').notNull().default('管理部'),
+    approverTitle: text('approver_title').notNull().default('董事長'),
+    summary: text('summary').notNull().default(''),
+    body: text('body').notNull(),
+    relatedForms: jsonb('related_forms').$type<string[]>().notNull().default([]),
+    driveFileId: text('drive_file_id'),
+    driveUrl: text('drive_url'),
+    driveFileName: text('drive_file_name'),
+    status: text('status').notNull().default('published'),
+    pinned: boolean('pinned').notNull().default(false),
+    sortOrder: integer('sort_order').notNull().default(0),
+    revisionNumber: integer('revision_number').notNull().default(1),
+    createdByEmployeeId: uuid('created_by_employee_id'),
+    updatedByEmployeeId: uuid('updated_by_employee_id'),
+    publishedAt: timestamp('published_at', { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    check('company_regulations_title_check', sql`char_length(btrim(${t.title})) between 1 and 200`),
+    check('company_regulations_body_check', sql`char_length(${t.body}) between 1 and 200000`),
+    check('company_regulations_status_check', sql`${t.status} in ('draft', 'published', 'archived')`),
+    check('company_regulations_related_forms_array_check', sql`jsonb_typeof(${t.relatedForms}) = 'array'`),
+    index('company_regulations_status_cat_idx').on(t.status, t.category, t.sortOrder),
+  ]
+);
+
+export const companyRegulationAttachments = pgTable(
+  'company_regulation_attachments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    regulationId: uuid('regulation_id').notNull(),
+    uploadedByEmployeeId: uuid('uploaded_by_employee_id'),
+    storagePath: text('storage_path').notNull(),
+    fileName: text('file_name').notNull(),
+    mimeType: text('mime_type').notNull(),
+    fileSizeBytes: bigint('file_size_bytes', { mode: 'number' }).notNull(),
+    sha256: text('sha256'),
+    scanStatus: text('scan_status').notNull().default('clean'),
+    scannedAt: timestamp('scanned_at', { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    unique('company_regulation_attachments_path_uidx').on(t.storagePath),
+    fk('company_regulation_attachments_reg_fkey', t.regulationId, companyRegulations.id).onDelete('cascade'),
+    index('company_regulation_attachments_reg_idx').on(t.regulationId, t.createdAt),
+  ]
+);
+

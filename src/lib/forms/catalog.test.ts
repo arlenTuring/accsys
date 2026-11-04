@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { FORM_ROUTE_PREFIX, FORM_TYPES } from '@/lib/procurement/form-registry';
-import { FORM_CATEGORIES, isNewFormPage, isRecordPage, isUnder, mergeCatalog } from './catalog';
+import {
+  FINANCE_LINKS,
+  FORM_CATEGORIES,
+  MY_APPLICATION_LINKS,
+  isNewFormPage,
+  isRecordPage,
+  isUnder,
+  mergeCatalog,
+} from './catalog';
 
 describe('form catalog', () => {
   const formHrefs = FORM_CATEGORIES.flatMap((c) => c.forms.map((f) => f.href));
@@ -30,6 +38,13 @@ describe('form catalog', () => {
     expect(isNewFormPage('/f/admin-purchase/new')).toBe(true);
     expect(isRecordPage('/f/admin-purchase')).toBe(true);
     expect(isRecordPage('/f/admin-purchase/123')).toBe(true);
+    expect(isRecordPage('/applications/drafts')).toBe(true);
+    expect(isRecordPage('/applications/drafts/abc')).toBe(true);
+  });
+
+  it('keeps the draft library under my applications, not finance', () => {
+    expect(MY_APPLICATION_LINKS.some((l) => l.href === '/applications/drafts')).toBe(true);
+    expect(FINANCE_LINKS.some((l) => l.href === '/applications/drafts')).toBe(false);
   });
 
   it('merges designer forms into existing or new categories without touching the base', () => {

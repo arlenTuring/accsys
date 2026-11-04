@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { recordAudit } from '@/lib/audit/record';
 import type { Actor } from '@/lib/authz/forms';
 import { getDb } from '@/lib/db';
@@ -184,4 +184,114 @@ export async function readDraftFileBytes(
   } catch {
     return null;
   }
+}
+
+/**
+ * Detach draft file link(s). Deletes only this draft's copy under `ai-draft-files/…`.
+ * Does not purge staged chat originals or files attached to other drafts/forms.
+ */
+export async function removeDraftFiles(input: {
+  actor: Actor;
+  conversationId: string;
+  draftId: string;
+  expectedVersion: number;
+  /** Specific file IDs; empty + removeAll removes every link on this draft. */
+  fileIds?: string[];
+  removeAll?: boolean;
+}): Promise<
+  | { ok: true; draft: ApplicationDraft; removed: DraftFileMeta[]; removedCount: number }
+  | { ok: false; conflict: DraftConflict }
+  | { ok: false; error: string; message: string }
+> {
+  const draft = await getDraftForOwner(input.draftId, input.actor.id);
+  if (!draft) return { ok: false, error: 'draft_not_found', message: '找不到草稿。' };
+  if (!(await isDraftInConversation(draft.id, input.conversationId, input.actor.id))) {
+    return { ok: false, error: 'draft_forbidden', message: '此草稿未連結到目前對話，或無權操作。' };
+  }
+  if (draft.status !== 'draft') {
+    return {
+      ok: false,
+      error: 'draft_not_editable',
+      message: '已送出或已放棄的草稿不可改附件；請走撤回／補件流程。',
+    };
+  }
+  if (draft.version !== input.expectedVersion) {
+    return { ok: false, conflict: { code: 'version_conflict', draft } };
+  }
+
+  const removeAll = !!input.removeAll;
+  const fileIds = [...new Set((input.fileIds ?? []).filter((id) => /^[0-9a-f-]{36}$/i.test(id)))];
+  if (!removeAll && fileIds.length === 0) {
+    return { ok: false, error: 'file_ids_required', message: '請指定要移除的附件 ID，或明確要求移除全部。' };
+  }
+
+  const { removeKey } = await import('@/lib/attachments/storage');
+
+  const outcome = await getDb().transaction(async (tx) => {
+    const [locked] = await tx
+      .select({ version: aiApplicationDrafts.version, status: aiApplicationDrafts.status })
+      .from(aiApplicationDrafts)
+      .where(and(eq(aiApplicationDrafts.id, input.draftId), eq(aiApplicationDrafts.ownerEmployeeId, input.actor.id)))
+      .for('update');
+    if (!locked || locked.status !== 'draft') return { kind: 'gone' as const };
+    if (locked.version !== input.expectedVersion) return { kind: 'conflict' as const };
+
+    const rows = removeAll
+      ? await tx.select().from(aiDraftFileAttachments).where(eq(aiDraftFileAttachments.draftId, input.draftId))
+      : await tx
+          .select()
+          .from(aiDraftFileAttachments)
+          .where(and(eq(aiDraftFileAttachments.draftId, input.draftId), inArray(aiDraftFileAttachments.id, fileIds)));
+
+    if (rows.length === 0) {
+      return { kind: 'done' as const, version: locked.version, removed: [] as DraftFileMeta[], bumped: false };
+    }
+
+    for (const row of rows) {
+      await tx.delete(aiDraftFileAttachments).where(eq(aiDraftFileAttachments.id, row.id));
+      try {
+        await removeKey(row.storagePath);
+      } catch {
+        /* link row is gone; orphaned blob is best-effort */
+      }
+    }
+
+    await tx
+      .update(aiApplicationDrafts)
+      .set({ version: sql`${aiApplicationDrafts.version} + 1`, updatedAt: sql`now()` })
+      .where(eq(aiApplicationDrafts.id, input.draftId));
+    await recordAudit(tx, {
+      actorEmployeeId: input.actor.id,
+      action: removeAll ? 'ai_draft.files_removed_all' : 'ai_draft.files_removed',
+      entityType: 'ai_application_draft',
+      entityId: input.draftId,
+      details: {
+        version: locked.version + 1,
+        removedIds: rows.map((r) => r.id),
+        removedCount: rows.length,
+      },
+    });
+
+    return {
+      kind: 'done' as const,
+      version: locked.version + 1,
+      removed: rows.map((r) => ({
+        id: r.id,
+        fileName: r.fileName,
+        mimeType: r.mimeType,
+        fileSizeBytes: r.fileSizeBytes,
+        sourceStagedId: r.sourceStagedId,
+        attachedAt: r.attachedAt,
+      })),
+      bumped: true,
+    };
+  });
+
+  const current = await getDraftForOwner(input.draftId, input.actor.id);
+  if (!current) return { ok: false, error: 'draft_not_found', message: '找不到草稿。' };
+  if (outcome.kind === 'gone') {
+    return { ok: false, error: 'draft_not_editable', message: '草稿已不可修改。' };
+  }
+  if (outcome.kind === 'conflict') return { ok: false, conflict: { code: 'version_conflict', draft: current } };
+  return { ok: true, draft: current, removed: outcome.removed, removedCount: outcome.removed.length };
 }

@@ -1,0 +1,15 @@
+{
+  "at": "2026-11-01T09:34:03.616Z",
+  "employeeId": "c43da51e-ce4d-48f6-95f5-2c54fec60d0c",
+  "employeeEmail": "arlen@turing-drive.com",
+  "draftId": "efaf9be0-a810-4656-afac-80bd63326f11",
+  "conversationId": "095e4846-d814-403d-9035-410124c9febc",
+  "attachmentsBefore": 0,
+  "attachmentsAfter": 0,
+  "companionOk": true,
+  "companionCandidates": 0,
+  "companionMessage": "在搜尋範圍內（目標行程前後 3 天、地點／專案比對；僅你有權查看的候選）找不到可能同行人員。不會因此把草稿同行者欄位改成「無」。可擴大 near_days 或改關鍵字。",
+  "removeOk": true,
+  "removeCount": 0,
+  "removeMessage": "沒有可移除的附件（可能已移除或 ID 不符）。"
+}

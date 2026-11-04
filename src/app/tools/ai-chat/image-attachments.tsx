@@ -33,7 +33,7 @@ export {
 type Props = {
   items: ClientImageAttachment[];
   conversationId: string | null;
-  /** Draft open right now; only used when the person presses 確認並檢查. */
+  /** Currently open draft — used when the person presses 加入附件. */
   draftId?: string | null;
   draftTitle?: string | null;
   draftVersion?: number | null;
@@ -42,21 +42,32 @@ type Props = {
   onPatch: (clientAttachmentId: string, patch: Partial<ClientImageAttachment>) => void;
   onEdit?: (item: ClientImageAttachment) => void;
   /** After files are on the draft: the parent drops exactly those entries and refreshes the draft. */
-  onAttachedToDraft?: (info: { draftId: string; version: number; clientAttachmentIds: string[]; notice: string }) => void;
+  onAttachedToDraft?: (info: {
+    draftId: string;
+    version: number;
+    clientAttachmentIds: string[];
+    notice: string;
+  }) => void;
 };
 
 function Thumb({ item }: { item: ClientImageAttachment }) {
   const [broken, setBroken] = useState(false);
   const isPdf = item.mimeType === 'application/pdf';
   const isHeic = /^image\/hei[cf]$/.test(item.mimeType);
-  // HEIC shows through the server's JPEG view once uploaded (most browsers cannot draw it locally).
-  const src = item.stagedId && (isHeic || item.edited) ? `/api/ai-chat/staged/${item.stagedId}?preview=1&v=${item.edited ?? 0}` : item.previewUrl;
+  const src =
+    item.stagedId && (isHeic || item.edited)
+      ? `/api/ai-chat/staged/${item.stagedId}?preview=1&v=${item.edited ?? 0}`
+      : item.previewUrl;
   const tile = isPdf ? 'PDF' : isHeic ? 'HEIC' : '檔案';
-  const href = item.stagedId ? `/api/ai-chat/staged/${item.stagedId}${isHeic || item.edited ? '?preview=1' : ''}` : item.previewUrl;
+  const href = item.stagedId
+    ? `/api/ai-chat/staged/${item.stagedId}${isHeic || item.edited ? '?preview=1' : ''}`
+    : item.previewUrl;
   return (
     <a href={href} target="_blank" rel="noreferrer" title={`預覽 ${item.fileName}`} className="block h-full w-full">
       {isPdf || broken ? (
-        <span className="flex h-full w-full items-center justify-center text-[10px] font-semibold text-td-muted">{tile}</span>
+        <span className="flex h-full w-full items-center justify-center text-xs font-semibold text-td-muted">
+          {tile}
+        </span>
       ) : (
         // eslint-disable-next-line @next/next/no-img-element
         <img key={src} src={src} alt={item.fileName} className="h-full w-full object-cover" onError={() => setBroken(true)} />
@@ -65,29 +76,57 @@ function Thumb({ item }: { item: ClientImageAttachment }) {
   );
 }
 
-export function ImageAttachmentStrip({ items, conversationId, draftId, draftTitle, draftVersion, onRemove, onRetry, onPatch, onEdit, onAttachedToDraft }: Props) {
+function CheckSpinner() {
+  return (
+    <span
+      className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-td-border border-t-td-blue-dark"
+      aria-hidden
+    />
+  );
+}
+
+export function ImageAttachmentStrip({
+  items,
+  conversationId,
+  draftId,
+  draftTitle,
+  draftVersion,
+  onRemove,
+  onRetry,
+  onPatch,
+  onEdit,
+  onAttachedToDraft,
+}: Props) {
   const [localError, setLocalError] = useState<string | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
   const attachingRef = useRef(false);
+  const startedCheckRef = useRef(new Set<string>());
 
   const attach = useCallback(
-    async (list: ClientImageAttachment[], opts: { confirmReminders: boolean }) => {
+    async (list: ClientImageAttachment[], opts?: { draftId?: string; draftTitle?: string }) => {
       if (!conversationId || attachingRef.current) return;
-      const group = list.filter((i) => i.stagedId && i.target);
+      const targetDraftId = opts?.draftId ?? draftId;
+      if (!targetDraftId) {
+        setLocalError('請先開啟要加入的草稿，或在對話中指定目標草稿。');
+        return;
+      }
+      const title = opts?.draftTitle ?? draftTitle ?? '草稿';
+      const group = list.filter((i) => i.stagedId && canAttachToDraft(i.status));
       if (group.length === 0) return;
-      const target = group[0].target!;
-      const same = group.filter((i) => i.target?.draftId === target.draftId);
+      const target = { draftId: targetDraftId, title };
       attachingRef.current = true;
       setLocalError(null);
-      same.forEach((i) => onPatch(i.clientAttachmentId, { status: 'attaching', error: undefined }));
+      group.forEach((i) => onPatch(i.clientAttachmentId, { status: 'attaching', target, error: undefined }));
       let res: Awaited<ReturnType<typeof attachStagedFilesToDraftAction>>;
       try {
         res = await attachStagedFilesToDraftAction({
           conversationId,
           draftId: target.draftId,
           expectedVersion: target.draftId === draftId && draftVersion ? draftVersion : 1,
-          stagedIds: same.map((i) => i.stagedId!),
-          confirmReminders: opts.confirmReminders,
-          userNote: '使用者確認提醒後夾入草稿',
+          stagedIds: group.map((i) => i.stagedId!),
+          // Reminders do not block attach; record acknowledgement when present.
+          confirmReminders: true,
+          userNote: '使用者按加入附件（提醒不阻擋）',
         });
       } catch {
         res = { ok: false, error: 'attach_failed', message: '連線中斷，檔案尚未加入草稿。' };
@@ -95,32 +134,58 @@ export function ImageAttachmentStrip({ items, conversationId, draftId, draftTitl
       attachingRef.current = false;
       if (!res.ok) {
         const message = 'message' in res && res.message ? res.message : res.error;
-        same.forEach((i) => onPatch(i.clientAttachmentId, { status: 'attach_failed', error: message }));
+        group.forEach((i) => onPatch(i.clientAttachmentId, { status: 'attach_failed', error: message }));
         setLocalError(`尚未加入草稿：${message}`);
         return;
       }
-      const done = same.filter((i) => res.ok && res.attached.some((a) => a.fileName === i.fileName) && !res.skipped?.includes(i.stagedId!));
-      const missed = same.filter((i) => !done.includes(i));
-      missed.forEach((i) => onPatch(i.clientAttachmentId, { status: 'attach_failed', error: '檔案尚未就緒，沒有加入草稿' }));
-      const notes = done.map((i) => `${i.fileName}${i.invoice?.summary ? `：${i.invoice.summary}` : ''}`).join('；');
+      const attachedIds = new Set(res.attached.map((a) => a.id));
+      const done = group.filter((i) => {
+        const hit = res.ok && res.attached.some((a) => a.fileName === i.fileName || i.stagedId === a.id);
+        return hit && !res.skipped?.includes(i.stagedId!);
+      });
+      // Prefer matching by source staged id via fileName fallback already above.
+      void attachedIds;
+      const missed = group.filter((i) => !done.includes(i));
+      missed.forEach((i) =>
+        onPatch(i.clientAttachmentId, { status: 'attach_failed', error: '檔案尚未就緒，沒有加入草稿' })
+      );
+      const notes = done.map((i) => i.fileName).join('、');
       onAttachedToDraft?.({
         draftId: res.draft.id,
         version: res.draft.version,
         clientAttachmentIds: done.map((i) => i.clientAttachmentId),
-        notice: `已加入「${target.title}」：${notes}`,
+        notice: `已加入「${target.title}」${done.length} 個附件${notes ? `：${notes}` : ''}`,
       });
     },
-    [conversationId, draftId, draftVersion, onAttachedToDraft, onPatch]
+    [conversationId, draftId, draftTitle, draftVersion, onAttachedToDraft, onPatch]
   );
 
   const itemsRef = useRef(items);
   useEffect(() => {
     itemsRef.current = items;
   }, [items]);
+
+  // After security scan, auto-start AI analysis (no confirm button; draft not required).
+  useEffect(() => {
+    const pending = items.filter(
+      (i) => i.stagedId && i.status === 'scanned' && !startedCheckRef.current.has(i.stagedId)
+    );
+    if (pending.length === 0) return;
+    for (const i of pending) startedCheckRef.current.add(i.stagedId!);
+    pending.forEach((i) => onPatch(i.clientAttachmentId, { status: 'checking', error: undefined }));
+    void startStagedCheckAction({ stagedIds: pending.map((i) => i.stagedId!) }).then((res) => {
+      if (!res?.ok) {
+        pending.forEach((i) => {
+          startedCheckRef.current.delete(i.stagedId!);
+          onPatch(i.clientAttachmentId, { status: 'scanned', checkIncomplete: true, error: '檢查未開始，可重試' });
+        });
+      }
+    });
+  }, [items, onPatch]);
+
   const checking = items.filter((i) => i.status === 'checking' && i.stagedId).map((i) => i.stagedId!);
   const checkingKey = checking.join(',');
 
-  // Poll the background AI check; passed files go straight to the chosen draft.
   useEffect(() => {
     if (!checkingKey) return;
     let stopped = false;
@@ -128,17 +193,20 @@ export function ImageAttachmentStrip({ items, conversationId, draftId, draftTitl
     const tick = async () => {
       const res = await getStagedCheckStatesAction({ stagedIds: ids }).catch(() => null);
       if (stopped || !res?.ok) return;
-      const passed: ClientImageAttachment[] = [];
       for (const st of res.states) {
         if (st.state !== 'done') continue;
         const item = itemsRef.current.find((i) => i.stagedId === st.stagedId);
-        if (!item) continue;
+        if (!item) continue; // removed while checking — never revive
         const invoice = invoiceReminderFromCheck(st.result);
         const status = statusAfterInvoiceCheck(invoice);
-        onPatch(item.clientAttachmentId, { status, invoice });
-        if (status === 'ready') passed.push({ ...item, status, invoice });
+        const incomplete = !st.result || st.result.overallStatus === 'analysis_failed' || st.result.complete === false;
+        onPatch(item.clientAttachmentId, {
+          status,
+          invoice,
+          checkBrief: invoice?.summary?.slice(0, 80) ?? null,
+          checkIncomplete: incomplete,
+        });
       }
-      if (passed.length) void attach(passed, { confirmReminders: false });
     };
     const timer = setInterval(() => void tick(), 1500);
     void tick();
@@ -146,32 +214,20 @@ export function ImageAttachmentStrip({ items, conversationId, draftId, draftTitl
       stopped = true;
       clearInterval(timer);
     };
-  }, [checkingKey, attach, onPatch]);
+  }, [checkingKey, onPatch]);
 
   if (items.length === 0) return null;
 
-  const scanned = items.filter((i) => i.stagedId && i.status === 'scanned');
-  const needsConfirm = items.filter((i) => i.stagedId && i.status === 'needs_confirm');
-  const retryAttach = items.filter((i) => i.stagedId && i.target && canAttachToDraft(i.status));
-
-  const confirmAndCheck = async () => {
-    if (!draftId) {
-      setLocalError('請先開啟要加入檔案的草稿（右側文件區），再按「確認並檢查」。');
-      return;
-    }
-    setLocalError(null);
-    const target = { draftId, title: draftTitle ?? '草稿' };
-    scanned.forEach((i) => onPatch(i.clientAttachmentId, { status: 'checking', target, error: undefined }));
-    const res = await startStagedCheckAction({ stagedIds: scanned.map((i) => i.stagedId!), targetDraftId: draftId }).catch(() => null);
-    if (!res?.ok) {
-      scanned.forEach((i) => onPatch(i.clientAttachmentId, { status: 'scanned' }));
-      setLocalError('無法開始檢查，請再按一次。');
-    }
-  };
+  const attachable = items.filter((i) => i.stagedId && canAttachToDraft(i.status) && i.status !== 'attaching');
+  const detail = detailId ? items.find((i) => i.clientAttachmentId === detailId) : null;
 
   return (
     <div className="mb-1.5 space-y-1">
-      {localError && <p role="alert" className="text-[11px] text-amber-800">{localError}</p>}
+      {localError && (
+        <p role="alert" className="text-xs text-amber-800">
+          {localError}
+        </p>
+      )}
       <div className="flex items-center gap-2">
         <ul className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto py-0.5" aria-label="待處理附件">
           {items.map((item) => {
@@ -184,81 +240,83 @@ export function ImageAttachmentStrip({ items, conversationId, draftId, draftTitl
                     ? 'ring-emerald-300'
                     : 'ring-td-border';
             return (
-              <li key={item.clientAttachmentId} className="relative w-20 shrink-0">
-                <div className={`h-12 w-full overflow-hidden rounded-md bg-slate-100 ring-1 ${statusTone}`} title={`${item.fileName}${item.error ? `：${item.error}` : ''}`}>
+              <li key={item.clientAttachmentId} className="relative w-24 shrink-0">
+                <div
+                  className={`h-12 w-full overflow-hidden rounded-md bg-slate-100 ring-1 ${statusTone}`}
+                  title={`${item.fileName}${item.error ? `：${item.error}` : ''}`}
+                >
                   <Thumb item={item} />
                 </div>
                 <button
                   type="button"
-                  className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-slate-700 text-[10px] leading-none text-white"
+                  className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-slate-700 text-xs leading-none text-white"
                   aria-label={`移除 ${item.fileName}`}
                   onClick={() => onRemove(item.clientAttachmentId)}
                 >
                   ×
                 </button>
-                <p className="mt-0.5 text-[10px] leading-tight text-td-muted">
+                <p className="mt-0.5 flex items-center gap-1 text-xs leading-tight text-td-muted">
+                  {item.status === 'checking' && <CheckSpinner />}
                   {statusLabel(item.status)}
                   {item.status === 'uploading' && typeof item.progress === 'number' ? ` ${item.progress}%` : ''}
                 </p>
+                {item.sizeNote && <p className="text-[10px] leading-tight text-td-muted">{item.sizeNote}</p>}
+                {item.checkBrief && item.status !== 'checking' && (
+                  <button
+                    type="button"
+                    className="text-xs underline"
+                    onClick={() => setDetailId(item.clientAttachmentId)}
+                  >
+                    {item.checkBrief.slice(0, 24)}
+                    {item.checkBrief.length > 24 ? '…' : ''} · 詳細
+                  </button>
+                )}
+                {item.checkIncomplete && item.status !== 'checking' && (
+                  <p className="text-xs text-amber-800">檢查中／未完成（仍可加入）</p>
+                )}
                 {item.status === 'failed' && (
-                  <button type="button" className="text-[10px] underline" onClick={() => onRetry(item.clientAttachmentId)}>
+                  <button type="button" className="text-xs underline" onClick={() => onRetry(item.clientAttachmentId)}>
                     重試
                   </button>
                 )}
-                {item.stagedId && item.mimeType.startsWith('image/') && ['scanned', 'needs_confirm', 'attach_failed'].includes(item.status) && (
-                  <button type="button" className="ml-1 text-[10px] underline" onClick={() => onEdit?.(item)}>
-                    編輯
-                  </button>
+                {item.stagedId &&
+                  item.mimeType.startsWith('image/') &&
+                  canAttachToDraft(item.status) &&
+                  item.status !== 'attaching' && (
+                    <button type="button" className="ml-1 text-xs underline" onClick={() => onEdit?.(item)}>
+                      編輯
+                    </button>
+                  )}
+                {item.error && item.status !== 'attach_failed' && (
+                  <p className="text-xs leading-tight text-red-700">{item.error}</p>
                 )}
-                {item.error && item.status !== 'attach_failed' && <p className="text-[10px] leading-tight text-red-700">{item.error}</p>}
               </li>
             );
           })}
         </ul>
-        {scanned.length > 0 && (
-          <button type="button" className="btn-primary shrink-0 whitespace-nowrap px-2 py-1 text-xs" onClick={() => void confirmAndCheck()}>
-            確認並檢查（{scanned.length}）
+        {attachable.length > 0 && (
+          <button
+            type="button"
+            className="btn-primary shrink-0 whitespace-nowrap px-2 py-1 text-sm"
+            onClick={() => void attach(attachable)}
+          >
+            加入附件（{attachable.length}）
           </button>
         )}
       </div>
-      {scanned.length > 0 && (
-        <p className="text-[10px] text-td-muted">
-          {draftId ? `按下後才會送 AI 檢查，通過即加入「${draftTitle ?? '目前草稿'}」。` : '尚未開啟草稿；開啟後才能加入。'}
-        </p>
+      {attachable.length > 0 && !draftId && (
+        <p className="text-xs text-td-muted">尚未開啟草稿；開啟後按「加入附件」，或在對話指定目標草稿。</p>
       )}
-      {retryAttach.length > 0 && items.some((i) => i.status === 'attach_failed') && (
-        <button type="button" className="btn-secondary px-2 py-1 text-xs" onClick={() => void attach(retryAttach, { confirmReminders: false })}>
-          重新加入草稿（{retryAttach.length}）
-        </button>
+      {detail && (
+        <div className="rounded-lg border border-td-border bg-slate-50 px-2 py-1.5 text-sm" role="dialog">
+          <p className="font-semibold">{detail.fileName}</p>
+          {detail.sizeNote && <p className="text-td-muted">{detail.sizeNote}</p>}
+          {detail.invoice?.summary && <p className="mt-1 whitespace-pre-wrap">{detail.invoice.summary}</p>}
+          <button type="button" className="mt-1 underline" onClick={() => setDetailId(null)}>
+            關閉詳細
+          </button>
+        </div>
       )}
-      {needsConfirm.map((item) => {
-        const moved = Boolean(draftId && item.target && draftId !== item.target.draftId);
-        return (
-          <div key={item.clientAttachmentId} role="group" aria-label={`${item.fileName} 提醒`} className="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-950">
-            <p>
-              <span className="font-semibold">{item.fileName}</span>：{item.invoice?.summary ?? '需要確認'}
-            </p>
-            <p className="mt-0.5 text-[11px]">這是業務提醒，不是安全問題。將加入「{item.target?.title ?? '草稿'}」。</p>
-            {moved && (
-              <button
-                type="button"
-                className="mt-1 mr-2 underline"
-                onClick={() => onPatch(item.clientAttachmentId, { target: { draftId: draftId!, title: draftTitle ?? '草稿' } })}
-              >
-                目前開啟的是「{draftTitle}」，改加入這一張
-              </button>
-            )}
-            <div className="mt-1 flex gap-2">
-              <button type="button" className="btn-secondary px-2 py-0.5 text-xs" onClick={() => void attach([item], { confirmReminders: true })}>
-                仍要夾帶
-              </button>
-              <button type="button" className="underline" onClick={() => onRemove(item.clientAttachmentId)}>
-                不要這個檔案
-              </button>
-            </div>
-          </div>
-        );
-      })}
     </div>
   );
 }

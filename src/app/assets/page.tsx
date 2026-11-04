@@ -14,9 +14,17 @@ export default async function AssetsPage() {
   return (
     <main className="page-shell space-y-6">
       <section>
-        <p className="section-title">資產管理</p>
-        <h1 className="page-title">財產保管清冊</h1>
-        <p className="page-subtitle">核准的資產異動申請單會自動更新保管人、保管地點與狀態；新購財產或盤點更正請在此維護。</p>
+        <p className="section-title">財會管理 · 全公司資產</p>
+        <h1 className="page-title">全公司財產保管清冊</h1>
+        <p className="page-subtitle">此處管理全公司資產清冊（個人名下保管資產請點擊左下角個人帳號查看）；核准的資產異動單會自動更新保管人與狀態。</p>
+        <p className="mt-2 flex flex-wrap gap-3 text-sm">
+          <a className="underline" href="/assets/fields">
+            欄位管理
+          </a>
+          <a className="underline" href="/assets/import">
+            公司 Excel 匯入
+          </a>
+        </p>
       </section>
       <AssetRegisterManager register={register} employees={employees} />
     </main>

@@ -267,6 +267,34 @@
       "when": 1794200000000,
       "tag": "0037_proactive_events_resubmit",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1794300000000,
+      "tag": "0038_asset_register_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1794400000000,
+      "tag": "0039_announcements_surveys",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1794500000000,
+      "tag": "0040_announcement_attachments",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1794600000000,
+      "tag": "0041_survey_question_media",
+      "breakpoints": true
     }
   ]
 }

@@ -5,7 +5,9 @@ import { getDb } from '@/lib/db';
 import { formSubmissions } from '@/lib/db/schema';
 import { getBudgetCodeList } from '@/lib/budget-codes/queries';
 import { getCaseOverview } from '@/lib/cases/queries';
-import { getFilableDefinitions } from '@/lib/custom-forms/queries';
+import { recordAudit } from '@/lib/audit/record';
+import { approveCustomFormStep, returnCustomFormStep } from '@/lib/custom-forms/actions';
+import { getFilableDefinitions, getSubmissionDetail } from '@/lib/custom-forms/queries';
 import { getMyExpenseClaims } from '@/lib/expense-claims/queries';
 import { getMyNotifications } from '@/lib/notifications/queries';
 import { FORM_LABELS, FORM_ROUTE_PREFIX, type FormType } from '@/lib/procurement/form-registry';
@@ -22,10 +24,73 @@ import { attachStagedFilesToDraft } from './attach-staged';
 import { getOrCreateApprovedPdfSnapshot } from './approved-pdf';
 import { draftOpenResource, type OpenResourceEvent } from './open-resource';
 import { loadAssistantInbox } from './inbox';
+import { cardsFromMySubmissions, cardsFromPendingApprovals } from './submission-cards';
 import { previewNudge } from './nudge';
 import { listRecentProjectsForEmployee, searchProjectsPaged } from './projects';
 import { startResubmission } from './resubmit';
 import { searchMyCustomSubmissions } from './submissions-search';
+
+async function approveOneForActor(
+  employee: CurrentEmployee,
+  formId: string,
+  conversationId: string | null
+): Promise<{ ok: boolean; message: string; formNumber?: string; error?: string }> {
+  const detail = await getSubmissionDetail(formId);
+  if (!detail) return { ok: false, error: 'not_found', message: '找不到單據或無權限閱讀。' };
+  if (!detail.isCurrentApprover) {
+    return { ok: false, error: 'not_current_approver', message: `您目前不是「${detail.formNumber}」的簽核人。` };
+  }
+  const result = await approveCustomFormStep(formId, detail.version);
+  if (!result.ok) {
+    return { ok: false, error: result.code, message: result.error, formNumber: detail.formNumber };
+  }
+  await recordAudit(getDb(), {
+    actorEmployeeId: employee.id,
+    action: 'ai.approve_submission',
+    entityType: 'custom',
+    entityId: formId,
+    requestId: conversationId,
+    details: {
+      via: 'ai_assistant',
+      formNumber: detail.formNumber,
+      formName: detail.name,
+      conversationId,
+    },
+  });
+  return { ok: true, message: `已核准 ${detail.formNumber}（${detail.name}）。`, formNumber: detail.formNumber };
+}
+
+async function returnOneForActor(
+  employee: CurrentEmployee,
+  formId: string,
+  reason: string,
+  conversationId: string | null
+): Promise<{ ok: boolean; message: string; formNumber?: string; error?: string }> {
+  const detail = await getSubmissionDetail(formId);
+  if (!detail) return { ok: false, error: 'not_found', message: '找不到單據或無權限閱讀。' };
+  if (!detail.isCurrentApprover) {
+    return { ok: false, error: 'not_current_approver', message: `您目前不是「${detail.formNumber}」的簽核人。` };
+  }
+  const result = await returnCustomFormStep(formId, reason, detail.version);
+  if (!result.ok) {
+    return { ok: false, error: result.code, message: result.error, formNumber: detail.formNumber };
+  }
+  await recordAudit(getDb(), {
+    actorEmployeeId: employee.id,
+    action: 'ai.return_submission',
+    entityType: 'custom',
+    entityId: formId,
+    requestId: conversationId,
+    details: {
+      via: 'ai_assistant',
+      formNumber: detail.formNumber,
+      formName: detail.name,
+      reason: reason.slice(0, 200),
+      conversationId,
+    },
+  });
+  return { ok: true, message: `已退回 ${detail.formNumber}（${detail.name}）。`, formNumber: detail.formNumber };
+}
 
 /** Only these names may be executed. Anything else is rejected. */
 export const AI_CHAT_ALLOWED_TOOLS = [
@@ -57,6 +122,16 @@ export const AI_CHAT_ALLOWED_TOOLS = [
   'propose_approved_document_picker',
   'attach_approved_document_pdf',
   'attach_staged_files_to_draft',
+  'list_draft_attachments',
+  'remove_draft_attachments',
+  'duplicate_application_draft',
+  'rename_application_draft',
+  'search_trip_companion_candidates',
+  'search_my_assets',
+  'search_company_regulations',
+  'approve_submission',
+  'return_submission',
+  'approve_all_pending',
 ] as const;
 
 export type AiToolContext = {
@@ -410,6 +485,143 @@ export const AI_CHAT_TOOL_DECLARATIONS = [
       required: ['draft_id', 'expected_version'],
     },
   },
+  {
+    name: 'search_my_assets',
+    description:
+      '依權限查詢財產（我的保管／部門／全公司）。範圍在資料庫端套用，不會載入全公司後再過濾。回傳名稱、種類、地點、狀態與財產編號；不可用來執行移轉或報廢。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        query: { type: 'STRING', description: '財產編號、名稱、種類或地點關鍵字' },
+        scope: {
+          type: 'STRING',
+          description: 'mine（預設）／department／company（需權限）',
+          enum: ['mine', 'department', 'company'],
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'approve_submission',
+    description:
+      '以目前登入使用者身分核准一張待其簽核的自訂表單（custom）。使用者明確說要簽核／核准時使用。僅能處理佇列中屬於此人的關卡。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        form_id: { type: 'STRING', description: '單據 UUID（list_my_approval_queue 的 id）' },
+      },
+      required: ['form_id'],
+    },
+  },
+  {
+    name: 'return_submission',
+    description:
+      '以目前登入使用者身分退回一張待其簽核的自訂表單。必須提供退回原因（可短句）。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        form_id: { type: 'STRING', description: '單據 UUID' },
+        reason: { type: 'STRING', description: '退回原因' },
+      },
+      required: ['form_id', 'reason'],
+    },
+  },
+  {
+    name: 'approve_all_pending',
+    description:
+      '一次核准目前登入使用者待簽核佇列中的自訂表單（預設最多 20 張）。使用者說「全部簽核」時使用。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        limit: { type: 'NUMBER', description: '最多核准幾張，預設 20、上限 30' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'list_draft_attachments',
+    description: '列出指定草稿目前已夾帶的附件（檔名、大小、檔案 ID）。刪除／替換前先用此工具確認。',
+    parameters: {
+      type: 'OBJECT',
+      properties: { draft_id: { type: 'STRING' } },
+      required: ['draft_id'],
+    },
+  },
+  {
+    name: 'remove_draft_attachments',
+    description:
+      '從草稿移除附件關聯（只刪此草稿副本，不銷毀聊天原檔或其他單據共用檔）。可指定 file_ids，或 remove_all=true 一次移除該草稿全部附件。目標草稿不明且有多張時不可擅自全操作。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        draft_id: { type: 'STRING' },
+        expected_version: { type: 'NUMBER' },
+        file_ids: { type: 'ARRAY', items: { type: 'STRING' }, description: '要移除的附件 UUID（以 ID 為準，不用檔名）' },
+        remove_all: { type: 'BOOLEAN', description: 'true＝移除該草稿全部附件' },
+      },
+      required: ['draft_id', 'expected_version'],
+    },
+  },
+  {
+    name: 'search_trip_companion_candidates',
+    description:
+      '依目標草稿的出差日期／地點／專案，搜尋使用者有權看到的同行候選（完全重疊、部分重疊、鄰近日期）。不可用「本人原申請沒有同行者」推論沒有其他人。回傳姓名、工號、日期差異與候選原因；不捏造機率。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        draft_id: { type: 'STRING', description: '目標出差／報支草稿' },
+        query: { type: 'STRING', description: '姓名、工號、地點或專案關鍵字' },
+        near_days: { type: 'NUMBER', description: '鄰近天數，預設 3' },
+      },
+      required: ['draft_id'],
+    },
+  },
+  {
+    name: 'duplicate_application_draft',
+    description: '複製一張草稿為新草稿（只複製欄位資料，不複製附件）。回傳新 draft_id。',
+    parameters: {
+      type: 'OBJECT',
+      properties: { draft_id: { type: 'STRING' } },
+      required: ['draft_id'],
+    },
+  },
+  {
+    name: 'rename_application_draft',
+    description: '更改草稿標題（需 expected_version）。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        draft_id: { type: 'STRING' },
+        title: { type: 'STRING' },
+        expected_version: { type: 'NUMBER' },
+      },
+      required: ['draft_id', 'title', 'expected_version'],
+    },
+  },
+  {
+    name: 'search_company_regulations',
+    description:
+      '查詢台灣智慧駕駛（Turing Drive）之公司規章、管理辦法與內控規範（例如：採購管理辦法、詢比議價門檻、員工出差管理辦法、私車公用里程補助、住宿與日用費上限、出勤與請假/特休/加班規定、薪資與考核晉升、員工獎懲、教育訓練、跨部門借調、退職留停、員工社團補助、印鑑用印、資產異動、專利與 NDA/MOU 審閱等）。當員工詢問公司規定、報支標準、申請時限或需要引用規章條文時，優先呼叫此工具。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        query: {
+          type: 'STRING',
+          description: '查詢關鍵字（如「出差住宿上限」、「採購比價」、「特休」、「私車里程補助」、「用印」），留空則列出核心規章目錄',
+        },
+        category: {
+          type: 'STRING',
+          description:
+            '選填分類過濾：hr_attendance(出勤與差旅) / hr_compensation(薪酬考核獎懲) / hr_talent(招募訓練調動) / hr_welfare_safety(福利與職場安全) / finance_procurement(採購費用資產) / admin_legal(印鑑法務智財)',
+        },
+        limit: {
+          type: 'NUMBER',
+          description: '回傳筆數上限，預設 5',
+        },
+      },
+    },
+  },
 ] as const;
 
 function clip<T>(rows: T[], n: number): T[] {
@@ -438,6 +650,10 @@ export type ToolExecResult = {
   /** Controlled UI open events — never inferred from model text. */
   openResources?: OpenResourceEvent[];
 };
+
+export function toolUiLabel(name: string): string {
+  return TOOL_LABELS[name as AiChatToolName] ?? name;
+}
 
 const TOOL_LABELS: Record<AiChatToolName, string> = {
   get_my_profile: '個人資料',
@@ -468,6 +684,16 @@ const TOOL_LABELS: Record<AiChatToolName, string> = {
   propose_approved_document_picker: '選擇核准單據',
   attach_approved_document_pdf: '附加核准 PDF',
   attach_staged_files_to_draft: '附加聊天附件到草稿',
+  list_draft_attachments: '列出草稿附件',
+  remove_draft_attachments: '移除草稿附件',
+  duplicate_application_draft: '複製草稿',
+  rename_application_draft: '草稿改名',
+  search_trip_companion_candidates: '搜尋同行候選',
+  search_my_assets: '查詢資產',
+  search_company_regulations: '查詢公司規章',
+  approve_submission: '代為簽核',
+  return_submission: '代為退回',
+  approve_all_pending: '批次簽核',
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -727,6 +953,7 @@ export async function executeAiChatTool(
         // Same source as the welcome summary: designer forms included, real total.
         const inbox = await loadAssistantInbox(30);
         if (inbox.loadError) return { ok: false, name: tool, label, response: { error: 'inbox_unavailable', message: '待簽核清單暫時無法載入，這不代表沒有待辦。' } };
+        const blocks = cardsFromPendingApprovals(inbox.pendingApprovals);
         return {
           ok: true,
           name: tool,
@@ -742,8 +969,13 @@ export async function executeAiChatTool(
               summary: i.summary,
               totalAmount: i.totalAmount,
               href: i.href,
+              formKey: i.formKey,
             })),
+            message: inbox.pendingTotal
+              ? `共 ${inbox.pendingTotal} 張待簽核；畫面已顯示大綱卡。使用者若要求代簽／全部簽核，請呼叫 approve_submission 或 approve_all_pending。回覆請簡短，勿複寫卡片內容。`
+              : '目前沒有待簽核單據。',
           },
+          blocks: blocks.length ? blocks : undefined,
         };
       }
 
@@ -1220,6 +1452,13 @@ export async function executeAiChatTool(
           approvedOnly,
           limit: 8,
         });
+        const { enrichWithSnapshots } = await import('./approval-snapshot');
+        const enriched = await enrichWithSnapshots(
+          page.items.map((i) => ({ ...i, formType: i.formType, id: i.formId }))
+        );
+        const blocks = cardsFromMySubmissions(
+          enriched.map(({ snapshot, id: _id, ...rest }) => ({ ...rest, snapshot }))
+        );
         return {
           ok: true,
           name: tool,
@@ -1228,9 +1467,10 @@ export async function executeAiChatTool(
             items: page.items,
             hasMore: page.hasMore,
             message: page.items.length
-              ? `找到 ${page.items.length} 筆。`
+              ? `找到 ${page.items.length} 筆；畫面已顯示大綱卡（可開詳情）。回覆請簡短，勿複寫卡片內容。`
               : '沒有符合條件的單據（不是查詢失敗）。',
           },
+          blocks: blocks.length ? blocks : undefined,
         };
       }
 
@@ -1416,21 +1656,17 @@ export async function executeAiChatTool(
             },
           };
         }
-        // Gate: invoice business reminders require explicit user confirmation before attach.
+        // Business reminders (統編等) do not block attach — record acknowledgement and continue.
         const {
           analyzeStagedAttachment,
+          confirmStagedInvoiceReminder,
           hasStagedInvoiceConfirmation,
           invoiceStatusNeedsConfirm,
         } = await import('./staged-invoice');
         const { aiChatStagedAttachments } = await import('@/lib/db/schema');
         const { getDb } = await import('@/lib/db');
         const { and, eq, isNull } = await import('drizzle-orm');
-        const pendingConfirm: Array<{
-          stagedId: string;
-          fileName: string;
-          status: string;
-          summary: string;
-        }> = [];
+        const reminders: Array<{ stagedId: string; fileName: string; summary: string }> = [];
         for (const sid of stagedIds) {
           const [row] = await getDb()
             .select()
@@ -1460,34 +1696,19 @@ export async function executeAiChatTool(
               contentSha256: row.sha256,
             });
             if (!confirmed) {
-              pendingConfirm.push({
+              await confirmStagedInvoiceReminder({
+                actorId: employee.id,
+                stagedId: sid,
+                draftId: draftId.value,
+                userNote: '對話加入附件（提醒不阻擋）',
+              });
+              reminders.push({
                 stagedId: sid,
                 fileName: row.fileName,
-                status: analysis.overallStatus,
                 summary: analysis.summary ?? analysis.overallStatus,
               });
             }
           }
-        }
-        if (pendingConfirm.length > 0) {
-          return {
-            ok: false,
-            name: tool,
-            label,
-            response: {
-              error: 'confirmation_required',
-              message:
-                '發票／統編業務提醒尚未經使用者確認「仍要夾帶」。請在圖片卡片上確認後再附加；安全掃描已通過，此提醒不阻擋安全上傳，但阻擋寫入草稿直到確認。',
-              pendingConfirm,
-            },
-            blocks: pendingConfirm.map((p) => ({
-              kind: 'attachment_status' as const,
-              id: `confirm_${p.stagedId}`,
-              fileName: p.fileName,
-              state: 'rejected' as const,
-              detail: `需確認後才可夾帶：${p.summary}`,
-            })),
-          };
         }
 
         const linked = await attachStagedFilesToDraft({
@@ -1617,6 +1838,359 @@ export async function executeAiChatTool(
               status: linked.draft.status,
             }),
           ],
+        };
+      }
+
+      case 'search_my_assets': {
+        const q = typeof args?.query === 'string' ? args.query.trim() : '';
+        const rawScope = typeof args?.scope === 'string' ? args.scope : 'mine';
+        const scope =
+          rawScope === 'department' || rawScope === 'company' || rawScope === 'mine' ? rawScope : 'mine';
+        const { searchAssetsForAi } = await import('@/lib/assets/scope-queries');
+        const rows = await searchAssetsForAi({
+          employeeId: employee.id,
+          role: employee.role,
+          q: q || undefined,
+          scope,
+          limit: 30,
+        });
+        return {
+          ok: true,
+          name: tool,
+          label,
+          response: {
+            scope,
+            count: rows.length,
+            assets: rows.map((r) => ({
+              tag: r.tag,
+              name: r.name,
+              itemKind: r.itemKind,
+              location: r.location,
+              status: r.status,
+              custodianName: r.custodianName,
+            })),
+            message:
+              rows.length === 0
+                ? '在你可查看的範圍內沒有符合的資產。'
+                : `找到 ${rows.length} 筆（範圍 ${scope}）。回答請用名稱、種類、地點與狀態；財產編號僅作識別。`,
+          },
+        };
+      }
+
+      case 'list_draft_attachments': {
+        if (!ctx) return { ok: false, name: tool, label, response: { error: 'missing_context' } };
+        const draftId = requireUuid(args, 'draft_id');
+        if (!draftId.ok) return { ok: false, name: tool, label, response: { error: draftId.error } };
+        const owned = await getDraftForOwner(draftId.value, employee.id);
+        if (!owned || !(await isDraftInConversation(owned.id, ctx.conversationId, employee.id))) {
+          return { ok: false, name: tool, label, response: { error: 'draft_forbidden', message: '找不到草稿或無權查看。' } };
+        }
+        const { listDraftFiles } = await import('./attach-staged');
+        const files = await listDraftFiles(owned.id, employee.id);
+        return {
+          ok: true,
+          name: tool,
+          label,
+          response: {
+            draftId: owned.id,
+            draftVersion: owned.version,
+            count: files.length,
+            files: files.map((f) => ({
+              id: f.id,
+              fileName: f.fileName,
+              mimeType: f.mimeType,
+              fileSizeBytes: f.fileSizeBytes,
+            })),
+            message:
+              files.length === 0
+                ? '這張草稿目前沒有附件。'
+                : `這張草稿有 ${files.length} 個附件。移除時請用 file id，不要只用檔名。`,
+          },
+        };
+      }
+
+      case 'remove_draft_attachments': {
+        if (!ctx) return { ok: false, name: tool, label, response: { error: 'missing_context' } };
+        const draftId = requireUuid(args, 'draft_id');
+        if (!draftId.ok) return { ok: false, name: tool, label, response: { error: draftId.error } };
+        const expectedVersion = Number(args?.expected_version);
+        if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
+          return { ok: false, name: tool, label, response: { error: 'expected_version_invalid' } };
+        }
+        const removeAll = args?.remove_all === true;
+        const rawIds = Array.isArray(args?.file_ids) ? args.file_ids : [];
+        const fileIds = rawIds.filter((x): x is string => typeof x === 'string');
+        if (!removeAll && fileIds.length === 0) {
+          return {
+            ok: false,
+            name: tool,
+            label,
+            response: {
+              error: 'file_ids_required',
+              message: '請指定 file_ids，或明確設 remove_all=true。不可在目標不明時操作所有草稿。',
+            },
+          };
+        }
+        const { removeDraftFiles } = await import('./attach-staged');
+        const removed = await removeDraftFiles({
+          actor: { id: employee.id, role: employee.role },
+          conversationId: ctx.conversationId,
+          draftId: draftId.value,
+          expectedVersion,
+          fileIds,
+          removeAll,
+        });
+        if ('conflict' in removed && removed.conflict) {
+          return {
+            ok: false,
+            name: tool,
+            label,
+            response: {
+              error: 'version_conflict',
+              version: removed.conflict.draft.version,
+              message: '草稿版本衝突，請重新讀取草稿後再移除。',
+            },
+          };
+        }
+        if (!removed.ok) {
+          if ('error' in removed) {
+            return {
+              ok: false,
+              name: tool,
+              label,
+              response: { error: removed.error, message: removed.message },
+            };
+          }
+          return { ok: false, name: tool, label, response: { error: 'remove_failed' } };
+        }
+        return {
+          ok: true,
+          name: tool,
+          label,
+          response: {
+            draftId: removed.draft.id,
+            draftVersion: removed.draft.version,
+            removedCount: removed.removedCount,
+            removed: removed.removed.map((f) => ({ id: f.id, fileName: f.fileName })),
+            message:
+              removed.removedCount === 0
+                ? '沒有可移除的附件（可能已移除或 ID 不符）。'
+                : `已移除這張草稿的 ${removed.removedCount} 個附件。此操作只解除本草稿關聯，不銷毀其他單據或聊天原檔。`,
+          },
+          openResources: [
+            draftOpenResource({
+              draftId: removed.draft.id,
+              title: removed.draft.title || removed.draft.formDefinitionKey,
+              version: removed.draft.version,
+              operation: 'updated',
+              formKey: removed.draft.formDefinitionKey,
+              status: removed.draft.status,
+            }),
+          ],
+        };
+      }
+
+      case 'duplicate_application_draft': {
+        const draftId = requireUuid(args, 'draft_id');
+        if (!draftId.ok) return { ok: false, name: tool, label, response: { error: draftId.error } };
+        const { duplicateApplicationDraft } = await import('./drafts');
+        const row = await duplicateApplicationDraft({ draftId: draftId.value, ownerEmployeeId: employee.id });
+        if (!row) {
+          return { ok: false, name: tool, label, response: { error: 'duplicate_failed', message: '無法複製草稿。' } };
+        }
+        return {
+          ok: true,
+          name: tool,
+          label,
+          response: {
+            draftId: row.id,
+            title: row.title,
+            version: row.version,
+            message: `已複製為新草稿「${row.title}」（未複製附件）。`,
+          },
+          openResources: [
+            draftOpenResource({
+              draftId: row.id,
+              title: row.title,
+              version: row.version,
+              operation: 'opened',
+              formKey: row.formDefinitionKey,
+              status: row.status,
+            }),
+          ],
+        };
+      }
+
+      case 'rename_application_draft': {
+        const draftId = requireUuid(args, 'draft_id');
+        if (!draftId.ok) return { ok: false, name: tool, label, response: { error: draftId.error } };
+        const title = requireString(args, 'title', { min: 1, max: 160 });
+        if (!title.ok) return { ok: false, name: tool, label, response: { error: title.error } };
+        const expectedVersion = Number(args?.expected_version);
+        if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
+          return { ok: false, name: tool, label, response: { error: 'expected_version_invalid' } };
+        }
+        const { renameApplicationDraft } = await import('./drafts');
+        const row = await renameApplicationDraft({
+          draftId: draftId.value,
+          ownerEmployeeId: employee.id,
+          title: title.value,
+          expectedVersion,
+        });
+        if (!row) {
+          return { ok: false, name: tool, label, response: { error: 'rename_failed', message: '無法改名（草稿不存在或已非草稿）。' } };
+        }
+        if ('conflict' in row) {
+          return {
+            ok: false,
+            name: tool,
+            label,
+            response: {
+              error: 'version_conflict',
+              version: row.conflict.version,
+              message: '草稿版本衝突，請重新讀取後再改名。',
+            },
+          };
+        }
+        return {
+          ok: true,
+          name: tool,
+          label,
+          response: { draftId: row.id, title: row.title, version: row.version, message: `已將草稿改名為「${row.title}」。` },
+          openResources: [
+            draftOpenResource({
+              draftId: row.id,
+              title: row.title,
+              version: row.version,
+              operation: 'updated',
+              formKey: row.formDefinitionKey,
+              status: row.status,
+            }),
+          ],
+        };
+      }
+
+      case 'search_trip_companion_candidates': {
+        const draftId = requireUuid(args, 'draft_id');
+        if (!draftId.ok) return { ok: false, name: tool, label, response: { error: draftId.error } };
+        const owned = await getDraftForOwner(draftId.value, employee.id);
+        if (!owned) {
+          return { ok: false, name: tool, label, response: { error: 'draft_forbidden', message: '找不到草稿。' } };
+        }
+        const nearDays = Number(args?.near_days);
+        const q = typeof args?.query === 'string' ? args.query.trim() : '';
+        const { searchTripCompanionCandidates } = await import('./companion-candidates');
+        const result = await searchTripCompanionCandidates({
+          actorEmployeeId: employee.id,
+          draft: owned,
+          query: q || undefined,
+          nearDays: Number.isFinite(nearDays) && nearDays > 0 ? Math.min(nearDays, 30) : 3,
+        });
+        return {
+          ok: true,
+          name: tool,
+          label,
+          response: {
+            ...result,
+            message:
+              result.candidates.length === 0
+                ? `在搜尋範圍內（目標行程前後 ${result.nearDays} 天、地點／專案比對；僅你有權查看的候選）找不到可能同行人員。不會因此把草稿同行者欄位改成「無」。可擴大 near_days 或改關鍵字。`
+                : `以下是可能同行的人員，日期不完全相同，請依實際行程選擇。共 ${result.candidates.length} 位（鄰近範圍 ±${result.nearDays} 天）。不要捏造機率；同名請用工號辨識。`,
+          },
+        };
+      }
+
+      case 'approve_submission': {
+        const formId = requireUuid(args, 'form_id');
+        if (!formId.ok) return { ok: false, name: tool, label, response: { error: formId.error } };
+        const outcome = await approveOneForActor(employee, formId.value, ctx?.conversationId ?? null);
+        return {
+          ok: outcome.ok,
+          name: tool,
+          label,
+          response: outcome,
+        };
+      }
+
+      case 'return_submission': {
+        const formId = requireUuid(args, 'form_id');
+        const reason = requireString(args, 'reason', { min: 1, max: 1000 });
+        if (!formId.ok) return { ok: false, name: tool, label, response: { error: formId.error } };
+        if (!reason.ok) return { ok: false, name: tool, label, response: { error: reason.error, message: '請提供退回原因。' } };
+        const outcome = await returnOneForActor(employee, formId.value, reason.value, ctx?.conversationId ?? null);
+        return {
+          ok: outcome.ok,
+          name: tool,
+          label,
+          response: outcome,
+        };
+      }
+
+      case 'approve_all_pending': {
+        const rawLimit = Number(args?.limit);
+        const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, Math.floor(rawLimit)), 30) : 20;
+        const inbox = await loadAssistantInbox(limit);
+        if (inbox.loadError) {
+          return { ok: false, name: tool, label, response: { error: 'inbox_unavailable', message: '待簽核清單暫時無法載入。' } };
+        }
+        const custom = inbox.pendingApprovals.filter((i) => i.formType === 'custom' || Boolean(i.formKey));
+        if (custom.length === 0) {
+          return {
+            ok: true,
+            name: tool,
+            label,
+            response: { approved: 0, failed: 0, message: '目前沒有可代簽的待簽核單據。', results: [] },
+          };
+        }
+        const results: Array<Record<string, unknown>> = [];
+        let approved = 0;
+        let failed = 0;
+        for (const item of custom.slice(0, limit)) {
+          const outcome = await approveOneForActor(employee, item.id, ctx?.conversationId ?? null);
+          results.push({
+            formId: item.id,
+            formNumber: item.caseNumber,
+            formName: item.label,
+            ...outcome,
+          });
+          if (outcome.ok) approved += 1;
+          else failed += 1;
+        }
+        return {
+          ok: failed === 0,
+          name: tool,
+          label,
+          response: {
+            approved,
+            failed,
+            totalAttempted: results.length,
+            results,
+            message: `已處理 ${results.length} 張：成功 ${approved}、失敗 ${failed}。`,
+          },
+        };
+      }
+
+      case 'search_company_regulations': {
+        const query = typeof args?.query === 'string' ? args.query.trim() : '';
+        const category = typeof args?.category === 'string' ? args.category.trim() : undefined;
+        const limitRaw = Number(args?.limit);
+        const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 10) : 5;
+        const { searchRegulationsForAi } = await import('@/lib/regulations/service');
+        const items = await searchRegulationsForAi({
+          query: query || undefined,
+          category: category || undefined,
+          limit,
+        });
+        return {
+          ok: true,
+          name: tool,
+          label,
+          response: {
+            query: query || '（全部核心規章）',
+            count: items.length,
+            regulations: items,
+            hint: '回答時請明確引用規章名稱、文號與條文規定，並可引導使用者前往「公司資訊 > 公司規章」（/regulations）閱覽完整條文或直接協助建立對應表單草稿。',
+          },
         };
       }
 

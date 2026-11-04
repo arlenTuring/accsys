@@ -104,6 +104,11 @@ export type AssistantTurnInput = {
   images?: Array<{ mimeType: string; base64: string; fileName?: string }>;
   /** Draft open on the person's screen (draft library / tab); linked to this conversation after an owner check. */
   targetDraftId?: string | null;
+  /**
+   * When the person taps「接續回覆」on a model message: the assistant turn is
+   * about that reply. Stored user text stays plain; context is injected for the model only.
+   */
+  replyToMessageId?: string | null;
 };
 
 /**
@@ -118,7 +123,11 @@ function clientMessageIdOf(input: AssistantTurnInput): string {
 export async function runAssistantTurn(
   employee: CurrentEmployee,
   input: AssistantTurnInput,
-  options: { persistTrace?: boolean; fill?: FillOptions } = {}
+  options: {
+    persistTrace?: boolean;
+    fill?: FillOptions;
+    onProgress?: import('./progress').TurnProgressSink;
+  } = {}
 ): Promise<AiChatActionResult> {
 
   if (!tryAcquireEmployeeTurn(employee.id)) {
@@ -271,9 +280,32 @@ export async function runAssistantTurn(
       if (bound.ok) focusDraftId = bound.draft.id;
     }
     // Authoritative state from the database, sent to the model only (not stored as the user's message).
-    const workState = await buildWorkState({ conversationId: conversation.id, ownerEmployeeId: employee.id, focusDraftId });
+    const workState = await buildWorkState({
+      conversationId: conversation.id,
+      ownerEmployeeId: employee.id,
+      focusDraftId,
+      userMessage: message,
+    });
     trace.emit('turn.work_state', { chars: workState.length, text: summarize(workState) });
     const userParts: UserContentPart[] = [{ type: 'text', text: workState }];
+
+    const replyToId =
+      typeof input.replyToMessageId === 'string' && /^[0-9a-f-]{36}$/i.test(input.replyToMessageId)
+        ? input.replyToMessageId
+        : null;
+    if (replyToId) {
+      const { getOwnedModelMessage } = await import('./conversations');
+      const quoted = await getOwnedModelMessage(conversation.id, employee.id, replyToId);
+      if (quoted) {
+        const clip = quoted.contentText.replace(/\s+/g, ' ').trim().slice(0, 1200);
+        userParts.push({
+          type: 'text',
+          text: `【使用者正在針對助手上一則回覆作回應】\n助手當時說：\n${clip}${quoted.contentText.length > 1200 ? '…' : ''}\n請依使用者下方訊息回應該內容；把它當成延續該則回覆的對話，不要當成無關的新話題。`,
+        });
+        trace.emit('turn.context', { replyToMessageId: quoted.id, quotedChars: quoted.contentText.length });
+      }
+    }
+
     if (message) userParts.push({ type: 'text', text: `【使用者訊息】\n${message}` });
     else if (imageCount > 0) {
       userParts.push({
@@ -286,6 +318,17 @@ export async function runAssistantTurn(
         type: 'text',
         text: `本回合可附加的 staged_attachment_ids：${staged.map((s) => s.id).join(', ')}（檔名：${staged.map((s) => s.fileName).join('、')}）。`,
       });
+    }
+    if (message) {
+      const { buildMentionContextHint } = await import('./mentions');
+      const mentionHint = await buildMentionContextHint(message);
+      if (mentionHint) {
+        userParts.push({ type: 'text', text: mentionHint });
+      }
+      const { intentHintsForUserMessage } = await import('./intent-hints');
+      for (const hint of intentHintsForUserMessage(message)) {
+        userParts.push({ type: 'text', text: hint });
+      }
     }
     // Inline vision only for reasonably small files. Large photos stay staged-only
     // (model still gets staged ids + attach tool). Avoids model_empty / payload failures.
@@ -319,7 +362,8 @@ export async function runAssistantTurn(
         fill: options.fill,
       },
       undefined,
-      trace
+      trace,
+      options.onProgress
     );
 
     const safeBlocks = sanitizeBlocks(blocks, conversation.id);

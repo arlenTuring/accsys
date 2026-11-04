@@ -11,6 +11,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
+import { deflateSync } from 'node:zlib';
 import { and, eq } from 'drizzle-orm';
 import { attachStagedFilesToDraft } from '../src/lib/ai-chat/attach-staged';
 import { createConversation } from '../src/lib/ai-chat/conversations';
@@ -110,11 +111,16 @@ async function main() {
 
   const conv = await createConversation(A);
 
-  // 選檔未確認：上傳完成，沒有任何 AI 分析狀態。
+  // 新版：上傳＋安全掃描後可自動開始 AI（不再需要「確認並檢查」）。
+  // 此腳本仍先驗證上傳保留原檔，再顯式呼叫檢查以取得可斷言結果。
   const { r: upMatch, bytes: matchBytes } = await stage(conv.id, 'invoice-match.jpg');
   if (!upMatch.ok) throw new Error(upMatch.error);
   const before = await row(upMatch.staged.id);
-  record('no-ai-before-confirm', before.analysisStatus === null && before.analysisStartedAt === null, `上傳後 analysis_status=${String(before.analysisStatus)}、analysis_started_at=${String(before.analysisStartedAt)}`);
+  record(
+    'upload-keeps-original-then-ai-allowed',
+    before.sha256 === sha(matchBytes),
+    `上傳後可進行 AI（analysis_status=${String(before.analysisStatus)}）；原檔雜湊 ${before.sha256.slice(0, 12)}…`
+  );
   record('original-kept', before.sha256 === sha(matchBytes), `儲存檔雜湊與原檔相同（${before.sha256.slice(0, 12)}…）`);
 
   // 統編符合：檢查後直接加入。
@@ -263,7 +269,41 @@ async function main() {
       !hit.r.ok && (hit.r as { code: string }).code === 'infected' && rows.length >= 1 && ready.length === 0 && clean.r.ok,
       `替身掃描器：含 EICAR 的 PDF → ${hit.r.ok ? '通過!' : (hit.r as { code: string }).code}；非 PDF 內容改副檔名 → ${bad.r.ok ? '通過' : (bad.r as { code: string }).code}；被擋 ${rows.length} 筆都不可夾帶；乾淨檔通過`
     );
-    record('scan-real-clamav', null, '本機沒有 ClamAV，真實掃描器未驗證');
+
+    // 真實掃描器：REAL_CLAMAV_PORT 指向 clamd 時走同一條流程，沒有設定就維持未驗證。
+    const realPort = process.env.REAL_CLAMAV_PORT?.trim();
+    if (!realPort) {
+      record('scan-real-clamav', null, '未設定 REAL_CLAMAV_PORT，真實掃描器未驗證');
+    } else {
+      process.env.ATTACHMENT_SCAN = 'clamav';
+      process.env.CLAMAV_HOST = '127.0.0.1';
+      process.env.CLAMAV_PORT = realPort;
+      const convR = await createConversation(A);
+      // EICAR only counts at the start of a file, so it goes in a compressed PDF stream, which clamd unpacks.
+      const packed = deflateSync(eicar);
+      const hitReal = await stageAiChatImage({
+        ownerEmployeeId: A,
+        conversationId: convR.id,
+        clientAttachmentId: randomUUID(),
+        fileName: 'eicar-in-stream.pdf',
+        bytes: new Uint8Array(
+          Buffer.concat([
+            Buffer.from(`%PDF-1.4\n1 0 obj\n<</Type/Catalog/Pages 2 0 R>>\nendobj\n2 0 obj\n<</Type/Pages/Kids[]/Count 0>>\nendobj\n3 0 obj\n<</Length ${packed.length}/Filter/FlateDecode>>\nstream\n`),
+            packed,
+            Buffer.from('\nendstream\nendobj\ntrailer\n<</Root 1 0 R>>\n%%EOF\n'),
+          ])
+        ),
+      });
+      const cleanReal = await stage(convR.id, 'multipage.pdf');
+      delete process.env.ATTACHMENT_SCAN;
+      const failed = await getDb().select().from(aiChatStagedAttachments).where(and(eq(aiChatStagedAttachments.conversationId, convR.id), eq(aiChatStagedAttachments.scanStatus, 'failed')));
+      const usable = await getReadyStagedImagesForOwner(A, convR.id, failed.map((x) => x.id));
+      record(
+        'scan-real-clamav',
+        !hitReal.ok && (hitReal as { code: string }).code === 'infected' && failed.length === 1 && usable.length === 0 && cleanReal.r.ok,
+        `真實 clamd：PDF 串流內含 EICAR → ${hitReal.ok ? '通過!' : (hitReal as { code: string }).code}；隔離 ${failed.length} 筆、可夾帶 ${usable.length} 筆；乾淨 PDF → ${cleanReal.r.ok ? '通過' : '被擋!'}`
+      );
+    }
   }
 
   const n = (v: boolean | null) => results.filter((r) => r.ok === v).length;

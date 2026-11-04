@@ -40,6 +40,41 @@ export const PERMISSIONS = {
     label: '財產保管清冊',
     description: '查看與維護財產保管人、地點與狀態。',
   },
+  'finance.assets_fields': {
+    group: 'finance',
+    label: '資產欄位管理',
+    description: '新增、調整、隱藏與恢復資產自訂欄位定義。',
+  },
+  'finance.assets_fields_purge': {
+    group: 'finance',
+    label: '永久刪除資產欄位資料',
+    description: '破壞性刪除欄位定義與適用範圍內的欄位值（需額外確認）。',
+  },
+  'assets.company_view': {
+    group: 'finance',
+    label: '全公司資產清冊',
+    description: '查看全公司資產（與僅個人／部門範圍分開授權）。',
+  },
+  'company.announcements': {
+    group: 'admin',
+    label: '公司公告',
+    description: '建立、排程、發布與撤下公司公告。',
+  },
+  'company.regulations': {
+    group: 'admin',
+    label: '公司規章',
+    description: '新增、分類、編輯、發布與匯入公司規章與管理辦法。',
+  },
+  'company.surveys': {
+    group: 'admin',
+    label: '內部問卷',
+    description: '建立與發布公司內部具名問卷。',
+  },
+  'company.surveys_results': {
+    group: 'admin',
+    label: '問卷結果',
+    description: '查看問卷統計與匯出回覆。',
+  },
   'forms.design': {
     group: 'designer',
     label: '表單設計器',
@@ -75,6 +110,11 @@ export const PERMISSIONS = {
     label: '主檔資料',
     description: '維護供應商等主檔。',
   },
+  'audit.read': {
+    group: 'admin',
+    label: '系統日誌',
+    description: '查看同仁 AI 對話、助手回應與操作／簽核等系統使用紀錄。',
+  },
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;
@@ -95,7 +135,15 @@ export function isSystemRoleCode(value: string): value is SystemRoleCode {
 /** Default permission sets for the three built-in roles (seed + admin always-all). */
 export const SYSTEM_ROLE_PERMISSIONS: Record<SystemRoleCode, readonly Permission[]> = {
   staff: [],
-  finance: ['forms.read_all', 'forms.sensitive', 'finance.budget', 'finance.cases', 'finance.assets'],
+  finance: [
+    'forms.read_all',
+    'forms.sensitive',
+    'finance.budget',
+    'finance.cases',
+    'finance.assets',
+    'finance.assets_fields',
+    'assets.company_view',
+  ],
   admin: ALL_PERMISSIONS,
 };
 
@@ -138,4 +186,8 @@ export const ADMIN_NAV_PERMISSIONS = [
   'master_data.manage',
   'forms.design',
   'forms.delete',
+  'company.announcements',
+  'company.regulations',
+  'company.surveys',
+  'audit.read',
 ] as const satisfies readonly Permission[];

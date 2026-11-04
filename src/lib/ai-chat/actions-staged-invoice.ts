@@ -70,7 +70,7 @@ export async function listPendingStagedAction(input: { conversationId: string })
   return { ok: true as const, items: await listPendingStaged(employee.id, input.conversationId) };
 }
 
-/** 確認並檢查: the person's go-ahead; only now does any file reach the AI check. */
+/** Start AI analysis for scanned staged files (no confirm gate; draft optional). */
 export async function startStagedCheckAction(input: { stagedIds: string[]; targetDraftId?: string | null }) {
   const employee = await getCurrentEmployee();
   if (!employee) return { ok: false as const, error: '請先登入' };

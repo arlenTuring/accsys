@@ -4,9 +4,9 @@ import { MAX_CHAT_ATTACHMENTS, MAX_FILE_SIZE_BYTES } from '@/lib/attachments/pol
 import { invoiceStatusNeedsConfirm } from '@/lib/attachments/invoice-reminder';
 
 /**
- * selected → uploading (original file, real type, security scan; no AI)
- * → scanned (waits for 確認並檢查) → checking (AI) → ready / needs_confirm
- * → attached to the draft chosen at 確認並檢查 (the strip entry then goes away).
+ * selected → processing/compressing → uploading → scanning → checking (auto AI)
+ * → ready / needs_confirm (reminder, does not block attach) → attaching.
+ * Analysis does not require a draft or a confirm button.
  */
 export type ClientImageStatus =
   | 'processing'
@@ -46,14 +46,27 @@ export type ClientImageAttachment = {
   progress?: number;
   /** Bumped after each saved photo edit (0 / undefined = the original). */
   edited?: number;
-  /** Draft chosen when the person pressed 確認並檢查; attaching never follows a later tab switch. */
+  /**
+   * Draft pinned when the user pressed 加入附件 (or NL attach).
+   * Background work must not retarget after a later tab switch.
+   */
   target?: { draftId: string; title: string };
   /** Business invoice reminder (not a security block). */
   invoice?: ClientInvoiceReminder | null;
+  /** Actual original file bytes before optimization. */
+  originalSizeBytes?: number;
+  /** Working version bytes uploaded / analysed. */
+  workingSizeBytes?: number;
+  /** Human-readable size compare from measured bytes. */
+  sizeNote?: string;
+  /** Short AI check conclusion; long detail stays in preview. */
+  checkBrief?: string | null;
+  /** Analysis still running or failed but file is attachable after security scan. */
+  checkIncomplete?: boolean;
 };
 
 export const AI_CHAT_IMAGE_ACCEPT =
-  'image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf,.heic,.heif,.pdf';
+  'image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf,.heic,.heif,.pdf,.docx,.xlsx,.pptx';
 /** Client ceiling — must stay ≤ server `AI_IMAGE_MAX_BYTES` in staged-images. */
 export const AI_CHAT_IMAGE_MAX_BYTES = MAX_FILE_SIZE_BYTES;
 export const AI_CHAT_IMAGE_MAX_COUNT = MAX_CHAT_ATTACHMENTS;
@@ -65,6 +78,9 @@ export const ALLOWED_IMAGE_MIMES = new Set([
   'image/heic',
   'image/heif',
   'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 ]);
 
 export function formatBytes(n: number): string {
@@ -76,13 +92,14 @@ export function formatBytes(n: number): string {
 export function statusLabel(status: ClientImageStatus): string {
   switch (status) {
     case 'processing':
+      return '壓縮中';
     case 'selected':
       return '準備上傳';
     case 'uploading':
     case 'scanning':
       return '上傳與安全檢查中';
     case 'scanned':
-      return '等待確認（尚未送 AI）';
+      return '安全檢查完成';
     case 'checking':
       return 'AI 檢查中';
     case 'ready':
@@ -90,7 +107,7 @@ export function statusLabel(status: ClientImageStatus): string {
     case 'attaching':
       return '加入草稿中';
     case 'needs_confirm':
-      return '需確認提醒';
+      return '檢查完成（有提醒）';
     case 'confirmed':
       return '已確認仍要夾帶';
     case 'attach_failed':
@@ -102,14 +119,17 @@ export function statusLabel(status: ClientImageStatus): string {
   }
 }
 
-/** Statuses that may be sent to the model as vision context (the person pressed 傳送訊息). */
+/** Statuses that may be sent to the model as vision context. */
 export function canSendToModel(status: ClientImageStatus): boolean {
-  return ['scanned', 'ready', 'needs_confirm', 'confirmed', 'attach_failed'].includes(status);
+  return ['scanned', 'checking', 'ready', 'needs_confirm', 'confirmed', 'attach_failed'].includes(status);
 }
 
-/** Draft attach requires a finished check (no business issue) or explicit confirmation. */
+/**
+ * Attach is allowed after security scan; AI reminder does not block.
+ * Still uploading / blocked / failed cannot attach.
+ */
 export function canAttachToDraft(status: ClientImageStatus): boolean {
-  return status === 'ready' || status === 'confirmed' || status === 'attach_failed';
+  return ['scanned', 'checking', 'ready', 'needs_confirm', 'confirmed', 'attach_failed'].includes(status);
 }
 
 /** Map AI invoice check into client status after security scan passed. */
@@ -154,6 +174,9 @@ export function resolveImageMime(file: File): string {
   if (/\.heic$/i.test(name)) return 'image/heic';
   if (/\.heif$/i.test(name)) return 'image/heif';
   if (/\.pdf$/i.test(name)) return 'application/pdf';
+  if (/\.docx$/i.test(name)) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  if (/\.xlsx$/i.test(name)) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  if (/\.pptx$/i.test(name)) return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
   if (file.type === 'image/jpg') return 'image/jpeg';
   return file.type;
 }
@@ -179,8 +202,10 @@ export function buildImageCandidates(
       fileName: normalized.name || 'image',
       mimeType,
       sizeBytes: normalized.size,
+      originalSizeBytes: normalized.size,
+      workingSizeBytes: normalized.size,
       previewUrl: URL.createObjectURL(normalized),
-      status: 'selected',
+      status: 'processing',
       file: normalized,
     });
   }

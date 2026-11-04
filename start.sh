@@ -51,12 +51,18 @@ SELF_CHAIN=" $$ "
 p="$PPID"
 while [[ -n "$p" && "$p" -gt 1 ]]; do
   SELF_CHAIN+="$p "
+  # Prefer ps; fall back to empty when the sandbox/OS denies process listing.
   p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ' || true)"
+  [[ -z "$p" ]] && break
 done
 
 find_project_pids() {
   local snapshot pid cwd
-  snapshot="$(ps -axo pid=,ppid=,command=)"
+  # Restricted environments (Cursor agent sandbox) may deny /bin/ps — skip cleanup instead of aborting.
+  if ! snapshot="$(ps -axo pid=,ppid=,command= 2>/dev/null)"; then
+    echo "⚠️  無法列出行程（ps 被拒），略過關閉本專案舊程序；若 port 被占用會自動換 port。" >&2
+    return 0
+  fi
   # Candidates by command line, minus this script, its ancestors and its own subshells.
   for pid in $(awk -v self="$$" -v chain="$SELF_CHAIN" '
     { pid = $1; ppid[pid] = $2; $1 = ""; $2 = ""; cmd[pid] = $0 }

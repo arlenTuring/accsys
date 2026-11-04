@@ -1,9 +1,18 @@
-import { eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import { parseDefinition } from '@/lib/custom-forms/definition';
 import { getPickerOptions, type PickerOptions } from '@/lib/custom-forms/queries';
 import { allFields, isDisplayOnly, type FieldDef, type FormSchema } from '@/lib/custom-forms/schema';
 import { getDb } from '@/lib/db';
-import { formDefinitionVersions } from '@/lib/db/schema';
+import {
+  assets,
+  budgetCodes,
+  departments,
+  employees,
+  formCategories,
+  formDefinitions,
+  formDefinitionVersions,
+  projects,
+} from '@/lib/db/schema';
 import { taipeiToday } from '@/lib/taipei-date';
 import { recordAudit } from '@/lib/audit/record';
 import {
@@ -382,6 +391,111 @@ export function formSpec(schema: FormSchema, picker: PickerOptions): Record<stri
 
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
 
+type CachedFormEntry = {
+  key: string;
+  name: string;
+  description: string;
+  fieldLine: string;
+};
+
+let cachedFormsIndex: { entries: CachedFormEntry[]; expiresAt: number } | null = null;
+
+/**
+ * In-memory cached catalog of published forms.
+ * L1 uses only `key=name` (~80 tokens total);
+ * L2 selectively expands `fieldLine` ONLY for the 1-2 forms matching the user's message intent.
+ */
+async function getCompanyFormsIndex(): Promise<CachedFormEntry[]> {
+  const now = Date.now();
+  if (cachedFormsIndex && cachedFormsIndex.expiresAt > now) {
+    return cachedFormsIndex.entries;
+  }
+  const db = getDb();
+  const defs = await db
+    .select({
+      key: formDefinitions.key,
+      name: formDefinitions.name,
+      description: formDefinitions.description,
+      versionId: formDefinitions.publishedVersionId,
+    })
+    .from(formDefinitions)
+    .innerJoin(formCategories, eq(formCategories.id, formDefinitions.categoryId))
+    .where(and(eq(formDefinitions.status, 'published'), eq(formCategories.active, true)))
+    .orderBy(asc(formCategories.sortOrder), asc(formDefinitions.sortOrder), asc(formDefinitions.name));
+
+  const verIds = defs.map((d) => d.versionId).filter((x): x is string => Boolean(x));
+  const verRows = verIds.length
+    ? await db
+        .select({ id: formDefinitionVersions.id, schema: formDefinitionVersions.schema, flow: formDefinitionVersions.flow })
+        .from(formDefinitionVersions)
+        .where(inArray(formDefinitionVersions.id, verIds))
+    : [];
+  const verMap = new Map(verRows.map((v) => [v.id, v]));
+
+  const entries: CachedFormEntry[] = defs.map((d) => {
+    const ver = d.versionId ? verMap.get(d.versionId) : undefined;
+    const parsed = ver ? parseDefinition(ver.schema, ver.flow) : null;
+    if (!parsed?.ok) {
+      return { key: d.key, name: d.name, description: d.description, fieldLine: `${d.key}（${d.name}）` };
+    }
+    const writable = allFields(parsed.schema).filter((f) => !isDisplayOnly(f) && f.type !== 'attachments');
+    const fieldBriefs = writable.map((f) => {
+      if (f.type === 'table') {
+        const cols = f.columns
+          .filter((c) => !c.formula && !c.financeFill)
+          .map((c) => `${c.id}(${c.label}${c.options ? `:${c.options.map((o) => o.label).join('/')}` : ''})`)
+          .join(', ');
+        return `${f.id}[表格:${cols}]`;
+      }
+      if ('options' in f && f.options) {
+        return `${f.id}(${f.label}:${f.options.map((o) => o.label).join('/')})`;
+      }
+      return `${f.id}(${f.label})`;
+    });
+    return {
+      key: d.key,
+      name: d.name,
+      description: d.description,
+      fieldLine: `form_key="${d.key}"（${d.name}）欄位：${fieldBriefs.join('、')}`,
+    };
+  });
+
+  cachedFormsIndex = { entries, expiresAt: now + 60_000 };
+  return entries;
+}
+
+/** Immediately clear the in-memory form catalog cache when forms or schemas are published/updated. */
+export function invalidateAiCatalogCache(): void {
+  cachedFormsIndex = null;
+}
+
+/** Match user query to relevant form_keys so we only inject field schemas for relevant forms (saves ~85% tokens). */
+function matchRelevantFormKeys(msg: string, entries: CachedFormEntry[]): Set<string> {
+  const q = msg.toLowerCase();
+  const matched = new Set<string>();
+  if (!q.trim()) return matched;
+
+  const rules: Array<{ re: RegExp; keys: string[] }> = [
+    { re: /資產|財產|設備|轉給|轉移|移交|保管人|借出|報廢|macbook|dell|螢幕|筆電|光達|電腦/, keys: ['asset-transfer'] },
+    { re: /公出|出差申請|差旅申請|拜訪客戶|外出/, keys: ['business-trip'] },
+    { re: /旅費|出差報支|差旅報支|高鐵|機票|住宿|油資|車資/, keys: ['travel-expense'] },
+    { re: /採購|請購|買|報價|廠商|供應商/, keys: ['general-procurement', 'small-purchase'] },
+    { re: /報支|請款|核銷|發票|收據|費用|代墊/, keys: ['expense-reimbursement', 'travel-expense'] },
+    { re: /用印|蓋章|大小章|合約用印|印鑑/, keys: ['seal-request'] },
+  ];
+  for (const r of rules) {
+    if (r.re.test(q)) {
+      for (const k of r.keys) matched.add(k);
+    }
+  }
+  for (const e of entries) {
+    if (q.includes(e.key.toLowerCase()) || q.includes(e.name.toLowerCase().replace(/申請單|單$/, ''))) {
+      matched.add(e.key);
+    }
+  }
+  return matched;
+}
+
 /** Calendar anchor so relative dates (下週三、明天) resolve against the company calendar, not the model's guess. */
 export function calendarContext(now: Date = new Date()): string {
   const today = taipeiToday(now);
@@ -410,9 +524,98 @@ export async function buildWorkState(input: {
   ownerEmployeeId: string;
   /** Draft open on the person's screen; listed first as the current draft. */
   focusDraftId?: string | null;
+  /** Current user message for L2 intent-triggered context expansion. */
+  userMessage?: string;
   now?: Date;
 }): Promise<string> {
-  const lines: string[] = ['【系統工作狀態｜後端由資料庫產生，非使用者輸入；欄位與版本以此為準】', calendarContext(input.now)];
+  const db = getDb();
+  const msg = input.userMessage ?? '';
+  const needsAssets = /資產|財產|設備|轉給|轉移|移交|保管|借出|報廢|macbook|dell|螢幕|筆電|光達|電腦/i.test(msg);
+
+  const formsIndex = await getCompanyFormsIndex();
+  const matchedFormKeys = matchRelevantFormKeys(msg, formsIndex);
+  const needsBudgets =
+    matchedFormKeys.has('general-procurement') ||
+    matchedFormKeys.has('small-purchase') ||
+    matchedFormKeys.has('expense-reimbursement') ||
+    matchedFormKeys.has('travel-expense');
+
+  const [[empRow], myAssets, deptBudgets] = await Promise.all([
+    db
+      .select({
+        id: employees.id,
+        name: employees.name,
+        employeeCode: employees.employeeCode,
+        title: employees.title,
+        departmentId: employees.departmentId,
+        departmentName: departments.name,
+      })
+      .from(employees)
+      .innerJoin(departments, eq(departments.id, employees.departmentId))
+      .where(eq(employees.id, input.ownerEmployeeId))
+      .limit(1),
+    needsAssets
+      ? db
+          .select({
+            tag: assets.tag,
+            name: assets.name,
+            location: assets.location,
+            status: assets.status,
+          })
+          .from(assets)
+          .where(eq(assets.custodianEmployeeId, input.ownerEmployeeId))
+          .orderBy(asc(assets.tag))
+          .limit(20)
+      : Promise.resolve([]),
+    needsBudgets
+      ? db
+          .select({
+            code: budgetCodes.code,
+            category: budgetCodes.category,
+            departmentId: budgetCodes.departmentId,
+            projectName: projects.name,
+          })
+          .from(budgetCodes)
+          .leftJoin(projects, eq(projects.id, budgetCodes.projectId))
+          .orderBy(asc(budgetCodes.code))
+          .limit(20)
+      : Promise.resolve([]),
+  ]);
+
+  // L1 (Always-On, ~120 tokens): Employee's own identity card + 1-line form directory
+  const actorLine = empRow
+    ? `當前登入員工（本人／申請人／預設原保管人）：${empRow.name}（工號：${empRow.employeeCode}｜部門：${empRow.departmentName}${empRow.title ? `｜職稱：${empRow.title}` : ''}）`
+    : '';
+  const l1FormDirectory = `公司可填表單目錄（form_key=名稱）：${formsIndex.map((f) => `${f.key}=${f.name}`).join('｜')}`;
+
+  // L2 (Intent-Triggered Working Set): Only expand schemas & assets relevant to this message
+  const l2FormSchemas = formsIndex
+    .filter((f) => matchedFormKeys.has(f.key))
+    .map((f) => `【本回合相關表單欄位規格】${f.fieldLine}`);
+
+  const assetLine = needsAssets
+    ? myAssets.length > 0
+      ? `【本人名下保管資產（共 ${myAssets.length} 筆）】${myAssets.map((a) => `${a.tag} ${a.name}（地點：${a.location}）`).join('；')}`
+      : '【本人名下保管資產】目前無個人保管資產。'
+    : '';
+
+  const myDeptBudgets = empRow
+    ? deptBudgets.filter((b) => b.departmentId === empRow.departmentId || b.projectName)
+    : deptBudgets;
+  const budgetLine =
+    matchedFormKeys.size > 0 && myDeptBudgets.length > 0
+      ? `【本人部門與專案常用預算代碼】${myDeptBudgets.slice(0, 10).map((b) => `${b.code}（${b.projectName || b.category}）`).join('、')}`
+      : '';
+
+  const lines: string[] = [
+    '【系統工作狀態｜後端由資料庫產生，非使用者輸入；欄位與版本以此為準】',
+    calendarContext(input.now),
+    ...(actorLine ? [actorLine] : []),
+    l1FormDirectory,
+    ...(assetLine ? [assetLine] : []),
+    ...(budgetLine ? [budgetLine] : []),
+    ...l2FormSchemas,
+  ];
   const drafts = (await listConversationDrafts(input.conversationId, input.ownerEmployeeId))
     .filter((d) => d.status === 'draft')
     .sort((a, b) => Number(b.id === input.focusDraftId) - Number(a.id === input.focusDraftId));

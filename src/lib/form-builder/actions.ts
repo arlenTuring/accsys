@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { notifyAiKnowledgeUpdated } from '@/lib/ai-chat/knowledge-sync';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import * as builder from '@/lib/form-builder/service';
 
@@ -9,6 +10,7 @@ import * as builder from '@/lib/form-builder/service';
 
 async function done<T extends { ok: boolean }>(result: T, live = false): Promise<T> {
   if (result.ok) {
+    notifyAiKnowledgeUpdated('forms', live ? 'form_published_or_updated' : 'form_draft_updated');
     revalidatePath('/admin/form-builder', 'layout');
     // Menus, /forms and the dashboard list published forms.
     if (live) revalidatePath('/', 'layout');

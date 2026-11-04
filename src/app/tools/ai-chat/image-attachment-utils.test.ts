@@ -1,40 +1,44 @@
 import { describe, expect, it } from 'vitest';
 import {
-  type ClientImageAttachment,
+  buildImageCandidates,
+  canAttachToDraft,
+  canSendToModel,
   planAcceptedAttachments,
+  statusAfterInvoiceCheck,
   statusLabel,
 } from './image-attachment-utils';
 
-function stub(id: string): ClientImageAttachment {
-  return {
-    clientAttachmentId: id,
-    fileName: `${id}.png`,
-    mimeType: 'image/png',
-    sizeBytes: 100,
-    previewUrl: `blob:${id}`,
-    status: 'selected',
-  };
-}
-
-describe('planAcceptedAttachments', () => {
-  it('respects remaining room against current count', () => {
-    const { accepted, overLimit } = planAcceptedAttachments(2, [stub('a'), stub('b'), stub('c')], 3);
-    expect(accepted.map((a) => a.clientAttachmentId)).toEqual(['a']);
-    expect(overLimit).toBe(2);
+describe('image-attachment-utils', () => {
+  it('labels scanned as security complete (AI starts automatically)', () => {
+    expect(statusLabel('scanned')).toContain('安全檢查完成');
+    expect(statusLabel('scanned')).not.toContain('尚未送 AI');
+    expect(statusLabel('checking')).toContain('AI 檢查中');
+    expect(statusLabel('processing')).toContain('壓縮');
   });
 
-  it('accepts none when already at max', () => {
-    const { accepted, overLimit } = planAcceptedAttachments(3, [stub('a')], 3);
-    expect(accepted).toHaveLength(0);
-    expect(overLimit).toBe(1);
+  it('allows attach after scan even with business reminder status', () => {
+    expect(canAttachToDraft('scanned')).toBe(true);
+    expect(canAttachToDraft('checking')).toBe(true);
+    expect(canAttachToDraft('ready')).toBe(true);
+    expect(canAttachToDraft('needs_confirm')).toBe(true);
+    expect(canAttachToDraft('uploading')).toBe(false);
+    expect(canAttachToDraft('blocked')).toBe(false);
   });
-});
 
-describe('statusLabel', () => {
-  it('labels upload and scan as one phase, and says the AI has not run yet', () => {
-    expect(statusLabel('uploading')).toBe('上傳與安全檢查中');
-    expect(statusLabel('scanning')).toBe('上傳與安全檢查中');
-    expect(statusLabel('scanned')).toContain('尚未送 AI');
-    expect(statusLabel('blocked')).toContain('已隔離');
+  it('maps invoice reminders without blocking attach path', () => {
+    // Reminder statuses still surface as needs_confirm for UI copy, but canAttachToDraft stays true.
+    expect(statusAfterInvoiceCheck({ status: 'mismatch', summary: '統編不符' })).toBe('needs_confirm');
+    expect(canAttachToDraft('needs_confirm')).toBe(true);
+    expect(statusAfterInvoiceCheck({ status: 'match', summary: 'ok' })).toBe('ready');
+    expect(canSendToModel('checking')).toBe(true);
+  });
+
+  it('plans attachment slots', () => {
+    const { candidates } = buildImageCandidates([
+      new File([new Uint8Array([1, 2, 3])], 'a.jpg', { type: 'image/jpeg' }),
+    ]);
+    expect(candidates[0]?.status).toBe('processing');
+    const planned = planAcceptedAttachments(0, candidates, 8);
+    expect(planned.accepted).toHaveLength(1);
   });
 });

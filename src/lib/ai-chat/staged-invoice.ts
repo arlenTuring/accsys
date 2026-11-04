@@ -135,9 +135,9 @@ export async function analyzeStagedAttachment(input: {
 export type StagedCheckState = { stagedId: string; state: 'idle' | 'running' | 'done'; result: InvoiceCheckResult | null };
 
 /**
- * 確認並檢查: start the AI check for files the person confirmed. Runs in the
- * background so large files do not hold a request open; the page polls
- * getStagedCheckStates. A result for the same file content is reused.
+ * Start AI checks after security scan (automatic). Runs in the background so
+ * large files do not hold a request open; the page polls getStagedCheckStates.
+ * A result for the same file content is reused. Draft is optional.
  */
 export async function startStagedChecks(ownerEmployeeId: string, stagedIds: string[], targetDraftId?: string | null): Promise<void> {
   const db = getDb();

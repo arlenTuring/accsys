@@ -1,4 +1,4 @@
-export const DEFAULT_AFTER_LOGIN = '/dashboard';
+export const DEFAULT_AFTER_LOGIN = '/tools/ai-chat';
 
 /**
  * Returns a same-origin path for a post-login redirect, or the default. Only

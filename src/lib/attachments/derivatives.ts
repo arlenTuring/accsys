@@ -19,7 +19,7 @@ async function runIsolated(
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
       cwd: opts.cwd,
-      env: { NODE_ENV: process.env.NODE_ENV, PATH: process.env.PATH ?? '/usr/bin:/bin', LANG: 'C' },
+      env: { NODE_ENV: process.env.NODE_ENV, PATH: process.env.PATH ?? '/usr/bin:/bin', LANG: 'C', HOME: opts.cwd },
       stdio: ['ignore', 'ignore', 'pipe'],
     });
     let stderr = '';
@@ -63,7 +63,8 @@ export async function officeToPdf(bytes: Uint8Array, fileName: string): Promise<
     await writeFile(input, bytes);
     const { code, stderr } = await runIsolated(
       'soffice',
-      ['--headless', '--norestore', '--nolockcheck', '--nodefault', '--convert-to', 'pdf', '--outdir', dir, input],
+      // The app filesystem is read-only: each conversion gets its own profile under the temp dir.
+      [`-env:UserInstallation=file://${dir}/profile`, '--headless', '--norestore', '--nolockcheck', '--nodefault', '--convert-to', 'pdf', '--outdir', dir, input],
       { cwd: dir, timeoutMs: 60_000 }
     );
     if (code !== 0) {

@@ -25,7 +25,7 @@ export default async function LoginPage({
   const params = await searchParams;
   const returnTo = safeReturnTo(params.returnTo ?? null, configuredOrigin());
   const employee = await getCurrentEmployee();
-  if (employee) redirect(returnTo === DEFAULT_AFTER_LOGIN ? '/dashboard' : returnTo);
+  if (employee) redirect(returnTo === DEFAULT_AFTER_LOGIN ? '/tools/ai-chat' : returnTo);
 
   const errorMessage = getLoginErrorMessage(params.error ?? null);
   const googleHref =

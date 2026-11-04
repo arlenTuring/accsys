@@ -144,21 +144,31 @@ export async function bootstrapAssistantConversation(input?: {
   const firstPage = await listMessages(conversation.id, employee.id, 40);
   let welcomeInserted = false;
 
-  if (firstPage.messages.length === 0) {
+  const lastMsg = firstPage.messages[firstPage.messages.length - 1];
+  const lastIsRecentWelcome =
+    lastMsg?.role === 'system' &&
+    Date.now() - lastMsg.createdAt.getTime() < 30 * 60 * 1000;
+
+  if (firstPage.messages.length === 0 || (!input?.conversationId && !lastIsRecentWelcome)) {
+    const hourSlot = Math.floor(Date.now() / (30 * 60 * 1000));
+    const clientMsgId =
+      firstPage.messages.length === 0
+        ? welcomeClientMessageId(conversation.id)
+        : `${welcomeClientMessageId(conversation.id)}:${hourSlot}`;
     const summary = await buildWelcomeSummary(conversation.id);
     const appended = await appendMessage({
       conversationId: conversation.id,
       ownerEmployeeId: employee.id,
       role: 'system',
       contentText: summary.text,
-      clientMessageId: welcomeClientMessageId(conversation.id),
+      clientMessageId: clientMsgId,
       blocks: summary.blocks,
     });
     welcomeInserted = !appended.replayed;
   }
 
   const refreshed =
-    firstPage.messages.length === 0
+    welcomeInserted || firstPage.messages.length === 0
       ? await listMessages(conversation.id, employee.id, 40)
       : firstPage;
 
@@ -335,6 +345,8 @@ export async function answerChoiceAction(input: {
   if (
     input.optionValue === 'view_pending' ||
     input.optionValue === 'view_mine' ||
+    input.optionValue === 'view_announcements' ||
+    input.optionValue === 'view_surveys' ||
     input.optionValue === 'open_draft_library' ||
     input.optionValue === 'create_form'
   ) {
@@ -469,6 +481,158 @@ async function listAttachmentsForDraftPanel(submissionId: string) {
   }));
 }
 
+/** Right-pane browse for a filed designer form (詳情／簽核). */
+export async function getSubmissionPanelAction(submissionId: string): Promise<
+  | {
+      ok: true;
+      id: string;
+      formKey: string;
+      formName: string;
+      formNumber: string;
+      status: string;
+      version: number;
+      applicantName: string;
+      departmentName: string;
+      submittedAt: string | null;
+      isCurrentApprover: boolean;
+      href: string;
+      header: Array<{ label: string; value: string }>;
+      fields: Array<{ label: string; value: string }>;
+      timeline: Array<{
+        key: string;
+        label: string;
+        name: string | null;
+        state: string;
+        actedAt: string | null;
+        comment: string | null;
+      }>;
+    }
+  | { ok: false; error: string }
+> {
+  const employee = await getCurrentEmployee();
+  if (!employee) return { ok: false, error: publicError('unauthenticated') };
+  if (!/^[0-9a-f-]{36}$/i.test(submissionId)) return { ok: false, error: '單據編號無效。' };
+  const { getSubmissionDetail } = await import('@/lib/custom-forms/queries');
+  const { allFields, isDisplayOnly } = await import('@/lib/custom-forms/schema');
+  const { getApprovalTimeline } = await import('@/lib/approval/timeline');
+  const detail = await getSubmissionDetail(submissionId);
+  if (!detail) return { ok: false, error: '找不到單據或無權限閱讀。' };
+
+  const stringify = (v: unknown): string => {
+    if (v == null || v === '') return '—';
+    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return String(v);
+    if (Array.isArray(v)) return v.map(stringify).filter((s) => s !== '—').join('、') || '—';
+    if (typeof v === 'object' && v && 'rows' in v && Array.isArray((v as { rows: unknown }).rows)) {
+      const rows = (v as { rows: Record<string, unknown>[] }).rows;
+      if (!rows.length) return '—';
+      return rows
+        .slice(0, 5)
+        .map((r, i) => {
+          const parts = Object.values(r)
+            .filter((x) => typeof x === 'string' || typeof x === 'number')
+            .map(String)
+            .slice(0, 3);
+          return `${i + 1}. ${parts.join(' / ') || '（列）'}`;
+        })
+        .join('\n');
+    }
+    return JSON.stringify(v).slice(0, 200);
+  };
+
+  const headerFields = allFields(detail.schema).filter((f) => f.showInHeader && !isDisplayOnly(f) && f.id in detail.data);
+  const bodyFields = allFields(detail.schema).filter(
+    (f) => !f.showInHeader && !isDisplayOnly(f) && f.id in detail.data && f.type !== 'table'
+  );
+  const tableFields = allFields(detail.schema).filter((f) => f.type === 'table' && f.id in detail.data);
+
+  const labeled = (raw: unknown) => {
+    const ref = detail.labels[String(raw)];
+    if (ref) return ref;
+    return stringify(raw);
+  };
+
+  const timeline = await getApprovalTimeline('custom', submissionId, employee);
+  return {
+    ok: true,
+    id: detail.id,
+    formKey: detail.key,
+    formName: detail.name,
+    formNumber: detail.formNumber,
+    status: detail.status,
+    version: detail.version,
+    applicantName: detail.applicantName,
+    departmentName: detail.departmentName,
+    submittedAt: detail.submittedAt ? detail.submittedAt.toISOString() : null,
+    isCurrentApprover: detail.isCurrentApprover,
+    href: `/f/${detail.key}/${detail.id}`,
+    header: [
+      { label: '申請人', value: detail.applicantName },
+      { label: '申請部門', value: detail.departmentName },
+      ...headerFields.map((f) => ({ label: f.label, value: labeled(detail.data[f.id]) })),
+    ],
+    fields: [
+      ...bodyFields.map((f) => ({ label: f.label, value: labeled(detail.data[f.id]) })),
+      ...tableFields.map((f) => ({ label: f.label, value: stringify(detail.data[f.id]) })),
+    ],
+    timeline: (timeline?.nodes ?? []).map((n) => ({
+      key: n.key,
+      label: n.label,
+      name: n.approverName,
+      state: n.state,
+      actedAt: n.actedAt,
+      comment: n.comment,
+    })),
+  };
+}
+
+/** Lightweight approval progress for outline cards (including older stored blocks). */
+export async function getSubmissionProgressAction(
+  formType: string,
+  formId: string
+): Promise<
+  | {
+      ok: true;
+      status: string;
+      progress: {
+        done: number;
+        total: number;
+        remaining: number;
+        percent: number;
+        currentLabel?: string;
+        waitingNames?: string[];
+        steps?: Array<{
+          key: string;
+          label: string;
+          name: string | null;
+          state: 'done' | 'current' | 'waiting' | 'returned';
+        }>;
+      };
+    }
+  | { ok: false; error: string }
+> {
+  const employee = await getCurrentEmployee();
+  if (!employee) return { ok: false, error: publicError('unauthenticated') };
+  if (!/^[0-9a-f-]{36}$/i.test(formId)) return { ok: false, error: '單據編號無效。' };
+  const { getFormApprovalSnapshot } = await import('./approval-snapshot');
+  const { FORM_TABLE } = await import('@/lib/procurement/form-registry');
+  const resolvedType =
+    formType === 'custom' || !(formType in FORM_TABLE)
+      ? ('custom' as const)
+      : (formType as keyof typeof FORM_TABLE);
+  const snap = await getFormApprovalSnapshot(resolvedType, formId);
+  if (!snap) return { ok: false, error: '找不到簽核進度。' };
+  return {
+    ok: true,
+    status: snap.status,
+    progress: {
+      ...snap.progress,
+      currentLabel: snap.currentNodeLabel ?? undefined,
+      waitingNames: snap.pendingApproverNames.length ? snap.pendingApproverNames : undefined,
+      steps: snap.progress.steps,
+    },
+  };
+}
+
 export async function getDraftPanelAction(draftId: string): Promise<
   | {
       ok: true;
@@ -581,7 +745,16 @@ export async function submitDraftAction(input: {
   /** Optional multipart-compatible file list from the draft panel. */
   files?: File[];
 }): Promise<
-  | { ok: true; submissionId: string; formNumber: string; formKey: string; href: string; replayed?: boolean }
+  | {
+      ok: true;
+      submissionId: string;
+      formNumber: string;
+      formKey: string;
+      href: string;
+      replayed?: boolean;
+      copyFailures?: number;
+      warning?: string;
+    }
   | { ok: false; error: string; code?: string }
 > {
   const employee = await getCurrentEmployee();
@@ -597,24 +770,25 @@ export async function submitDraftAction(input: {
   });
   if (!result.ok) return result;
 
+  const warning =
+    result.copyFailures && result.copyFailures > 0
+      ? `單據已送出：${result.formNumber}，但有 ${result.copyFailures} 個附件沒有複製成功。可在草稿庫重試附件複製，或到單據頁補傳。`
+      : undefined;
+
   const draft = await getDraftForOwner(input.draftId, employee.id);
   if (draft) {
     await appendMessage({
       conversationId: draft.conversationId,
       ownerEmployeeId: employee.id,
       role: 'model',
-      contentText: result.copyFailures
-        ? `單據已送出：${result.formNumber}，但有 ${result.copyFailures} 個附件沒有複製成功，請到單據頁補傳。`
-        : `單據已送出：${result.formNumber}`,
+      contentText: warning ?? `單據已送出：${result.formNumber}`,
       blocks: [
         {
           kind: 'action_result',
           id: `submit_${result.submissionId}`,
           action: 'submit',
           ok: !result.copyFailures,
-          message: result.copyFailures
-            ? `已送出 ${result.formNumber}；${result.copyFailures} 個附件未複製成功`
-            : `已送出 ${result.formNumber}`,
+          message: warning ?? `已送出 ${result.formNumber}`,
           formNumber: result.formNumber,
           href: `/f/${result.formKey}/${result.submissionId}`,
         },
@@ -629,7 +803,29 @@ export async function submitDraftAction(input: {
     formKey: result.formKey,
     href: `/f/${result.formKey}/${result.submissionId}`,
     replayed: result.replayed,
+    copyFailures: result.copyFailures,
+    warning,
   };
+}
+
+export async function repairDraftAttachmentCopyAction(input: { draftId: string }) {
+  const employee = await getCurrentEmployee();
+  if (!employee) return { ok: false as const, error: '請先登入' };
+  const { repairDraftAttachmentCopy } = await import('@/lib/ai-chat/drafts');
+  return repairDraftAttachmentCopy({
+    draftId: input.draftId,
+    ownerEmployeeId: employee.id,
+    ownerRole: employee.role,
+  });
+}
+
+export async function duplicateDraftAction(input: { draftId: string }) {
+  const employee = await getCurrentEmployee();
+  if (!employee) return { ok: false as const, error: '請先登入' };
+  const { duplicateApplicationDraft } = await import('@/lib/ai-chat/drafts');
+  const row = await duplicateApplicationDraft({ draftId: input.draftId, ownerEmployeeId: employee.id });
+  if (!row) return { ok: false as const, error: '無法複製草稿' };
+  return { ok: true as const, draft: row };
 }
 
 export async function previewNudgeAction(input: {
@@ -849,6 +1045,54 @@ export async function abandonDraftAction(input: {
   return { ok: true };
 }
 
+/** Remove one or all draft file links (draft-owned copies only). */
+export async function removeDraftFileAction(input: {
+  conversationId: string;
+  draftId: string;
+  expectedVersion: number;
+  fileId?: string;
+  removeAll?: boolean;
+}): Promise<
+  | { ok: true; draft: ApplicationDraft; removedCount: number }
+  | { ok: false; error: string; message: string; draft?: ApplicationDraft }
+> {
+  const employee = await getCurrentEmployee();
+  if (!employee) return { ok: false, error: 'unauthenticated', message: '請先登入' };
+  const { removeDraftFiles } = await import('@/lib/ai-chat/attach-staged');
+  const { bindDraftToConversation } = await import('@/lib/ai-chat/drafts');
+  const bound = await bindDraftToConversation({
+    conversationId: input.conversationId,
+    draftId: input.draftId,
+    ownerEmployeeId: employee.id,
+  });
+  if (!bound.ok) return { ok: false, error: 'draft_forbidden', message: '無法操作此草稿' };
+
+  let expectedVersion = input.expectedVersion;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await removeDraftFiles({
+      actor: { id: employee.id, role: employee.role },
+      conversationId: input.conversationId,
+      draftId: input.draftId,
+      expectedVersion,
+      fileIds: input.fileId ? [input.fileId] : [],
+      removeAll: !!input.removeAll,
+    });
+    if (res.ok) return { ok: true, draft: res.draft, removedCount: res.removedCount };
+    if ('conflict' in res && res.conflict) {
+      expectedVersion = res.conflict.draft.version;
+      if (attempt === 0) continue;
+      return {
+        ok: false,
+        error: 'version_conflict',
+        message: '草稿版本衝突，請重新整理後再移除。',
+        draft: res.conflict.draft,
+      };
+    }
+    if ('error' in res) return { ok: false, error: res.error, message: res.message };
+  }
+  return { ok: false, error: 'remove_failed', message: '移除失敗' };
+}
+
 export async function pollLauncherEventsAction(input: {
   scope: 'fresh' | 'delivered';
   after?: string | null;
@@ -891,6 +1135,27 @@ export async function ackLauncherEventsAction(input: {
     state: input.state,
   });
   return { ok: true };
+}
+
+export async function listMentionEmployeesAction(): Promise<
+  | {
+      ok: true;
+      employees: Array<{
+        id: string;
+        employeeCode: string;
+        name: string;
+        departmentId: string;
+        departmentName: string;
+        title: string | null;
+      }>;
+    }
+  | { ok: false; error: string }
+> {
+  const employee = await getCurrentEmployee();
+  if (!employee) return { ok: false, error: publicError('unauthenticated') };
+  const { listActiveEmployeesForMention } = await import('./mentions');
+  const rows = await listActiveEmployeesForMention();
+  return { ok: true, employees: rows };
 }
 
 export async function refreshWelcomeAction(input: {

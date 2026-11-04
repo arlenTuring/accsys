@@ -43,6 +43,7 @@ export type CustomFormMode =
       kind: 'ai_draft';
       draftId: string;
       expectedVersion: number;
+      conversationId: string;
       /** Chat→draft copies already on this draft (shown inside 附件). */
       attachedFiles?: DraftAttachedFile[];
       submitLabel?: string;
@@ -50,7 +51,7 @@ export type CustomFormMode =
       /** Panel-provided save status (version, time, or why it is not saved). */
       saveNote?: string;
       /** A file of this draft was edited, restored or re-checked. */
-      onFilesChanged?: () => void;
+      onFilesChanged?: (info?: { version?: number }) => void;
       onSave: (data: Record<string, unknown>, expectedVersion: number) => Promise<void>;
       onSubmitDocument: (data: Record<string, unknown>, expectedVersion: number, files: File[]) => Promise<void>;
     };
@@ -707,6 +708,8 @@ export function CustomForm({
                             {mode.kind === 'ai_draft' && (
                               <DraftAttachedFiles
                                 draftId={mode.draftId}
+                                draftVersion={mode.expectedVersion}
+                                conversationId={mode.conversationId}
                                 files={mode.attachedFiles ?? []}
                                 onChanged={mode.onFilesChanged}
                               />

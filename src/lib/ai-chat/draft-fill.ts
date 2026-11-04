@@ -67,9 +67,15 @@ function referenceChoices(type: string, options: PickerOptions): Choice[] | null
 /** Name parts a person may say for a choice: full label, label without the（dept）suffix, code, name. */
 function aliases(c: Choice): string[] {
   const label = c.label.trim();
-  const out = [label, label.replace(/（.*?）$/, '')];
-  const m = label.match(/^(\S+)\s+(.+)$/);
-  if (m) out.push(m[1], m[2]);
+  const stripped = label.replace(/（[^）]*）$/, '').trim();
+  const out = [label, stripped];
+  const m = stripped.match(/^(\S+)\s+(.+)$/);
+  if (m) {
+    out.push(m[1], m[2]);
+    // Also strip trailing parenthetical model spec like "MacBook Pro 16\" (M4 Max)" -> "MacBook Pro 16\""
+    const withoutParen = m[2].replace(/\s*\([^)]*\)\s*$/, '').trim();
+    if (withoutParen) out.push(withoutParen);
+  }
   // 「部門：主管（名稱｜代碼）」: each part can be what the person says.
   out.push(...label.split(/[：｜（）]/));
   return out.map(norm).filter(Boolean);
@@ -78,13 +84,13 @@ function aliases(c: Choice): string[] {
 type Resolved = { ok: true; value: string } | { ok: false; code: 'ambiguous' | 'not_found'; candidates: Choice[] };
 
 /**
- * Resolves only when exactly one choice matches exactly and no other choice
- * also contains what was said (「測試專案」 with 測試專案 A／B present is
- * ambiguous even if a project is literally named 測試專案). Everything else
- * comes back as candidates for the user to pick.
+ * Resolves when a single choice matches unambiguously:
+ * 1) Exact id match
+ * 2) Exact alias match with no other wider match
+ * 3) Single partial match when query is specific enough (>= 3 normalized chars)
  */
 export function resolveReference(raw: string, choices: Choice[]): Resolved {
-  const q = raw.trim();
+  const q = raw.trim().replace(/^[@＠]+/, '').trim();
   const byId = choices.find((c) => c.id.toLowerCase() === q.toLowerCase());
   if (byId) return { ok: true, value: byId.id };
   const nq = norm(q);
@@ -92,6 +98,7 @@ export function resolveReference(raw: string, choices: Choice[]): Resolved {
   const partial = choices.filter((c) => aliases(c).some((a) => a.includes(nq) || (nq.length >= 2 && nq.includes(a))));
   const wider = choices.filter((c) => !exact.includes(c) && aliases(c).some((a) => a.includes(nq)));
   if (exact.length === 1 && wider.length === 0) return { ok: true, value: exact[0].id };
+  if (partial.length === 1 && nq.length >= 3) return { ok: true, value: partial[0].id };
   if (partial.length > 0) return { ok: false, code: 'ambiguous', candidates: [...exact, ...partial.filter((c) => !exact.includes(c))].slice(0, 8) };
   // No containment either way: offer choices sharing a two-character run so the user can still pick.
   const grams = new Set(Array.from({ length: Math.max(nq.length - 1, 0) }, (_, i) => nq.slice(i, i + 2)));
@@ -269,7 +276,17 @@ export function relaxSchema(schema: FormSchema): FormSchema {
       ...s,
       fields: s.fields.map((f) => {
         const out = { ...f, required: false, requiredWhen: undefined } as FieldDef;
-        if (out.type === 'table') return { ...out, minRows: 0, columns: out.columns.map((c) => ({ ...c, required: false })) };
+        if (out.type === 'table') {
+          return {
+            ...out,
+            minRows: 0,
+            columns: out.columns.map((c) => ({
+              ...c,
+              required: false,
+              pickFrom: c.pickFrom ? { ...c.pickFrom, coverAll: false } : undefined,
+            })),
+          };
+        }
         if (out.type === 'checkboxes') return { ...out, minSelected: 0 };
         return out;
       }),
@@ -349,6 +366,14 @@ export function planFill(schema: FormSchema, picker: PickerOptions, current: Rec
         if (col.formula) throw new CoerceError('read_only', `「${col.label}」由系統計算`);
         try {
           row[col.id] = coerce(col.type, cell.value, { options: col.options, picker });
+          if (col.pickFrom && typeof row[col.id] === 'string' && row[col.id]) {
+            const pickFieldId = col.pickFrom.field;
+            const prevArr = Array.isArray(data[pickFieldId]) ? (data[pickFieldId] as string[]) : [];
+            if (!prevArr.includes(row[col.id] as string)) {
+              data[pickFieldId] = [...prevArr, row[col.id] as string];
+              touched.add(pickFieldId);
+            }
+          }
         } catch (err) {
           if (err instanceof CoerceError) throw new CoerceError(err.code, `「${col.label}」${err.message}`, err.candidates);
           throw err;

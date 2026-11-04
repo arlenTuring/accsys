@@ -47,6 +47,7 @@ export function proxy(request: NextRequest) {
   }
 
   res.headers.set('Content-Security-Policy', csp);
+  res.headers.set('Permissions-Policy', 'camera=(), microphone=(self), geolocation=(), payment=(), usb=()');
   const hsts = hstsHeader();
   if (hsts) res.headers.set('Strict-Transport-Security', hsts);
   // Pre-P2 cookies carried only an email; they are never honoured again.

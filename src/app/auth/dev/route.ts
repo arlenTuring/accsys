@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
   });
   if (!token) return loginErrorRedirect(cfg, 'not_registered');
 
-  const res = redirectTo(cfg, '/dashboard');
+  const res = redirectTo(cfg, '/tools/ai-chat');
   setSessionCookie(res, cfg, token);
   return noStore(res);
 }

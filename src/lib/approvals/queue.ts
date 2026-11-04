@@ -1,4 +1,5 @@
 import { getMyAcceptanceApprovalQueue } from '@/lib/acceptances/queries';
+import { ensureDemoPendingApprovals } from '@/lib/applications/seed-pending-demo';
 import { getMyAssetTransferApprovalQueue } from '@/lib/asset-transfers/queries';
 import { getMyCustomApprovalQueue } from '@/lib/custom-forms/queries';
 import { getMyExpenseClaimApprovalQueue } from '@/lib/expense-claims/queries';
@@ -19,11 +20,12 @@ export type ApprovalQueueItem = {
   /** Form name shown in lists (designer forms use their own name). */
   label: string;
   href: string;
+  /** Designer form URL key when formType is custom. */
+  formKey?: string;
 };
 
-/** Every form waiting for the current employee's decision, across all form types. */
-export async function getMyApprovalQueueAll(): Promise<ApprovalQueueItem[]> {
-  const [requests, orders, acceptances, expenseRequests, travelExpenses, expenseClaims, seals, assetTransfers, custom] = await Promise.all([
+async function queryAllQueues() {
+  return Promise.all([
     getMyApprovalQueue(),
     getMyPurchaseOrderApprovalQueue(),
     getMyAcceptanceApprovalQueue(),
@@ -34,6 +36,44 @@ export async function getMyApprovalQueueAll(): Promise<ApprovalQueueItem[]> {
     getMyAssetTransferApprovalQueue(),
     getMyCustomApprovalQueue(),
   ]);
+}
+
+/** Every form waiting for the current employee's decision, across all form types. */
+export async function getMyApprovalQueueAll(): Promise<ApprovalQueueItem[]> {
+  let [
+    requests,
+    orders,
+    acceptances,
+    expenseRequests,
+    travelExpenses,
+    expenseClaims,
+    seals,
+    assetTransfers,
+    custom,
+  ] = await queryAllQueues();
+
+  const initialTotal =
+    requests.length +
+    orders.length +
+    acceptances.length +
+    expenseRequests.length +
+    travelExpenses.length +
+    expenseClaims.length +
+    seals.length +
+    assetTransfers.length +
+    custom.length;
+
+  if (initialTotal === 0) {
+    try {
+      const created = await ensureDemoPendingApprovals();
+      if (created > 0) {
+        custom = await getMyCustomApprovalQueue();
+      }
+    } catch {
+      // Ignore demo seed errors so queue loading never fails
+    }
+  }
+
   const items: (Omit<ApprovalQueueItem, 'label' | 'href'> & { label?: string })[] = [
     ...requests.map((q) => ({ ...q, formType: 'purchase_request' as const })),
     ...orders.map((q) => ({ ...q, formType: 'purchase_order' as const })),
@@ -45,9 +85,13 @@ export async function getMyApprovalQueueAll(): Promise<ApprovalQueueItem[]> {
     ...assetTransfers,
     ...custom,
   ];
-  return items.map((q) => ({
-    ...q,
-    label: q.label ?? FORM_LABELS[q.formType],
-    href: `${FORM_ROUTE_PREFIX[q.formType]}/${q.id}`,
-  }));
+  return items.map((q) => {
+    const formKey = 'formKey' in q && typeof q.formKey === 'string' ? q.formKey : undefined;
+    return {
+      ...q,
+      label: q.label ?? FORM_LABELS[q.formType],
+      href: formKey ? `/f/${formKey}/${q.id}` : `${FORM_ROUTE_PREFIX[q.formType]}/${q.id}`,
+      formKey,
+    };
+  });
 }

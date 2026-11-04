@@ -13,16 +13,21 @@ type Props = {
   /** Desktop: docked. Mobile overlay when mobileOpen. */
   collapsed: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
+  /** Expanded rail width in px (ignored while collapsed). */
+  width?: number;
   mobileOpen: boolean;
   onMobileOpenChange: (open: boolean) => void;
   activeId: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
-  onOpenDraftLibrary: () => void;
   refreshKey?: number;
 };
 
 const COLLAPSE_PREF = 'accsys.ai.sidebarCollapsed';
+const WIDTH_PREF = 'accsys.ai.sidebarWidth';
+export const SIDEBAR_WIDTH_DEFAULT = 208;
+export const SIDEBAR_WIDTH_MIN = 180;
+export const SIDEBAR_WIDTH_MAX = 420;
 
 export function loadSidebarCollapsedPref(employeeKey: string): boolean {
   if (typeof window === 'undefined') return false;
@@ -41,15 +46,35 @@ export function saveSidebarCollapsedPref(employeeKey: string, collapsed: boolean
   }
 }
 
+export function loadSidebarWidthPref(employeeKey: string): number {
+  if (typeof window === 'undefined') return SIDEBAR_WIDTH_DEFAULT;
+  try {
+    const raw = sessionStorage.getItem(`${WIDTH_PREF}:${employeeKey}`);
+    const n = raw ? Number(raw) : NaN;
+    if (!Number.isFinite(n)) return SIDEBAR_WIDTH_DEFAULT;
+    return Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, Math.round(n)));
+  } catch {
+    return SIDEBAR_WIDTH_DEFAULT;
+  }
+}
+
+export function saveSidebarWidthPref(employeeKey: string, width: number) {
+  try {
+    sessionStorage.setItem(`${WIDTH_PREF}:${employeeKey}`, String(Math.round(width)));
+  } catch {
+    /* ignore */
+  }
+}
+
 export function ConversationSidebar({
   collapsed,
   onCollapsedChange,
+  width = SIDEBAR_WIDTH_DEFAULT,
   mobileOpen,
   onMobileOpenChange,
   activeId,
   onSelect,
   onNew,
-  onOpenDraftLibrary,
   refreshKey = 0,
 }: Props) {
   const titleId = useId();
@@ -104,17 +129,14 @@ export function ConversationSidebar({
   const list = (
     <>
       <div className="space-y-2 border-b border-td-border p-3">
-        <button type="button" className="btn-primary w-full text-sm" onClick={onNew}>
+        <button type="button" className="btn-primary w-full text-base" onClick={onNew}>
           新對話
         </button>
-        <button type="button" className="btn-secondary w-full text-sm" onClick={onOpenDraftLibrary}>
-          草稿庫
-        </button>
-        <label className="block text-xs text-td-muted">
+        <label className="block text-sm text-td-muted">
           搜尋對話
           <input
             ref={searchRef}
-            className="mt-1 w-full rounded-lg border border-td-border px-3 py-2 text-sm"
+            className="mt-1 w-full rounded-lg border border-td-border px-3 py-2 text-base"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="對話名稱"
@@ -122,8 +144,8 @@ export function ConversationSidebar({
         </label>
       </div>
       <div className="flex-1 overflow-y-auto p-2">
-        {error && <p className="px-2 text-sm text-amber-800">{error}</p>}
-        {pending && items.length === 0 && <p className="px-2 text-sm text-td-muted">載入中…</p>}
+        {error && <p className="px-2 text-base text-amber-800">{error}</p>}
+        {pending && items.length === 0 && <p className="px-2 text-base text-td-muted">載入中…</p>}
         <ul className="space-y-1">
           {items.map((item) => (
             <li key={item.id}>
@@ -145,7 +167,7 @@ export function ConversationSidebar({
         {nextCursor && (
           <button
             type="button"
-            className="mt-2 w-full text-sm text-td-blue underline"
+            className="mt-2 w-full text-base text-td-blue underline"
             onClick={() => load(false, nextCursor)}
           >
             載入更多
@@ -159,20 +181,31 @@ export function ConversationSidebar({
     <>
       {/* Desktop docked rail */}
       <aside
-        className={`hidden shrink-0 flex-col border-r border-td-border bg-slate-50 md:flex ${
-          collapsed ? 'w-14' : 'w-52'
+        className={`hidden shrink-0 flex-col border-r border-slate-200/80 bg-[#f8f9fb] md:flex ${
+          collapsed ? 'w-12' : ''
         }`}
+        style={collapsed ? undefined : { width: `${width}px` }}
         aria-label="對話側欄"
       >
-        <div className="flex items-center justify-between gap-1 border-b border-td-border p-2">
+        <div className="flex h-14 items-center justify-between gap-1 border-b border-slate-200/70 px-3">
           {!collapsed && (
-            <h2 id={titleId} className="truncate px-1 text-sm font-semibold text-td-blue-dark">
-              對話
-            </h2>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="truncate text-xs font-extrabold italic tracking-wide text-td-blue-dark">
+                  TURING DRIVE
+                </span>
+                <span className="rounded bg-td-blue/10 px-1.5 py-0.5 text-[10px] font-bold text-td-blue">
+                  ACCSYS
+                </span>
+              </div>
+              <h2 id={titleId} className="truncate text-[11px] font-semibold text-slate-500">
+                AI 助手 · 對話紀錄
+              </h2>
+            </div>
           )}
           <button
             type="button"
-            className="rounded p-2 text-td-blue-dark hover:bg-white"
+            className="rounded-lg p-1.5 text-slate-500 hover:bg-white hover:text-td-blue-dark"
             aria-label={collapsed ? '展開側欄' : '收合側欄'}
             title={collapsed ? '展開' : '收合'}
             onClick={() => onCollapsedChange(!collapsed)}
@@ -194,9 +227,6 @@ export function ConversationSidebar({
             >
               ⌕
             </IconBtn>
-            <IconBtn label="草稿庫" onClick={onOpenDraftLibrary}>
-              ▦
-            </IconBtn>
           </nav>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col">{list}</div>
@@ -214,10 +244,10 @@ export function ConversationSidebar({
           />
           <aside className="flex h-full w-full max-w-sm flex-col border-l border-td-border bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-td-border px-4 py-3">
-              <h2 id={titleId} className="text-sm font-semibold text-td-blue-dark">
+              <h2 id={titleId} className="text-base font-semibold text-td-blue-dark">
                 對話清單
               </h2>
-              <button type="button" className="btn-secondary text-xs" onClick={() => onMobileOpenChange(false)}>
+              <button type="button" className="btn-secondary text-base" onClick={() => onMobileOpenChange(false)}>
                 關閉
               </button>
             </div>
@@ -287,21 +317,21 @@ function ConversationRow({
           }}
         >
           <input
-            className="flex-1 rounded border border-td-border px-2 py-1 text-sm"
+            className="flex-1 rounded border border-td-border px-2 py-1 text-base"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             aria-label="對話名稱"
             autoFocus
           />
-          <button type="submit" className="text-xs text-td-blue">
+          <button type="submit" className="text-base text-td-blue">
             存
           </button>
         </form>
       ) : (
         <div className="flex items-start gap-1">
           <button type="button" className="min-w-0 flex-1 text-left" onClick={onSelect}>
-            <div className="truncate text-sm font-medium text-td-blue-dark">{item.title || '對話'}</div>
-            <div className="text-[10px] text-td-muted">
+            <div className="truncate text-base font-medium text-td-blue-dark">{item.title || '對話'}</div>
+            <div className="text-sm text-td-muted">
               {new Date(item.updatedAt).toLocaleString('zh-TW', {
                 month: 'numeric',
                 day: 'numeric',
@@ -322,7 +352,7 @@ function ConversationRow({
         </div>
       )}
       {menu && !renaming && (
-        <div className="mt-1 flex gap-2 text-xs">
+        <div className="mt-1 flex gap-2 text-base">
           <button
             type="button"
             className="underline"

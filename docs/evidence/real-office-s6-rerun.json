@@ -1,0 +1,72 @@
+{
+  "when": "2026-11-01T07:21:48.994Z",
+  "draft": "d70c3e77-50c6-4c90-976d-f2967bf2fd1d",
+  "conversation": "ea7c3605-608c-4ccc-8854-2dbc40718547",
+  "results": [
+    {
+      "case": "nl-picker",
+      "ok": false,
+      "why": "候選 無；新草稿 無；工具 本機尚未設定 Vertex 開發憑證。請在終端機執行：gcloud auth application-default login"
+    },
+    {
+      "case": "pdf-content",
+      "ok": true,
+      "why": "1 頁；含單號、地點、事由、簽核人與核准紀錄"
+    },
+    {
+      "case": "pdf-readable",
+      "ok": true,
+      "why": "檔案 3.0 MB（字型完整嵌入）；欄位為中文標籤，無內部代碼 true；實際渲染見 ui-approved-pdf.jpg"
+    },
+    {
+      "case": "attach-idempotent",
+      "ok": true,
+      "why": "重送 2 次 → 夾帶 1 份，版本 v2 不變"
+    },
+    {
+      "case": "stale-no-orphan",
+      "ok": true,
+      "why": "舊版本附加 → version_conflict；關聯數仍 1"
+    },
+    {
+      "case": "carry-over",
+      "ok": true,
+      "why": "卡片 出差起始日、出差結束日、出差事由、本人核准之公出差旅單編號；確認前 v2，確認後 v3，帶入日期 2026-10-14、單號 20261101BT0001"
+    },
+    {
+      "case": "source-target-authz",
+      "ok": true,
+      "why": "待簽：僅已核准的單據可產生核准 PDF 快照。；退回：僅已核准的單據可產生核准 PDF 快照。；別人的單：找不到單據或無權限。；B 取 A 的核准單：找不到單據或無權限。；B 寫 A 的草稿：draft_not_found；B 讀 PDF：false"
+    },
+    {
+      "case": "source-change-fixed",
+      "ok": true,
+      "why": "來源變更產生新版快照；已夾帶的 PDF 位元組與關聯都沒變"
+    },
+    {
+      "case": "submit-draft-files",
+      "ok": true,
+      "why": "3 次送出 → 1 張單；附件 1 份（20261101BT0001-核准結果.pdf）"
+    },
+    {
+      "case": "approver-preview-authz",
+      "ok": true,
+      "why": "簽核者 C：original；B：404"
+    },
+    {
+      "case": "office-state-honest",
+      "ok": true,
+      "why": "真實 LibreOffice 轉換，預覽為 PDF"
+    },
+    {
+      "case": "corrupt-pdf-uploaded",
+      "ok": true,
+      "why": "已掛在 20261101BT0005，供瀏覽器確認檢視器訊息"
+    },
+    {
+      "case": "format-preview",
+      "ok": true,
+      "why": "invoice-match.png→original:image/png；sample.webp→original:image/webp；invoice-match.heic→derivative:image/jpeg"
+    }
+  ]
+}
