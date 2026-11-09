@@ -179,9 +179,9 @@ describe('directory review: create employees, apply changes, leavers (disposable
   it('the page shows the sync mode, Workspace authorization from the latest Workspace run, and the manager as a hint', async () => {
     const { getDirectoryPageData } = await import('@/lib/admin/directory/queries');
     await addDirectory(10, { department: '目錄部門', manager_email: email('boss') });
-    await sql`insert into directory_sync_runs (source, status) values ('fixture', 'succeeded')`;
-    await sql`insert into directory_sync_runs (source, status, error, finished_at) values ('directory', 'failed', ${`token expired ${tag}`}, now())`;
-    await sql`insert into directory_sync_runs (source, status, finished_at) values ('fixture', 'succeeded', now() + interval '1 second')`;
+    await sql`insert into directory_sync_runs (source, status, finished_at) values ('fixture', 'succeeded', clock_timestamp() - interval '2 milliseconds')`;
+    await sql`insert into directory_sync_runs (source, status, error, finished_at) values ('directory', 'failed', ${`token expired ${tag}`}, clock_timestamp() - interval '1 millisecond')`;
+    await sql`insert into directory_sync_runs (source, status, finished_at) values ('fixture', 'succeeded', clock_timestamp())`;
 
     const data = await getDirectoryPageData();
     expect(data.syncMode).toBe(process.env.AUTH_MODE?.trim() || 'manual');

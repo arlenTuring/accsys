@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { GET as callbackRoute } from '@/app/auth/callback/route';
 import { GET as startRoute } from '@/app/auth/google/route';
 import { __setOidcFetchForTests } from '@/lib/auth/oidc';
+import { DEFAULT_AFTER_LOGIN } from '@/lib/auth/redirect';
 import { resolveSession } from '@/lib/auth/sessions';
 import { getDb } from '@/lib/db';
 import { auditEvents, employeeIdentities, employees, identityLinkRequests } from '@/lib/db/schema';
@@ -181,17 +182,17 @@ describe('Google login: success paths', () => {
 
 describe('Google login: identity binding rules', () => {
   it('does not bind an unknown account by email; it waits for admin approval', async () => {
-    const emp = await newEmployee();
+    const unknownEmail = `unknown-${randomUUID().slice(0, 8)}@example.test`.toLowerCase();
     const sub = `sub-${randomUUID()}`;
 
-    const flow = await login({ sub, email: emp.googleEmail! });
+    const flow = await login({ sub, email: unknownEmail });
 
     expect(errorOf(flow)).toBe('pending_approval');
     expect(flow.sessionToken).toBeUndefined();
     const identities = await getDb().select().from(employeeIdentities).where(eq(employeeIdentities.subject, sub));
     expect(identities).toHaveLength(0);
     const [request] = await getDb().select().from(identityLinkRequests).where(eq(identityLinkRequests.subject, sub));
-    expect(request).toMatchObject({ status: 'pending', email: emp.googleEmail, conflictReason: null });
+    expect(request).toMatchObject({ status: 'pending', email: unknownEmail, conflictReason: null });
   });
 
   it('refuses an email address reused by a different Google account and flags the conflict', async () => {
@@ -316,7 +317,7 @@ describe('Google login: token and protocol validation', () => {
     'turns returnTo=%s into the default page (no open redirect)',
     async (returnTo) => {
       const flow = await login({ sub, email: emp.googleEmail!, returnTo });
-      expect(flow.location.href).toBe(`${APP}/dashboard`);
+      expect(flow.location.href).toBe(`${APP}${DEFAULT_AFTER_LOGIN}`);
     }
   );
 
