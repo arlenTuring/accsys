@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { getServerI18n } from '@/lib/i18n/server';
 import {
   canManageRegulations,
   getRegulationCategoryMeta,
@@ -18,7 +19,7 @@ export default async function RegulationsPage({
   const employee = await getCurrentEmployee();
   if (!employee) redirect('/login');
 
-  const sp = await searchParams;
+  const [{ t, tr }, sp] = await Promise.all([getServerI18n(), searchParams]);
   const activeCat = typeof sp.cat === 'string' && sp.cat.trim() ? sp.cat.trim() : 'all';
   const query = typeof sp.q === 'string' ? sp.q.trim() : '';
 
@@ -57,15 +58,13 @@ export default async function RegulationsPage({
     <main className="page-shell space-y-6">
       <section className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="section-title">公司資訊</p>
-          <h1 className="page-title">公司規章與管理辦法</h1>
-          <p className="mt-1 text-sm text-td-muted">
-            依職能領域分類彙整台灣智慧駕駛各項內控辦法、出勤差旅、採購核銷、薪酬考核與法務用印規範。您也可直接在 AI 助手詢問任何規章條文。
-          </p>
+          <p className="section-title">{t.regulationsPage.sectionTitle}</p>
+          <h1 className="page-title">{t.regulationsPage.title}</h1>
+          <p className="mt-1 text-sm text-td-muted">{t.regulationsPage.subtitle}</p>
         </div>
         {canManage && (
           <Link href="/admin/regulations" className="btn-secondary text-sm">
-            管理公司規章 →
+            {t.regulationsPage.manageBtn}
           </Link>
         )}
       </section>
@@ -78,15 +77,15 @@ export default async function RegulationsPage({
             type="text"
             name="q"
             defaultValue={query}
-            placeholder="搜尋規章名稱、文號、條文關鍵字（如：出差住宿、電動車里程、採購比價、特休、用印）…"
+            placeholder={t.regulationsPage.searchPlaceholder}
             className="min-w-[16rem] flex-1 rounded-lg border border-td-border px-3.5 py-2 text-sm focus:border-td-blue focus:outline-none"
           />
           <button type="submit" className="btn-primary text-sm">
-            搜尋規章
+            {t.regulationsPage.searchBtn}
           </button>
           {(query || activeCat !== 'all') && (
             <Link href="/regulations" className="btn-secondary text-sm">
-              清除篩選
+              {t.regulationsPage.clearFilterBtn}
             </Link>
           )}
         </form>
@@ -100,7 +99,7 @@ export default async function RegulationsPage({
                 : 'border-td-border bg-white text-td-text hover:bg-slate-50'
             }`}
           >
-            全部分類總覽
+            {t.regulationsPage.allCategories}
             <span className={activeCat === 'all' ? 'text-white/80' : 'text-td-muted'}>
               ({allPublished.length})
             </span>
@@ -121,7 +120,7 @@ export default async function RegulationsPage({
                     : 'border-td-border bg-white text-td-text hover:bg-slate-50'
                 }`}
               >
-                {cat.label}
+                {tr(cat.label)}
                 <span className={isActive ? 'text-white/80' : 'text-td-muted'}>({count})</span>
               </Link>
             );
@@ -132,7 +131,7 @@ export default async function RegulationsPage({
       {/* Grouped Category Sections */}
       {groupedSections.length === 0 ? (
         <div className="card p-8 text-center">
-          <p className="text-sm text-td-muted">找不到符合條件的公司規章。</p>
+          <p className="text-sm text-td-muted">{t.regulationsPage.emptyMessage}</p>
         </div>
       ) : (
         <div className="space-y-8">
@@ -143,14 +142,14 @@ export default async function RegulationsPage({
                   <span
                     className={`rounded-full border px-3 py-0.5 text-xs font-bold ${cat.badgeClass}`}
                   >
-                    {cat.label}
+                    {tr(cat.label)}
                   </span>
                   <h2 className="text-base font-bold text-td-blue-dark">
                     {cat.description}
                   </h2>
                 </div>
                 <span className="text-xs font-medium text-td-muted">
-                  共 {items.length} 份規章
+                  {t.regulationsPage.totalRegulationsCount(items.length)}
                 </span>
               </div>
 
@@ -168,13 +167,16 @@ export default async function RegulationsPage({
                           </span>
                           {reg.pinned && (
                             <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
-                              核心必讀
+                              {t.regulationsPage.coreRequiredBadge}
                             </span>
                           )}
                         </div>
                         <span className="text-xs text-td-muted">
-                          版次 v{reg.versionLabel}
-                          {reg.effectiveDate ? ` · 核定 ${reg.effectiveDate}` : ''}
+                          {t.regulationsPage.versionPrefix}
+                          {reg.versionLabel}
+                          {reg.effectiveDate
+                            ? ` · ${t.regulationsPage.effectivePrefix} ${reg.effectiveDate}`
+                            : ''}
                         </span>
                       </div>
 
@@ -195,13 +197,15 @@ export default async function RegulationsPage({
                     <div className="space-y-3 border-t border-slate-100 pt-3">
                       {reg.relatedForms && reg.relatedForms.length > 0 && (
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="text-xs font-medium text-td-muted">適用表單：</span>
+                          <span className="text-xs font-medium text-td-muted">
+                            {t.regulationsPage.relatedFormsLabel}
+                          </span>
                           {reg.relatedForms.map((f) => (
                             <span
                               key={f}
                               className="rounded-md bg-blue-50/80 px-2 py-0.5 text-xs font-medium text-td-blue-dark"
                             >
-                              {f}
+                              {tr(f)}
                             </span>
                           ))}
                         </div>
@@ -209,7 +213,9 @@ export default async function RegulationsPage({
 
                       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                         <span className="text-td-muted">
-                          權責單位：{reg.ownerDepartment} · 核決：{reg.approverTitle}
+                          {t.regulationsPage.ownerDeptPrefix}
+                          {reg.ownerDepartment} · {t.regulationsPage.approverPrefix}
+                          {tr(reg.approverTitle)}
                         </span>
                         <div className="flex items-center gap-3">
                           {reg.driveUrl && (
@@ -219,14 +225,14 @@ export default async function RegulationsPage({
                               rel="noopener noreferrer"
                               className="font-medium text-slate-600 hover:text-td-blue hover:underline"
                             >
-                              原始 PDF ↗
+                              {t.regulationsPage.originalPdfLink}
                             </a>
                           )}
                           <Link
                             href={`/regulations/${reg.id}`}
                             className="font-semibold text-td-blue hover:underline"
                           >
-                            閱讀完整條文 →
+                            {t.regulationsPage.readFullLink}
                           </Link>
                         </div>
                       </div>

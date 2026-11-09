@@ -13,6 +13,9 @@ export const SECRET_NAMES = [
   'SMTP_PASSWORD',
   'GWS_DIRECTORY_CLIENT_SECRET',
   'GWS_DIRECTORY_REFRESH_TOKEN',
+  'GWS_DRIVE_CLIENT_SECRET',
+  'GWS_DRIVE_REFRESH_TOKEN',
+  'GOOGLE_SERVICE_ACCOUNT_KEY_JSON',
 ] as const;
 
 type Env = Record<string, string | undefined>;

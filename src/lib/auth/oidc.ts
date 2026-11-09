@@ -1,5 +1,6 @@
 import * as client from 'openid-client';
 import { AuthConfigError, type AuthConfig } from '@/lib/auth/config';
+import { saveUserDriveOAuthTokens } from '@/lib/projects/drive-doc-writer';
 
 export type VerifiedGoogleIdentity = {
   issuer: string;
@@ -56,17 +57,29 @@ async function getConfiguration(cfg: AuthConfig): Promise<client.Configuration> 
 
 export type LoginChecks = { state: string; nonce: string; codeVerifier: string };
 
-export async function buildAuthorizationUrl(cfg: AuthConfig, checks: LoginChecks): Promise<URL> {
+export type AuthorizeOptions = {
+  loginHint?: string;
+  prompt?: 'select_account' | 'none' | 'consent' | 'omit';
+};
+
+export async function buildAuthorizationUrl(
+  cfg: AuthConfig,
+  checks: LoginChecks,
+  opts?: AuthorizeOptions
+): Promise<URL> {
   const config = await getConfiguration(cfg);
+  const promptVal = opts?.prompt ?? 'select_account';
   return client.buildAuthorizationUrl(config, {
     redirect_uri: cfg.redirectUri,
-    scope: 'openid email profile',
+    scope: 'openid email profile https://www.googleapis.com/auth/drive',
     state: checks.state,
     nonce: checks.nonce,
     code_challenge: await client.calculatePKCECodeChallenge(checks.codeVerifier),
     code_challenge_method: 'S256',
-    prompt: 'select_account',
-    access_type: 'online',
+    ...(promptVal !== 'omit' ? { prompt: promptVal } : {}),
+    ...(opts?.loginHint ? { login_hint: opts.loginHint } : {}),
+    access_type: 'offline',
+    include_granted_scopes: 'true',
     // Only a hint for Google's account chooser; the hd claim is verified below.
     hd: cfg.allowedDomains.length === 1 ? cfg.allowedDomains[0] : '*',
   });
@@ -92,6 +105,9 @@ export async function exchangeCode(
 ): Promise<VerifiedGoogleIdentity> {
   const config = await getConfiguration(cfg);
   let claims: client.IDToken | undefined;
+  let rawAccessToken: string | undefined;
+  let rawRefreshToken: string | undefined;
+  let rawExpiresIn: number | undefined;
   try {
     const tokens = await client.authorizationCodeGrant(config, callbackUrl, {
       pkceCodeVerifier: checks.codeVerifier,
@@ -100,6 +116,9 @@ export async function exchangeCode(
       idTokenExpected: true,
     });
     claims = tokens.claims();
+    rawAccessToken = typeof tokens.access_token === 'string' ? tokens.access_token : undefined;
+    rawRefreshToken = typeof tokens.refresh_token === 'string' ? tokens.refresh_token : undefined;
+    rawExpiresIn = typeof tokens.expires_in === 'number' ? tokens.expires_in : undefined;
   } catch (err) {
     console.warn('[auth] authorization code exchange rejected:', err instanceof Error ? err.name : 'error');
     throw new LoginRejected('auth_failed');
@@ -113,6 +132,15 @@ export async function exchangeCode(
   // `hd` is only present for Workspace accounts; consumer Gmail never has it.
   if (!hd || !cfg.allowedDomains.includes(hd) || !cfg.allowedDomains.includes(emailDomain)) {
     throw new LoginRejected('domain_not_allowed');
+  }
+
+  if (rawAccessToken && rawAccessToken !== 'unused') {
+    saveUserDriveOAuthTokens({
+      email,
+      accessToken: rawAccessToken,
+      refreshToken: rawRefreshToken,
+      expiresInSeconds: rawExpiresIn,
+    });
   }
 
   return {

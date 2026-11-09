@@ -1,23 +1,20 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { getServerI18n } from '@/lib/i18n/server';
 import {
   activateDueSurveys,
   listPendingSurveysForEmployee,
   listSurveysForViewer,
 } from '@/lib/surveys/service';
 
-const STATUS_LABEL: Record<string, string> = {
-  open: '進行中',
-  closed: '已結束',
-};
-
 export default async function SurveysPage() {
   const employee = await getCurrentEmployee();
   if (!employee) redirect('/login');
   await activateDueSurveys();
 
-  const [all, pending] = await Promise.all([
+  const [{ locale, t }, all, pending] = await Promise.all([
+    getServerI18n(),
     listSurveysForViewer({
       employeeId: employee.id,
       departmentId: employee.departmentId,
@@ -29,6 +26,11 @@ export default async function SurveysPage() {
     }),
   ]);
 
+  const statusLabel: Record<string, string> = {
+    open: t.surveysPage.statusOpen,
+    closed: t.surveysPage.statusClosed,
+  };
+
   const others = all.filter(
     (s) =>
       (s.status === 'open' || s.status === 'closed') && !pending.some((p) => p.id === s.id)
@@ -37,14 +39,14 @@ export default async function SurveysPage() {
   return (
     <main className="page-shell space-y-8">
       <section>
-        <p className="section-title">公司資訊</p>
-        <h1 className="page-title">內部問卷</h1>
+        <p className="section-title">{t.surveysPage.sectionTitle}</p>
+        <h1 className="page-title">{t.surveysPage.title}</h1>
       </section>
 
       {pending.length > 0 && (
         <section className="space-y-2">
           <h2 className="text-sm font-semibold text-td-blue-dark">
-            待填寫
+            {t.surveysPage.pendingSection}
             <span className="ml-2 font-normal text-td-muted">({pending.length})</span>
           </h2>
           <ul className="grid gap-2">
@@ -54,9 +56,12 @@ export default async function SurveysPage() {
                   {s.title}
                 </Link>
                 {s.closesAt && (
-                  <p className="text-xs text-td-muted">截止 {new Date(s.closesAt).toLocaleString('zh-TW')}</p>
+                  <p className="text-xs text-td-muted">
+                    {t.surveysPage.closesAtPrefix}{' '}
+                    {new Date(s.closesAt).toLocaleString(locale === 'zh-Hant' ? 'zh-TW' : locale)}
+                  </p>
                 )}
-                {s.draft && <p className="text-xs text-td-muted">已有暫存</p>}
+                {s.draft && <p className="text-xs text-td-muted">{t.surveysPage.hasDraft}</p>}
               </li>
             ))}
           </ul>
@@ -65,19 +70,29 @@ export default async function SurveysPage() {
 
       <section className="space-y-2">
         <h2 className="text-sm font-semibold text-td-blue-dark">
-          問卷
+          {t.surveysPage.allSurveysSection}
           <span className="ml-2 font-normal text-td-muted">({others.length})</span>
         </h2>
         {others.length === 0 ? (
-          <p className="text-sm text-td-muted">{pending.length > 0 ? '沒有其他問卷' : '目前沒有問卷'}</p>
+          <p className="text-sm text-td-muted">
+            {pending.length > 0 ? t.surveysPage.noOtherSurveys : t.surveysPage.noSurveys}
+          </p>
         ) : (
           <ul className="grid gap-2">
             {others.map((s) => (
-              <li key={s.id} className="card flex flex-wrap items-baseline justify-between gap-2 p-3 text-sm">
-                <Link className="font-semibold text-td-blue-dark underline" href={`/surveys/${s.id}`}>
+              <li
+                key={s.id}
+                className="card flex flex-wrap items-baseline justify-between gap-2 p-3 text-sm"
+              >
+                <Link
+                  className="font-semibold text-td-blue-dark underline"
+                  href={`/surveys/${s.id}`}
+                >
                   {s.title}
                 </Link>
-                <span className="text-xs text-td-muted">{STATUS_LABEL[s.status] ?? s.status}</span>
+                <span className="text-xs text-td-muted">
+                  {statusLabel[s.status] ?? s.status}
+                </span>
               </li>
             ))}
           </ul>

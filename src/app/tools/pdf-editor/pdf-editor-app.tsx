@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnnotationLayer } from './annotation-layer';
 import {
   DEFAULT_HIGHLIGHT,
@@ -67,6 +67,47 @@ export function PdfEditorApp() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const pageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const pagesStageRef = useRef<HTMLDivElement>(null);
+  const [viewZoom, setViewZoom] = useState(1);
+
+  useEffect(() => {
+    const el = pagesStageRef.current;
+    if (!el) return;
+
+    const clampZoom = (z: number) => Math.min(3.5, Math.max(0.5, z));
+
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) {
+        e.preventDefault();
+        const factor = Math.exp(-e.deltaY * 0.01);
+        setViewZoom((prev) => clampZoom(Number((prev * factor).toFixed(3))));
+      }
+    };
+
+    let lastGestureScale = 1;
+    const onGestureStart = (e: Event) => {
+      e.preventDefault();
+      lastGestureScale = 1;
+    };
+    const onGestureChange = (e: Event) => {
+      e.preventDefault();
+      const ge = e as unknown as { scale: number };
+      if (typeof ge.scale === 'number' && ge.scale > 0) {
+        const factor = ge.scale / lastGestureScale;
+        lastGestureScale = ge.scale;
+        setViewZoom((prev) => clampZoom(Number((prev * factor).toFixed(3))));
+      }
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: false });
+    el.addEventListener('gesturestart', onGestureStart, { passive: false });
+    el.addEventListener('gesturechange', onGestureChange, { passive: false });
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('gesturestart', onGestureStart);
+      el.removeEventListener('gesturechange', onGestureChange);
+    };
+  }, [pdfBytes]);
 
   const selected = useMemo(
     () => annotations.find((a) => a.id === selectedId) ?? null,
@@ -679,18 +720,46 @@ export function PdfEditorApp() {
       )}
 
       {pdfBytes && (
-        <div className="space-y-6">
-          <p className="text-sm text-td-muted">
-            {editMode && tool === 'text' && '點擊頁面放置文字框；用上方「⠿ 拖曳」移動'}
-            {editMode && tool === 'note' && '點擊頁面放置便利貼；用上方把手拖曳'}
-            {editMode && tool === 'stamp' && '選圖章後點頁面放置；可拖曳縮放'}
-            {editMode && (tool === 'rect' || tool === 'highlight') && '在頁面上拖曳繪製'}
-            {editMode && selectedId && ' · 按「完成」或點空白處／Esc 結束編輯'}
-            {!editMode && '往下滑瀏覽各頁；上方工具列會固定顯示'}
-          </p>
+        <div ref={pagesStageRef} className="space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm text-td-muted">
+              {editMode && tool === 'text' && '點擊頁面放置文字框；用上方「⠿ 拖曳」移動'}
+              {editMode && tool === 'note' && '點擊頁面放置便利貼；用上方把手拖曳'}
+              {editMode && tool === 'stamp' && '選圖章後點頁面放置；可拖曳縮放'}
+              {editMode && (tool === 'rect' || tool === 'highlight') && '在頁面上拖曳繪製'}
+              {editMode && selectedId && ' · 按「完成」或點空白處／Esc 結束編輯'}
+              {!editMode && '往下滑瀏覽各頁；支援觸控板雙指縮放與 Ctrl/Cmd + 滑鼠滾輪縮放'}
+            </p>
+            <div className="flex items-center gap-1 rounded-lg border border-td-border bg-white px-2 py-1 text-xs">
+              <button
+                type="button"
+                onClick={() => setViewZoom((z) => Math.max(0.5, Number((z - 0.15).toFixed(2))))}
+                className="px-1.5 font-bold text-td-blue-dark hover:text-td-blue"
+                title="縮小"
+              >
+                −
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewZoom(1)}
+                className="min-w-[44px] text-center font-mono font-semibold text-td-blue-dark"
+                title="重設為 100%"
+              >
+                {Math.round(viewZoom * 100)}%
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewZoom((z) => Math.min(3.5, Number((z + 0.15).toFixed(2))))}
+                className="px-1.5 font-bold text-td-blue-dark hover:text-td-blue"
+                title="放大"
+              >
+                +
+              </button>
+            </div>
+          </div>
 
           {pages.map((page) => (
-            <div key={page.pageIndex} className="card !p-3">
+            <div key={page.pageIndex} className="card overflow-x-auto !p-3">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-td-muted">
                 第 {page.pageIndex + 1} 頁
               </p>
@@ -700,8 +769,8 @@ export function PdfEditorApp() {
                   else pageRefs.current.delete(page.pageIndex);
                 }}
                 data-annotation-page
-                className="relative mx-auto overflow-hidden rounded-md border border-td-border bg-white shadow-sm"
-                style={{ width: page.width, maxWidth: '100%' }}
+                className="relative mx-auto overflow-hidden rounded-md border border-td-border bg-white shadow-sm transition-[width] duration-75"
+                style={{ width: page.width * viewZoom, maxWidth: viewZoom > 1 ? 'none' : '100%' }}
                 onClick={(e) => onPageClick(page.pageIndex, e)}
                 onPointerDown={(e) => onPagePointerDown(page.pageIndex, e)}
                 onPointerMove={(e) => onPagePointerMove(page.pageIndex, e)}
@@ -724,8 +793,8 @@ export function PdfEditorApp() {
                         annotation={ann}
                         selected={selectedId === ann.id}
                         editable={editMode}
-                        pageWidth={page.width}
-                        pageHeight={page.height}
+                        pageWidth={page.width * viewZoom}
+                        pageHeight={page.height * viewZoom}
                         onSelect={setSelectedId}
                         onDeselect={() => setSelectedId(null)}
                         onChange={updateAnnotation}
@@ -739,10 +808,10 @@ export function PdfEditorApp() {
                   <div
                     className="pointer-events-none absolute border-2 border-dashed border-td-blue bg-td-blue/10"
                     style={{
-                      left: draftBox.x * page.width,
-                      top: draftBox.y * page.height,
-                      width: draftBox.width * page.width,
-                      height: draftBox.height * page.height,
+                      left: draftBox.x * page.width * viewZoom,
+                      top: draftBox.y * page.height * viewZoom,
+                      width: draftBox.width * page.width * viewZoom,
+                      height: draftBox.height * page.height * viewZoom,
                     }}
                   />
                 )}

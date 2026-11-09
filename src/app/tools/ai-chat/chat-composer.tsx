@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { listMentionEmployeesAction } from '@/lib/ai-chat/actions';
+import { useI18n } from '@/lib/i18n/context';
 
 type MentionCandidate = {
   id: string;
@@ -91,7 +92,7 @@ type Props = {
   inputRef: RefObject<HTMLTextAreaElement | null>;
   value: string;
   onChange: (value: string) => void;
-  onSend: () => void;
+  onSend: (overrideText?: string) => void;
   onFilesSelected: (files: FileList | null) => void;
   disabled?: boolean;
   sendDisabled?: boolean;
@@ -101,6 +102,7 @@ type Props = {
   placeholder?: string;
   sendLabel?: string;
   modelLabel?: string;
+  quickPrompts?: Array<{ id: string; label: string; prompt: string }>;
 };
 
 export function ChatComposer({
@@ -114,16 +116,20 @@ export function ChatComposer({
   sendTitle,
   pending = false,
   attachmentsBusy = false,
-  placeholder = '輸入訊息，或把檔案拖進來…（按兩次 Enter 傳送）',
+  placeholder = '輸入訊息，或把檔案拖進來…（按 Enter 傳送，Shift + Enter 換行）',
   sendLabel = '傳送',
   modelLabel = 'Gemini',
+  quickPrompts,
 }: Props) {
+  const { t } = useI18n();
   const [dragging, setDragging] = useState(false);
   const [listening, setListening] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [speechHint, setSpeechHint] = useState<string | null>(null);
   const [permissionDenied, setPermissionDenied] = useState(false);
-  const enterArmedRef = useRef(false);
+  const [quickPromptsOpen, setQuickPromptsOpen] = useState(false);
+  const isComposingRef = useRef(false);
+  const lastCompositionEndAtRef = useRef(0);
   const dragDepthRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
@@ -219,7 +225,6 @@ export function ChatComposer({
     const next = `${before}${inserted}${after.replace(/^\s+/, '')}`;
     const nextCaret = before.length + inserted.length;
     setMentionState(null);
-    enterArmedRef.current = false;
     onChange(next);
     requestAnimationFrame(() => {
       const el = inputRef.current;
@@ -333,7 +338,14 @@ export function ChatComposer({
   }, []);
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.nativeEvent.isComposing) return;
+    if (
+      e.nativeEvent.isComposing ||
+      isComposingRef.current ||
+      e.nativeEvent.keyCode === 229 ||
+      performance.now() - lastCompositionEndAtRef.current < 40
+    ) {
+      return;
+    }
     if (mentionState && filteredMentions.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -370,11 +382,8 @@ export function ChatComposer({
     if (e.key !== 'Enter') return;
     if (e.shiftKey) return;
     e.preventDefault();
-    if (enterArmedRef.current) {
-      enterArmedRef.current = false;
+    if (!sendDisabled && !disabled) {
       onSend();
-    } else {
-      enterArmedRef.current = true;
     }
   }
 
@@ -683,8 +692,14 @@ export function ChatComposer({
         className="min-h-[3.25rem] w-full resize-none border-0 bg-transparent px-4 pb-2 pt-3 text-base text-td-blue-dark outline-none placeholder:text-td-muted"
         rows={2}
         value={value}
+        onCompositionStart={() => {
+          isComposingRef.current = true;
+        }}
+        onCompositionEnd={() => {
+          isComposingRef.current = false;
+          lastCompositionEndAtRef.current = performance.now();
+        }}
         onChange={(e) => {
-          enterArmedRef.current = false;
           const next = e.target.value;
           const caret = e.target.selectionStart;
           if (listening) {
@@ -710,7 +725,7 @@ export function ChatComposer({
           }
         }}
         onBlur={() => {
-          enterArmedRef.current = false;
+          isComposingRef.current = false;
           setTimeout(() => setMentionState(null), 150);
         }}
         onKeyDown={onKeyDown}
@@ -797,8 +812,8 @@ export function ChatComposer({
           <button
             type="button"
             className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-td-blue-dark text-white hover:opacity-90 disabled:opacity-40"
-            aria-label="完成語音並送出"
-            title="完成語音並送出訊息"
+            aria-label={t.aiChat.voiceStopTitle}
+            title={t.aiChat.voiceStopTitle}
             disabled={disabled || pending}
             onClick={() => stopListening({ send: true })}
           >
@@ -811,67 +826,128 @@ export function ChatComposer({
           </button>
         </div>
       ) : (
-        <div className="flex flex-wrap items-center justify-between gap-2 px-2 pb-2">
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              className="inline-flex h-9 w-9 items-center justify-center rounded-full text-td-blue-dark hover:bg-slate-100 disabled:opacity-50"
-              aria-label="選擇檔案上傳"
-              title="選擇檔案上傳（也可直接拖拉檔案進來）"
-              disabled={disabled}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden>
-                <path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" />
-              </svg>
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              className="hidden"
-              multiple
-              disabled={disabled}
-              onChange={(e) => {
-                onFilesSelected(e.target.files);
-                e.target.value = '';
-              }}
-            />
-            <span className="hidden text-xs text-td-muted sm:inline">拖放任意檔案，或按 + 選擇檔案</span>
-          </div>
+        <div className="space-y-2 px-2 pb-2">
+          {/* Expandable Quick Prompts Panel */}
+          {quickPromptsOpen && (
+            <div className="rounded-xl border border-blue-200/80 bg-gradient-to-br from-blue-50/70 via-slate-50 to-white p-2.5 shadow-xs">
+              <div className="mb-2 flex items-center justify-between px-1">
+                <span className="text-xs font-bold text-td-blue-dark">
+                  {t.aiChat.quickPromptsHeader}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setQuickPromptsOpen(false)}
+                  className="rounded px-1.5 py-0.5 text-xs text-slate-500 hover:bg-slate-200/60 hover:text-td-blue-dark"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {(quickPrompts ?? t.aiChat.quickPrompts).map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    disabled={disabled || pending || attachmentsBusy}
+                    onClick={() => {
+                      setQuickPromptsOpen(false);
+                      onSend(item.prompt);
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-slate-200/90 bg-white px-3 py-1.5 text-xs font-semibold text-td-blue-dark shadow-2xs transition hover:-translate-y-0.5 hover:border-td-blue hover:bg-blue-50/60 hover:text-td-blue disabled:opacity-50"
+                  >
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
-          <div className="flex items-center gap-1.5">
-            <span className="hidden rounded-full bg-slate-100 px-2 py-1 text-xs text-td-muted sm:inline">{modelLabel}</span>
-            <button
-              type="button"
-              className={`inline-flex h-9 w-9 items-center justify-center rounded-full ${
-                transcribing ? 'bg-td-blue-light text-td-blue-dark' : 'text-td-blue-dark hover:bg-slate-100'
-              } disabled:opacity-50`}
-              aria-label="開始語音輸入"
-              aria-pressed={false}
-              title="點一下開始語音輸入（會詢問麥克風權限）"
-              disabled={disabled || pending || transcribing}
-              onClick={() => void requestMicAndStart()}
-            >
-              {transcribing ? (
-                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden />
-              ) : (
-                <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden>
-                  <path
-                    fill="currentColor"
-                    d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"
-                  />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200/80 bg-slate-50/70 text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 hover:text-td-blue-dark disabled:opacity-50"
+                aria-label={t.aiChat.attachFileTitle}
+                title={t.aiChat.attachFileTitle}
+                disabled={disabled}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden>
+                  <path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" />
                 </svg>
-              )}
-            </button>
-            <button
-              type="button"
-              className="inline-flex h-9 min-w-9 items-center justify-center rounded-full bg-td-blue px-3 text-sm font-medium text-white hover:opacity-90 disabled:cursor-wait disabled:opacity-50"
-              disabled={sendDisabled}
-              title={sendTitle}
-              onClick={() => onSend()}
-            >
-              {pending ? '…' : attachmentsBusy ? '處理中' : sendLabel}
-            </button>
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                multiple
+                disabled={disabled}
+                onChange={(e) => {
+                  onFilesSelected(e.target.files);
+                  e.target.value = '';
+                }}
+              />
+
+              {/* Quick Prompts Toggle Icon Button (AI Sparkles) */}
+              <button
+                type="button"
+                aria-expanded={quickPromptsOpen}
+                aria-label={t.aiChat.quickPromptsTitle}
+                title={t.aiChat.quickPromptsTitle}
+                disabled={disabled}
+                onClick={() => setQuickPromptsOpen((v) => !v)}
+                className={`inline-flex h-8 w-8 items-center justify-center rounded-full border transition disabled:opacity-50 ${
+                  quickPromptsOpen
+                    ? 'border-indigo-500 bg-gradient-to-br from-indigo-500 via-blue-500 to-sky-500 text-white shadow-sm'
+                    : 'border-indigo-200/80 bg-gradient-to-br from-indigo-50/90 via-blue-50/80 to-sky-50/90 text-indigo-600 hover:border-indigo-300 hover:from-indigo-100/90 hover:to-sky-100/90 hover:text-indigo-700 hover:shadow-2xs'
+                }`}
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor" aria-hidden>
+                  <path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <span className="hidden rounded-full bg-slate-100 px-2 py-1 text-xs text-td-muted sm:inline">
+                {modelLabel}
+              </span>
+              <button
+                type="button"
+                className={`inline-flex h-9 w-9 items-center justify-center rounded-full ${
+                  transcribing
+                    ? 'bg-td-blue-light text-td-blue-dark'
+                    : 'text-td-blue-dark hover:bg-slate-100'
+                } disabled:opacity-50`}
+                aria-label={t.aiChat.voiceStartTitle}
+                aria-pressed={false}
+                title={t.aiChat.voiceStartTitle}
+                disabled={disabled || pending || transcribing}
+                onClick={() => void requestMicAndStart()}
+              >
+                {transcribing ? (
+                  <span
+                    className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+                    aria-hidden
+                  />
+                ) : (
+                  <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden>
+                    <path
+                      fill="currentColor"
+                      d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"
+                    />
+                  </svg>
+                )}
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-9 min-w-9 items-center justify-center rounded-full bg-td-blue px-3 text-sm font-medium text-white hover:opacity-90 disabled:cursor-wait disabled:opacity-50"
+                disabled={sendDisabled}
+                title={sendTitle}
+                onClick={() => onSend()}
+              >
+                {pending ? '…' : attachmentsBusy ? t.common.processing : sendLabel}
+              </button>
+            </div>
           </div>
         </div>
       )}

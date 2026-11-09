@@ -363,21 +363,7 @@ export async function chooseFormCard(input: {
   if (!created.ok) {
     return { ok: true, receipt: `已選擇「${option.label}」`, block: view(now!.block, input.conversationId) };
   }
-  // Ask for the required fields (and project / proxy when the form has them) in one card.
-  const ctx = await loadDraftFormContext(created.draftId, input.employeeId);
-  const keyFields = ctx
-    ? allFields(ctx.schema)
-        .filter((f) => !isDisplayOnly(f) && CARD_TYPES[f.type] && (f.required || f.type === 'project' || f.type === 'employee'))
-        .map((f) => f.id)
-    : [];
-  const form = await buildFieldFormCard({
-    draftId: created.draftId,
-    ownerEmployeeId: input.employeeId,
-    conversationId: input.conversationId,
-    fieldIds: keyFields,
-    prompt: '請填寫以下欄位（可直接點選或輸入）：',
-  });
-  const receipt = `已建立「${created.formName}」草稿（版本 ${created.version}）。`;
+  const receipt = `已為您在右側開啟「${created.formName}」草稿（版本 ${created.version}），您可以直接在右側表單填寫，或在對話中告訴我要填入的內容。`;
   await appendMessage({
     conversationId: input.conversationId,
     ownerEmployeeId: input.employeeId,
@@ -385,7 +371,6 @@ export async function chooseFormCard(input: {
     contentText: receipt,
     blocks: [
       { kind: 'draft_reference', id: `draft_${created.draftId}`, draftId: created.draftId, formKey: created.formKey, formName: created.formName, version: created.version, status: 'draft' },
-      ...(form.ok ? [form.block] : []),
     ],
   });
   return {

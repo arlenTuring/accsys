@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray } from 'drizzle-orm';
+import { activateDueScheduled, listVisibleAnnouncements } from '@/lib/announcements/service';
 import { parseDefinition } from '@/lib/custom-forms/definition';
 import { getPickerOptions, type PickerOptions } from '@/lib/custom-forms/queries';
 import { allFields, isDisplayOnly, type FieldDef, type FormSchema } from '@/lib/custom-forms/schema';
@@ -6,6 +7,8 @@ import { getDb } from '@/lib/db';
 import {
   assets,
   budgetCodes,
+  companyAnnouncementReads,
+  companySurveyResponses,
   departments,
   employees,
   formCategories,
@@ -13,6 +16,7 @@ import {
   formDefinitionVersions,
   projects,
 } from '@/lib/db/schema';
+import { activateDueSurveys, listSurveysForViewer } from '@/lib/surveys/service';
 import { taipeiToday } from '@/lib/taipei-date';
 import { recordAudit } from '@/lib/audit/record';
 import {
@@ -438,7 +442,7 @@ async function getCompanyFormsIndex(): Promise<CachedFormEntry[]> {
     if (!parsed?.ok) {
       return { key: d.key, name: d.name, description: d.description, fieldLine: `${d.key}（${d.name}）` };
     }
-    const writable = allFields(parsed.schema).filter((f) => !isDisplayOnly(f) && f.type !== 'attachments');
+    const writable = allFields(parsed.schema).filter((f) => !isDisplayOnly(f));
     const fieldBriefs = writable.map((f) => {
       if (f.type === 'table') {
         const cols = f.columns
@@ -531,6 +535,8 @@ export async function buildWorkState(input: {
   const db = getDb();
   const msg = input.userMessage ?? '';
   const needsAssets = /資產|財產|設備|轉給|轉移|移交|保管|借出|報廢|macbook|dell|螢幕|筆電|光達|電腦/i.test(msg);
+  const needsAnnouncements = /公告|消息|最新|置頂|重要|政策|福利|活動|announcement/i.test(msg);
+  const needsSurveys = /問卷|調查|投票|意見|survey/i.test(msg);
 
   const formsIndex = await getCompanyFormsIndex();
   const matchedFormKeys = matchRelevantFormKeys(msg, formsIndex);
@@ -582,16 +588,101 @@ export async function buildWorkState(input: {
       : Promise.resolve([]),
   ]);
 
-  // L1 (Always-On, ~120 tokens): Employee's own identity card + 1-line form directory
+  await Promise.all([activateDueScheduled().catch(() => {}), activateDueSurveys().catch(() => {})]);
+  const [visibleAnnouncements, readRows, visibleSurveys, surveyRespRows] = await Promise.all([
+    listVisibleAnnouncements({
+      employeeId: input.ownerEmployeeId,
+      departmentId: empRow?.departmentId ?? null,
+      manage: false,
+    }).catch(() => []),
+    db
+      .select()
+      .from(companyAnnouncementReads)
+      .where(eq(companyAnnouncementReads.employeeId, input.ownerEmployeeId))
+      .catch(() => []),
+    listSurveysForViewer({
+      employeeId: input.ownerEmployeeId,
+      departmentId: empRow?.departmentId ?? null,
+      manage: false,
+    }).catch(() => []),
+    db
+      .select()
+      .from(companySurveyResponses)
+      .where(eq(companySurveyResponses.employeeId, input.ownerEmployeeId))
+      .catch(() => []),
+  ]);
+
+  const readMap = new Map(readRows.map((r) => [r.announcementId, r]));
+  const surveyRespMap = new Map(surveyRespRows.map((r) => [r.surveyId, r]));
+
+  const publishedAnnouncements = visibleAnnouncements.filter((a) => a.status === 'published');
+  const unreadAnnouncementCount = publishedAnnouncements.filter((a) => !readMap.get(a.id)?.readAt).length;
+  const openSurveys = visibleSurveys.filter((s) => s.status === 'open');
+  const pendingSurveyCount = openSurveys.filter((s) => surveyRespMap.get(s.id)?.status !== 'submitted').length;
+
+  // L1 (Always-On, ~150 tokens): Employee's own identity card + 1-line form directory + 1-line announcement/survey index
   const actorLine = empRow
     ? `當前登入員工（本人／申請人／預設原保管人）：${empRow.name}（工號：${empRow.employeeCode}｜部門：${empRow.departmentName}${empRow.title ? `｜職稱：${empRow.title}` : ''}）`
     : '';
   const l1FormDirectory = `公司可填表單目錄（form_key=名稱）：${formsIndex.map((f) => `${f.key}=${f.name}`).join('｜')}`;
+  const l1AnnouncementsIndex =
+    publishedAnnouncements.length > 0
+      ? `公司公告目錄（共 ${publishedAnnouncements.length} 則發布中，未讀 ${unreadAnnouncementCount} 則；頁面 /announcements）：${publishedAnnouncements
+          .slice(0, 8)
+          .map(
+            (a) =>
+              `${a.pinned ? '[置頂]' : ''}${!readMap.get(a.id)?.readAt ? '[未讀]' : '[已讀]'}${a.title}（分類：${a.category || '一般'}）`
+          )
+          .join('｜')}`
+      : '公司公告目錄：目前無發布中之公司公告。';
+  const l1SurveysIndex =
+    openSurveys.length > 0
+      ? `公司問卷目錄（共 ${openSurveys.length} 份開放中，待填 ${pendingSurveyCount} 份；頁面 /surveys）：${openSurveys
+          .slice(0, 6)
+          .map((s) => `${surveyRespMap.get(s.id)?.status === 'submitted' ? '[已填]' : '[待填]'}${s.title}`)
+          .join('｜')}`
+      : '';
 
-  // L2 (Intent-Triggered Working Set): Only expand schemas & assets relevant to this message
+  // L2 (Intent-Triggered Working Set): Only expand schemas, assets, announcements & surveys relevant to this message
   const l2FormSchemas = formsIndex
     .filter((f) => matchedFormKeys.has(f.key))
     .map((f) => `【本回合相關表單欄位規格】${f.fieldLine}`);
+
+  const l2AnnouncementDetails =
+    needsAnnouncements && publishedAnnouncements.length > 0
+      ? [
+          `【本回合相關：公司公告完整內容（共 ${publishedAnnouncements.length} 則，未讀 ${unreadAnnouncementCount} 則｜注意：此為全公司／部門正式公告，與個人單據簽核通知無關）】`,
+          ...publishedAnnouncements.slice(0, 12).map((a, idx) => {
+            const rd = readMap.get(a.id);
+            const readStateLabel = rd?.acknowledgedAt
+              ? '已讀且已確認'
+              : rd?.readAt
+                ? '已讀'
+                : '未讀';
+            const priorityLabel =
+              a.priority === 'urgent' ? '緊急' : a.priority === 'important' ? '重要' : '一般';
+            const dateStr = (a.publishedAt ?? a.publishAt ?? a.createdAt)
+              ? taipeiToday(a.publishedAt ?? a.publishAt ?? a.createdAt)
+              : '';
+            const cleanBody = a.body.replace(/\s+/g, ' ').trim().slice(0, 500);
+            return `${idx + 1}. ${a.pinned ? '📌[置頂] ' : ''}[${priorityLabel}｜分類：${a.category || '一般'}｜${readStateLabel}｜發布日：${dateStr}] 《${a.title}》（連結：/announcements?open=${a.id}）\n   內容：${cleanBody}`;
+          }),
+        ]
+      : [];
+
+  const l2SurveyDetails =
+    needsSurveys && visibleSurveys.length > 0
+      ? [
+          `【本回合相關：公司問卷清單（共 ${visibleSurveys.length} 份）】`,
+          ...visibleSurveys.slice(0, 10).map((s, idx) => {
+            const resp = surveyRespMap.get(s.id);
+            const fillLabel =
+              resp?.status === 'submitted' ? '已填寫送出' : resp?.status === 'draft' ? '填寫草稿中' : '尚未填寫';
+            const closeStr = s.closesAt ? taipeiToday(s.closesAt) : '無截止日';
+            return `${idx + 1}. [${s.status === 'open' ? '開放中' : '已截止'}｜${fillLabel}｜截止：${closeStr}] 《${s.title}》（連結：/surveys/${s.id}）— ${(s.description || '').replace(/\s+/g, ' ').slice(0, 200)}`;
+          }),
+        ]
+      : [];
 
   const assetLine = needsAssets
     ? myAssets.length > 0
@@ -612,9 +703,13 @@ export async function buildWorkState(input: {
     calendarContext(input.now),
     ...(actorLine ? [actorLine] : []),
     l1FormDirectory,
+    l1AnnouncementsIndex,
+    ...(l1SurveysIndex ? [l1SurveysIndex] : []),
     ...(assetLine ? [assetLine] : []),
     ...(budgetLine ? [budgetLine] : []),
     ...l2FormSchemas,
+    ...l2AnnouncementDetails,
+    ...l2SurveyDetails,
   ];
   const drafts = (await listConversationDrafts(input.conversationId, input.ownerEmployeeId))
     .filter((d) => d.status === 'draft')

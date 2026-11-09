@@ -262,12 +262,12 @@ export async function createRegulation(actor: RegulationActor, input: Regulation
     })
     .returning();
 
-  await recordAudit({
+  await recordAudit(db, {
     actorEmployeeId: actor.id,
     action: 'company_regulation.create',
-    targetType: 'company_regulation',
-    targetId: inserted.id,
-    after: { code: inserted.code, title: inserted.title, status: inserted.status },
+    entityType: 'company_regulation',
+    entityId: inserted.id,
+    details: { code: inserted.code, title: inserted.title, status: inserted.status },
   });
 
   notifyAiKnowledgeUpdated('regulations', `create:${inserted.code}`);
@@ -353,13 +353,15 @@ export async function updateRegulation(
     .where(eq(companyRegulations.id, id))
     .returning();
 
-  await recordAudit({
+  await recordAudit(db, {
     actorEmployeeId: actor.id,
     action: 'company_regulation.update',
-    targetType: 'company_regulation',
-    targetId: id,
-    before: { code: existing.code, title: existing.title, status: existing.status },
-    after: { code: updated.code, title: updated.title, status: updated.status },
+    entityType: 'company_regulation',
+    entityId: id,
+    details: {
+      before: { code: existing.code, title: existing.title, status: existing.status },
+      after: { code: updated.code, title: updated.title, status: updated.status },
+    },
   });
 
   notifyAiKnowledgeUpdated('regulations', `update:${updated.code}`);
@@ -377,12 +379,12 @@ export async function deleteRegulation(actor: RegulationActor, id: string) {
   const db = getDb();
   await db.delete(companyRegulations).where(eq(companyRegulations.id, id));
 
-  await recordAudit({
+  await recordAudit(db, {
     actorEmployeeId: actor.id,
     action: 'company_regulation.delete',
-    targetType: 'company_regulation',
-    targetId: id,
-    before: { code: existing.code, title: existing.title },
+    entityType: 'company_regulation',
+    entityId: id,
+    details: { code: existing.code, title: existing.title },
   });
 
   notifyAiKnowledgeUpdated('regulations', `delete:${existing.code}`);

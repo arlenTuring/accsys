@@ -1,14 +1,20 @@
 import { and, eq, gte, inArray } from 'drizzle-orm';
+import { getMyAcceptances } from '@/lib/acceptances/queries';
 import { getMyApprovalQueueAll, type ApprovalQueueItem } from '@/lib/approvals/queue';
+import { getMyAssetTransfers } from '@/lib/asset-transfers/queries';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getMySubmissions } from '@/lib/custom-forms/queries';
 import { getDb } from '@/lib/db';
 import { approvalSteps, notifications } from '@/lib/db/schema';
+import { EDITIONS } from '@/lib/expense-claims/editions';
 import { getMyExpenseClaims } from '@/lib/expense-claims/queries';
+import { getMyExpenseRequests } from '@/lib/expense-requests/queries';
 import { FORM_LABELS, FORM_ROUTE_PREFIX, type FormType } from '@/lib/procurement/form-registry';
 import { getMyPurchaseOrders } from '@/lib/purchase-orders/queries';
 import { getMyRequests } from '@/lib/purchase-requests/queries';
+import { getMySealRequests } from '@/lib/seal-requests/lists';
 import { taipeiToday } from '@/lib/taipei-date';
+import { getMyTravelExpenses } from '@/lib/travel-expenses/queries';
 import {
   enrichWithSnapshots,
   formatWaitingDuration,
@@ -114,14 +120,30 @@ function applySnapshot(item: InboxItem, snapshot: ApprovalSnapshot | null): Inbo
  * Backend-authoritative inbox for the assistant workspace.
  * On failure returns loadError with empty lists — UI must not claim “沒有待辦”.
  */
-export async function loadAssistantInbox(limitPerSection = 8): Promise<AssistantInbox> {
+export async function loadAssistantInbox(limitPerSection = 20): Promise<AssistantInbox> {
   const fetchedAt = new Date().toISOString();
   try {
-    const [queue, requests, orders, claims, submissions] = await Promise.all([
+    const [
+      queue,
+      requests,
+      orders,
+      acceptances,
+      expenseRequests,
+      claims,
+      travelExpenses,
+      sealRequests,
+      assetTransfers,
+      submissions,
+    ] = await Promise.all([
       getMyApprovalQueueAll(),
       getMyRequests(),
       getMyPurchaseOrders(),
+      getMyAcceptances(),
+      getMyExpenseRequests(),
       getMyExpenseClaims(),
+      getMyTravelExpenses(),
+      getMySealRequests(),
+      getMyAssetTransfers(),
       getMySubmissions(),
     ]);
 
@@ -153,17 +175,80 @@ export async function loadAssistantInbox(limitPerSection = 8): Promise<Assistant
           totalAmount: o.totalAmount,
           href: `${FORM_ROUTE_PREFIX.purchase_order}/${o.id}`,
         })),
+      ...acceptances
+        .filter((a) => IN_PROGRESS.has(a.status))
+        .map((a) => ({
+          kind: 'my_in_progress' as const,
+          formType: 'acceptance',
+          label: FORM_LABELS.acceptance,
+          id: a.id,
+          caseNumber: a.caseNumber,
+          status: a.status,
+          totalAmount: a.totalAmount,
+          href: `${FORM_ROUTE_PREFIX.acceptance}/${a.id}`,
+        })),
+      ...expenseRequests
+        .filter((e) => IN_PROGRESS.has(e.status))
+        .map((e) => ({
+          kind: 'my_in_progress' as const,
+          formType: 'expense_request',
+          label: FORM_LABELS.expense_request,
+          id: e.id,
+          caseNumber: e.caseNumber,
+          status: e.status,
+          totalAmount: e.totalAmount,
+          href: `${FORM_ROUTE_PREFIX.expense_request}/${e.id}`,
+        })),
       ...claims
         .filter((c) => IN_PROGRESS.has(c.status))
-        .map((c) => ({
+        .map((c) => {
+          const ft = EDITIONS[c.edition].formType;
+          return {
+            kind: 'my_in_progress' as const,
+            formType: ft,
+            label: FORM_LABELS[ft],
+            id: c.id,
+            caseNumber: c.caseNumber,
+            status: c.status,
+            totalAmount: c.totalAmount,
+            href: `/expense-claims/${c.edition}/${c.id}`,
+          };
+        }),
+      ...travelExpenses
+        .filter((t) => IN_PROGRESS.has(t.status))
+        .map((t) => ({
           kind: 'my_in_progress' as const,
-          formType: String(c.edition),
-          label: `費用申請（${c.edition}）`,
-          id: c.id,
-          caseNumber: c.caseNumber,
-          status: c.status,
-          totalAmount: c.totalAmount,
-          href: `/expense-claims/${c.edition}/${c.id}`,
+          formType: 'travel_expense',
+          label: FORM_LABELS.travel_expense,
+          id: t.id,
+          caseNumber: t.caseNumber,
+          status: t.status,
+          totalAmount: t.totalAmount,
+          href: `${FORM_ROUTE_PREFIX.travel_expense}/${t.id}`,
+        })),
+      ...sealRequests
+        .filter((s) => IN_PROGRESS.has(s.status))
+        .map((s) => ({
+          kind: 'my_in_progress' as const,
+          formType: s.formType,
+          label: FORM_LABELS[s.formType],
+          id: s.id,
+          caseNumber: s.caseNumber,
+          status: s.status,
+          totalAmount: s.totalAmount,
+          href: `${FORM_ROUTE_PREFIX[s.formType]}/${s.id}`,
+        })),
+      ...assetTransfers
+        .filter((a) => IN_PROGRESS.has(a.status))
+        .map((a) => ({
+          kind: 'my_in_progress' as const,
+          formType: 'asset_transfer',
+          label: FORM_LABELS.asset_transfer,
+          id: a.id,
+          caseNumber: a.caseNumber,
+          status: a.status,
+          totalAmount: null,
+          href: `${FORM_ROUTE_PREFIX.asset_transfer}/${a.id}`,
         })),
       ...submissions
         .filter((s) => IN_PROGRESS.has(s.status))

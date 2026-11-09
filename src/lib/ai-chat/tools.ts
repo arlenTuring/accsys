@@ -114,7 +114,6 @@ export const AI_CHAT_ALLOWED_TOOLS = [
   'update_application_draft',
   'propose_choices',
   'propose_project_picker',
-  'propose_field_form',
   'propose_draft_changes',
   'propose_nudge',
   'start_resubmission',
@@ -129,6 +128,8 @@ export const AI_CHAT_ALLOWED_TOOLS = [
   'search_trip_companion_candidates',
   'search_my_assets',
   'search_company_regulations',
+  'list_company_announcements',
+  'list_company_surveys',
   'approve_submission',
   'return_submission',
   'approve_all_pending',
@@ -253,7 +254,8 @@ export const AI_CHAT_TOOL_DECLARATIONS = [
   },
   {
     name: 'list_my_notifications',
-    description: '列出目前使用者最近的系統通知。',
+    description:
+      '列出目前使用者個人的「單據簽核／退回系統通知」（僅限個人表單簽核動態，非公司公告；若要查詢或整理「公司公告」請呼叫 list_company_announcements）。',
     parameters: { type: 'OBJECT', properties: {} },
   },
   {
@@ -368,20 +370,6 @@ export const AI_CHAT_TOOL_DECLARATIONS = [
         field_id: { type: 'STRING', description: '可選：草稿欄位 id' },
       },
       required: ['prompt'],
-    },
-  },
-  {
-    name: 'propose_field_form',
-    description:
-      '在對話中顯示可直接填寫的小表單卡片（日期時間、人員、選項、文字等），用於補填缺少或有歧義的欄位。卡片由後端依表單規格產生；使用者送出後走與 update_application_draft 相同的驗證與版本檢查。',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        draft_id: { type: 'STRING' },
-        field_ids: { type: 'ARRAY', items: { type: 'STRING' }, description: '要請使用者填的欄位 id（最多 8 個）' },
-        prompt: { type: 'STRING' },
-      },
-      required: ['draft_id', 'field_ids', 'prompt'],
     },
   },
   {
@@ -622,6 +610,42 @@ export const AI_CHAT_TOOL_DECLARATIONS = [
       },
     },
   },
+  {
+    name: 'list_company_announcements',
+    description:
+      '查詢目前發布中的「公司公告」（對應「公司資訊 > 公司公告」/announcements），回傳每則公告的標題、分類、重要度（一般／重要／緊急）、是否置頂、發布日期、本人閱讀狀態（未讀／已讀／已確認）、完整內文與附件清單。注意：此工具專門查詢全公司或部門正式公告，不包含個人簽核單據通知。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        query: {
+          type: 'STRING',
+          description: '選填關鍵字（搜尋標題、分類或內文），留空則列出所有可見的公司公告',
+        },
+        unread_only: {
+          type: 'BOOLEAN',
+          description: 'true＝僅列出本人尚未閱讀的公司公告；預設 false（列出全部可見公告）',
+        },
+        limit: {
+          type: 'NUMBER',
+          description: '回傳筆數上限，預設 15',
+        },
+      },
+    },
+  },
+  {
+    name: 'list_company_surveys',
+    description:
+      '查詢目前開放中或近期的「公司問卷調查」（對應「公司資訊 > 問卷調查」/surveys），回傳問卷標題、說明、狀態、截止時間與本人是否已填寫。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        pending_only: {
+          type: 'BOOLEAN',
+          description: 'true＝僅列出本人尚未填寫的開放中問卷；預設 false',
+        },
+      },
+    },
+  },
 ] as const;
 
 function clip<T>(rows: T[], n: number): T[] {
@@ -676,7 +700,6 @@ const TOOL_LABELS: Record<AiChatToolName, string> = {
   update_application_draft: '更新草稿',
   propose_choices: '選項',
   propose_project_picker: '專案選取',
-  propose_field_form: '補填卡片',
   propose_draft_changes: '修改確認',
   propose_nudge: '催簽確認',
   search_my_submissions: '查詢我的單據',
@@ -691,6 +714,8 @@ const TOOL_LABELS: Record<AiChatToolName, string> = {
   search_trip_companion_candidates: '搜尋同行候選',
   search_my_assets: '查詢資產',
   search_company_regulations: '查詢公司規章',
+  list_company_announcements: '查詢公司公告',
+  list_company_surveys: '查詢公司問卷',
   approve_submission: '代為簽核',
   return_submission: '代為退回',
   approve_all_pending: '批次簽核',
@@ -1376,20 +1401,6 @@ export async function executeAiChatTool(
         };
       }
 
-      case 'propose_field_form': {
-        if (!ctx) return { ok: false, name: tool, label, response: { error: 'missing_context' } };
-        const draftId = requireUuid(args, 'draft_id');
-        const prompt = requireString(args, 'prompt', { min: 1, max: 500 });
-        if (!draftId.ok || !prompt.ok) return { ok: false, name: tool, label, response: { error: 'invalid_args' } };
-        if (!(await isDraftInConversation(draftId.value, ctx.conversationId, employee.id))) {
-          return { ok: false, name: tool, label, response: { error: 'not_found_or_forbidden' } };
-        }
-        const fieldIds = Array.isArray(args?.field_ids) ? args.field_ids.map(String) : [];
-        const card = await buildFieldFormCard({ draftId: draftId.value, ownerEmployeeId: employee.id, conversationId: ctx.conversationId, fieldIds, prompt: prompt.value });
-        if (!card.ok) return { ok: false, name: tool, label, response: { error: card.error } };
-        return { ok: true, name: tool, label, response: { presented: true, fields: card.block.kind === 'field_form' ? card.block.fields.map((f) => f.id) : [] }, blocks: [card.block] };
-      }
-
       case 'propose_draft_changes': {
         if (!ctx) return { ok: false, name: tool, label, response: { error: 'missing_context' } };
         const draftId = requireUuid(args, 'draft_id');
@@ -1444,31 +1455,96 @@ export async function executeAiChatTool(
         const status = typeof args?.status === 'string' ? args.status.trim().slice(0, 40) : undefined;
         const query = typeof args?.query === 'string' ? args.query.trim().slice(0, 80) : undefined;
         const approvedOnly = args?.approved_only === true;
-        const page = await searchMyCustomSubmissions({
-          ownerEmployeeId: employee.id,
-          formKey,
-          status,
-          query,
-          approvedOnly,
-          limit: 8,
+
+        const { getMyApplicationsAll } = await import('@/lib/applications/my-applications');
+        const allMyItems = await getMyApplicationsAll();
+
+        const statusCounts = {
+          pending_approval: allMyItems.filter((i) => i.status === 'pending_approval').length,
+          returned: allMyItems.filter((i) => i.status === 'returned').length,
+          approved: allMyItems.filter((i) => i.status === 'approved').length,
+          total: allMyItems.length,
+        };
+
+        const filtered = allMyItems.filter((item) => {
+          if (formKey) {
+            const fk = formKey.toLowerCase();
+            const matchKey =
+              item.formKey?.toLowerCase() === fk ||
+              item.formType.toLowerCase() === fk ||
+              item.formLabel.toLowerCase().includes(fk);
+            if (!matchKey) return false;
+          }
+          if (approvedOnly) {
+            if (item.status !== 'approved') return false;
+          } else if (status && status !== 'all') {
+            if (item.status !== status) return false;
+          }
+          if (query) {
+            const q = query.toLowerCase();
+            const haystack = [
+              item.caseNumber,
+              item.formLabel,
+              item.categoryLabel,
+              item.summary,
+              item.currentNodeLabel ?? '',
+              ...item.pendingApproverNames,
+              item.returnReason ?? '',
+            ]
+              .join(' ')
+              .toLowerCase();
+            if (!haystack.includes(q)) return false;
+          }
+          return true;
         });
-        const { enrichWithSnapshots } = await import('./approval-snapshot');
-        const enriched = await enrichWithSnapshots(
-          page.items.map((i) => ({ ...i, formType: i.formType, id: i.formId }))
-        );
-        const blocks = cardsFromMySubmissions(
-          enriched.map(({ snapshot, id: _id, ...rest }) => ({ ...rest, snapshot }))
-        );
+
+        const pageItems = filtered.slice(0, 30);
+        const mappedHits = pageItems.map((i) => ({
+          formType: i.formType,
+          formId: i.id,
+          formKey: i.formKey ?? '',
+          formName: i.formLabel,
+          formNumber: i.caseNumber,
+          status: i.status,
+          summary: i.summary || i.formLabel,
+          approvedAt: i.status === 'approved' ? i.dateLabel : null,
+          version: 1,
+          href: i.href,
+          totalAmount: i.totalAmount,
+          currentNodeLabel: i.currentNodeLabel,
+          pendingApproverNames: i.pendingApproverNames,
+          returnReason: i.returnReason,
+          returnedByName: i.returnedByName,
+          snapshot: i.progress
+            ? {
+                formType: i.formType,
+                formId: i.id,
+                caseNumber: i.caseNumber,
+                status: i.status,
+                currentStepOrder: null,
+                currentNodeLabel: i.currentNodeLabel,
+                pendingApproverIds: [],
+                pendingApproverNames: i.pendingApproverNames,
+                waitingSinceIso: null,
+                version: null,
+                progress: i.progress,
+              }
+            : null,
+        }));
+
+        const blocks = cardsFromMySubmissions(mappedHits);
         return {
           ok: true,
           name: tool,
           label,
           response: {
-            items: page.items,
-            hasMore: page.hasMore,
-            message: page.items.length
-              ? `找到 ${page.items.length} 筆；畫面已顯示大綱卡（可開詳情）。回覆請簡短，勿複寫卡片內容。`
-              : '沒有符合條件的單據（不是查詢失敗）。',
+            statusCounts,
+            matchedCount: filtered.length,
+            items: mappedHits.map(({ snapshot: _s, ...rest }) => rest),
+            hasMore: filtered.length > 30,
+            message: filtered.length
+              ? `本人全部送出單據統計：簽核中 ${statusCounts.pending_approval} 筆、已退回 ${statusCounts.returned} 筆、已核准 ${statusCounts.approved} 筆（總計 ${statusCounts.total} 筆）。本次查詢符合條件共 ${filtered.length} 筆；畫面已顯示大綱卡（可開詳情）。請務必依據上述統計數字回覆，勿遺漏筆數或長篇複寫卡片內容。`
+              : `沒有符合條件的單據（本人總計：簽核中 ${statusCounts.pending_approval} 筆、已退回 ${statusCounts.returned} 筆、已核准 ${statusCounts.approved} 筆）。`,
           },
           blocks: blocks.length ? blocks : undefined,
         };
@@ -2190,6 +2266,123 @@ export async function executeAiChatTool(
             count: items.length,
             regulations: items,
             hint: '回答時請明確引用規章名稱、文號與條文規定，並可引導使用者前往「公司資訊 > 公司規章」（/regulations）閱覽完整條文或直接協助建立對應表單草稿。',
+          },
+        };
+      }
+
+      case 'list_company_announcements': {
+        const query = typeof args?.query === 'string' ? args.query.trim().toLowerCase() : '';
+        const unreadOnly = args?.unread_only === true;
+        const limitRaw = Number(args?.limit);
+        const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 25) : 15;
+        const { activateDueScheduled, listVisibleAnnouncements } = await import('@/lib/announcements/service');
+        const { listAnnouncementAttachments } = await import('@/lib/announcements/attachments');
+        const { companyAnnouncementReads } = await import('@/lib/db/schema');
+        await activateDueScheduled().catch(() => {});
+        const [visible, readRows] = await Promise.all([
+          listVisibleAnnouncements({
+            employeeId: employee.id,
+            departmentId: employee.departmentId,
+            manage: false,
+          }),
+          getDb()
+            .select()
+            .from(companyAnnouncementReads)
+            .where(eq(companyAnnouncementReads.employeeId, employee.id)),
+        ]);
+        const readMap = new Map(readRows.map((r) => [r.announcementId, r]));
+        const published = visible.filter((a) => a.status === 'published');
+        const filtered = published.filter((a) => {
+          const rd = readMap.get(a.id);
+          if (unreadOnly && rd?.readAt) return false;
+          if (!query) return true;
+          return (
+            a.title.toLowerCase().includes(query) ||
+            (a.category || '').toLowerCase().includes(query) ||
+            a.body.toLowerCase().includes(query)
+          );
+        });
+        const items = await Promise.all(
+          filtered.slice(0, limit).map(async (a) => {
+            const rd = readMap.get(a.id);
+            const files = await listAnnouncementAttachments(a.id).catch(() => []);
+            const dateSource = a.publishedAt ?? a.publishAt ?? a.createdAt;
+            return {
+              id: a.id,
+              title: a.title,
+              category: a.category || '一般',
+              priority: a.priority === 'urgent' ? '緊急' : a.priority === 'important' ? '重要' : '一般',
+              pinned: Boolean(a.pinned),
+              publishedAt: dateSource ? dateSource.toISOString().slice(0, 10) : null,
+              isRead: Boolean(rd?.readAt),
+              isAcknowledged: Boolean(rd?.acknowledgedAt),
+              body: a.body,
+              attachments: files.map((f) => f.fileName),
+              href: `/announcements?open=${a.id}`,
+            };
+          })
+        );
+        return {
+          ok: true,
+          name: tool,
+          label,
+          response: {
+            totalPublishedCount: published.length,
+            unreadCount: published.filter((a) => !readMap.get(a.id)?.readAt).length,
+            returnedCount: items.length,
+            announcements: items,
+            hint: '請針對上述真實公司公告（置頂、重要度、分類、未讀狀態與內容重點）進行條理化整理，並提供 /announcements 連結；切勿混入個人的單據簽核或退回通知。',
+          },
+        };
+      }
+
+      case 'list_company_surveys': {
+        const pendingOnly = args?.pending_only === true;
+        const { activateDueSurveys, listSurveysForViewer, listQuestions } = await import('@/lib/surveys/service');
+        const { companySurveyResponses } = await import('@/lib/db/schema');
+        await activateDueSurveys().catch(() => {});
+        const [surveys, respRows] = await Promise.all([
+          listSurveysForViewer({
+            employeeId: employee.id,
+            departmentId: employee.departmentId,
+            manage: false,
+          }),
+          getDb()
+            .select()
+            .from(companySurveyResponses)
+            .where(eq(companySurveyResponses.employeeId, employee.id)),
+        ]);
+        const respMap = new Map(respRows.map((r) => [r.surveyId, r]));
+        const filtered = surveys.filter((s) => {
+          if (pendingOnly) {
+            return s.status === 'open' && respMap.get(s.id)?.status !== 'submitted';
+          }
+          return true;
+        });
+        const items = await Promise.all(
+          filtered.slice(0, 15).map(async (s) => {
+            const resp = respMap.get(s.id);
+            const qs = await listQuestions(s.id).catch(() => []);
+            return {
+              id: s.id,
+              title: s.title,
+              description: s.description,
+              status: s.status === 'open' ? '開放填寫中' : '已截止',
+              closesAt: s.closesAt ? s.closesAt.toISOString().slice(0, 10) : null,
+              myResponseStatus:
+                resp?.status === 'submitted' ? '已填寫送出' : resp?.status === 'draft' ? '草稿暫存中' : '尚未填寫',
+              questionCount: qs.length,
+              href: `/surveys/${s.id}`,
+            };
+          })
+        );
+        return {
+          ok: true,
+          name: tool,
+          label,
+          response: {
+            count: items.length,
+            surveys: items,
           },
         };
       }

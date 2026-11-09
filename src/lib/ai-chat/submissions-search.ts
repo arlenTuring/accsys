@@ -3,7 +3,7 @@ import { getDb } from '@/lib/db';
 import { formDefinitions, formSubmissions } from '@/lib/db/schema';
 
 export type MySubmissionHit = {
-  formType: 'custom';
+  formType: string;
   formId: string;
   formKey: string;
   formName: string;
@@ -12,6 +12,12 @@ export type MySubmissionHit = {
   summary: string;
   approvedAt: string | null;
   version: number;
+  href?: string;
+  totalAmount?: number | null;
+  currentNodeLabel?: string | null;
+  pendingApproverNames?: string[];
+  returnReason?: string | null;
+  returnedByName?: string | null;
 };
 
 /** Owner-scoped custom submissions for assistant tools / pickers. */

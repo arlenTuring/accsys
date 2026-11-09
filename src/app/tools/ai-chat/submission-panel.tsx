@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { STATUS_BADGE, STATUS_LABELS } from '@/app/components/form-labels';
+import { QuickPrintButton } from '@/app/components/print-button';
 import { getSubmissionPanelAction } from '@/lib/ai-chat/actions';
 import { ActionSpinner, useSubmissionAction } from './submission-actions';
 
@@ -115,9 +116,14 @@ export function SubmissionPanel({
         {panel.submittedAt && (
           <p className="text-sm text-td-muted">送出時間 {timeFmt.format(new Date(panel.submittedAt))}</p>
         )}
-        <a className="inline-block text-sm text-td-blue underline" href={panel.href} target="_blank" rel="noreferrer">
-          開啟完整頁面
-        </a>
+        <div className="flex flex-wrap items-center gap-2.5 pt-0.5">
+          <a className="inline-block text-sm text-td-blue underline" href={panel.href} target="_blank" rel="noreferrer">
+            開啟完整頁面
+          </a>
+          {(panel.status === 'approved' || action.phase === 'approved') && (
+            <QuickPrintButton href={panel.href} size="xs" />
+          )}
+        </div>
       </header>
 
       {doneBanner}

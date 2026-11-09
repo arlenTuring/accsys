@@ -208,15 +208,15 @@ function ConversationRow({
           </button>
           <button
             type="button"
-            className="underline text-amber-800"
+            className="underline text-rose-600 hover:text-rose-700"
             onClick={async () => {
-              if (!window.confirm('封存此對話？草稿與單據不會刪除。')) return;
+              if (!window.confirm('確定要刪除此對話嗎？草稿與單據不會刪除。')) return;
               const res = await archiveConversationAction({ conversationId: item.id });
               if (res.ok) onArchived();
               setMenu(false);
             }}
           >
-            封存
+            刪除
           </button>
         </div>
       )}

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { GlobalAssistant } from '@/app/components/global-assistant';
 import mark from '@/app/components/turing-drive-mark.png';
 import {
   ADMIN_NAV_PERMISSIONS,
@@ -21,6 +22,7 @@ import {
   type FormCategory,
   type RecordLink,
 } from '@/lib/forms/catalog';
+import { LanguageSwitcher, useI18n } from '@/lib/i18n/context';
 
 type AppShellProps = {
   profile: SidebarEmployeeProfile;
@@ -29,7 +31,7 @@ type AppShellProps = {
   children: React.ReactNode;
 };
 
-type PrimaryNavKey = 'ai' | 'approvals' | 'company' | 'finance' | 'admin' | 'tools';
+type PrimaryNavKey = 'ai' | 'project' | 'approvals' | 'company' | 'finance' | 'admin' | 'tools';
 
 const SYSTEM_ROLE_LABELS: Record<string, string> = {
   staff: '一般員工',
@@ -40,6 +42,9 @@ const SYSTEM_ROLE_LABELS: Record<string, string> = {
 function resolveActiveSection(pathname: string): PrimaryNavKey {
   if (pathname === '/' || pathname.startsWith('/tools/ai-chat') || pathname === '/dashboard') {
     return 'ai';
+  }
+  if (pathname.startsWith('/tools/project-assistant')) {
+    return 'project';
   }
   if (
     isRecordPage(pathname) ||
@@ -74,6 +79,21 @@ function RailIcon({ name }: { name: PrimaryNavKey }) {
             strokeLinecap="round"
             strokeLinejoin="round"
             d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+          />
+        </svg>
+      );
+    case 'project':
+      return (
+        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+          />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M9 13h6m-3-3v6"
           />
         </svg>
       );
@@ -132,6 +152,7 @@ function RailIcon({ name }: { name: PrimaryNavKey }) {
 }
 
 function CopyTagButton({ tag }: { tag: string }) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
 
   return (
@@ -144,14 +165,15 @@ function CopyTagButton({ tag }: { tag: string }) {
         setTimeout(() => setCopied(false), 1500);
       }}
       className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-td-blue transition hover:bg-td-blue-light"
-      title="複製財產編號"
+      title={t.shell.account.copyTagTitle}
     >
-      {copied ? '✓ 已複製' : '複製'}
+      {copied ? t.common.copied : t.common.copy}
     </button>
   );
 }
 
 function EmployeeAccountPopover({ profile }: { profile: SidebarEmployeeProfile }) {
+  const { t, tr } = useI18n();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const initial = profile.name.slice(0, 1);
@@ -172,7 +194,8 @@ function EmployeeAccountPopover({ profile }: { profile: SidebarEmployeeProfile }
     };
   }, [open]);
 
-  const roleText = SYSTEM_ROLE_LABELS[profile.role] ?? profile.role;
+  const rawRoleText = SYSTEM_ROLE_LABELS[profile.role] ?? profile.role;
+  const roleText = tr(rawRoleText);
 
   return (
     <div ref={rootRef} className="relative flex flex-col items-center">
@@ -210,22 +233,30 @@ function EmployeeAccountPopover({ profile }: { profile: SidebarEmployeeProfile }
                   <span className="rounded bg-white px-1.5 py-0.2 font-semibold text-slate-600 ring-1 ring-slate-200">
                     GWS
                   </span>
-                  <span className="truncate font-mono">{profile.email || '未綁定 Google Workspace'}</span>
+                  <span className="truncate font-mono">
+                    {profile.email || t.shell.account.unboundGws}
+                  </span>
                 </p>
               </div>
             </div>
           </div>
 
+          {/* Language Switcher Row */}
+          <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/50 px-4 py-2 text-xs">
+            <span className="font-semibold text-td-muted">🌐 {t.common.language}</span>
+            <LanguageSwitcher variant="row" />
+          </div>
+
           {/* Employee Details: Employee Code, Department, Direct Manager */}
           <dl className="grid grid-cols-2 gap-2.5 border-b border-slate-100 px-4 py-3 text-xs">
             <div className="rounded-lg bg-slate-50/80 px-3 py-2">
-              <dt className="text-[11px] text-td-muted">員工工號</dt>
+              <dt className="text-[11px] text-td-muted">{t.shell.account.employeeCode}</dt>
               <dd className="mt-0.5 font-mono text-sm font-bold text-td-blue-dark">
                 {profile.employeeCode}
               </dd>
             </div>
             <div className="rounded-lg bg-slate-50/80 px-3 py-2">
-              <dt className="text-[11px] text-td-muted">所屬部門</dt>
+              <dt className="text-[11px] text-td-muted">{t.shell.account.department}</dt>
               <dd className="mt-0.5 truncate font-semibold text-td-blue-dark">
                 {profile.departmentName}
                 <span className="ml-1 font-mono text-[11px] text-td-muted">
@@ -234,7 +265,7 @@ function EmployeeAccountPopover({ profile }: { profile: SidebarEmployeeProfile }
               </dd>
             </div>
             <div className="rounded-lg bg-slate-50/80 px-3 py-2">
-              <dt className="text-[11px] text-td-muted">直屬主管</dt>
+              <dt className="text-[11px] text-td-muted">{t.shell.account.directManager}</dt>
               <dd className="mt-0.5 font-semibold text-td-blue-dark">
                 {profile.managerName ? (
                   <>
@@ -251,56 +282,56 @@ function EmployeeAccountPopover({ profile }: { profile: SidebarEmployeeProfile }
               </dd>
             </div>
             <div className="rounded-lg bg-slate-50/80 px-3 py-2">
-              <dt className="text-[11px] text-td-muted">職稱／身分</dt>
+              <dt className="text-[11px] text-td-muted">{t.shell.account.titleAndRole}</dt>
               <dd className="mt-0.5 truncate font-semibold text-td-blue-dark">
                 {profile.title || roleText}
-                {profile.isGeneralManager ? ' · 總經理' : ''}
-                {profile.isChairman ? ' · 董事長' : ''}
+                {profile.isGeneralManager ? ` · ${t.shell.account.generalManager}` : ''}
+                {profile.isChairman ? ` · ${t.shell.account.chairman}` : ''}
               </dd>
             </div>
           </dl>
 
-          {/* Personal Custody Assets List */}
-          <div className="px-4 py-3">
+          {/* Custody Assets Section */}
+          <div className="border-b border-slate-100 px-4 py-3">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-xs font-bold text-td-blue-dark">
-                我名下保管的資產（{profile.custodyAssets.length} 件）
+                {t.shell.account.custodyAssetsTitle} ({profile.custodyAssets.length})
               </span>
-              <Link
-                href="/asset-transfers/new"
-                onClick={() => setOpen(false)}
-                className="text-[11px] font-semibold text-td-blue hover:underline"
-              >
-                申請異動 →
-              </Link>
+              {profile.custodyAssets.length > 0 && (
+                <Link
+                  href="/asset-transfers/new"
+                  onClick={() => setOpen(false)}
+                  className="text-[11px] font-semibold text-td-blue hover:underline"
+                >
+                  + {tr('資產異動申請單')}
+                </Link>
+              )}
             </div>
 
             {profile.custodyAssets.length === 0 ? (
-              <p className="rounded-lg border border-dashed border-slate-200 py-4 text-center text-xs text-td-muted">
-                目前名下無登記保管資產
+              <p className="rounded-lg bg-slate-50 px-3 py-2.5 text-center text-xs text-td-muted">
+                {t.shell.account.noCustodyAssets}
               </p>
             ) : (
               <ul className="max-h-48 space-y-1.5 overflow-y-auto pr-1">
                 {profile.custodyAssets.map((asset) => (
                   <li
                     key={asset.id}
-                    className="rounded-lg border border-slate-200/80 bg-slate-50/60 px-2.5 py-2 text-xs"
+                    className="flex items-center justify-between gap-2 rounded-lg border border-slate-100 bg-slate-50/70 px-2.5 py-2 text-xs"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate font-semibold text-td-blue-dark">
-                        {asset.name}
-                      </span>
-                      <span className="shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
-                        {asset.statusLabel}
-                      </span>
-                    </div>
-                    <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-td-muted">
+                    <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
-                        <span className="font-mono text-slate-700">{asset.tag}</span>
-                        <CopyTagButton tag={asset.tag} />
+                        <p className="truncate font-semibold text-td-blue-dark">{asset.name}</p>
+                        <span className="shrink-0 rounded bg-emerald-50 px-1.5 py-0.2 text-[10px] font-medium text-emerald-700">
+                          {tr(asset.statusLabel)}
+                        </span>
                       </div>
-                      <span className="truncate">{asset.location || '未填地點'}</span>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-td-muted">
+                        <span className="font-mono text-slate-700">{asset.tag}</span>
+                        {asset.location && <span>· {asset.location}</span>}
+                      </div>
                     </div>
+                    <CopyTagButton tag={asset.tag} />
                   </li>
                 ))}
               </ul>
@@ -308,13 +339,20 @@ function EmployeeAccountPopover({ profile }: { profile: SidebarEmployeeProfile }
           </div>
 
           {/* Footer: Logout */}
-          <div className="border-t border-slate-100 bg-slate-50/70 px-3 py-2.5">
+          <div className="flex items-center justify-between bg-slate-50/60 px-4 py-2.5">
+            <Link
+              href="/assets"
+              onClick={() => setOpen(false)}
+              className="text-xs font-medium text-td-muted hover:text-td-blue"
+            >
+              {t.shell.account.companyAssetShortcut}
+            </Link>
             <form action="/auth/logout" method="post">
               <button
                 type="submit"
-                className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-semibold text-rose-600 transition hover:bg-rose-50"
+                className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-50"
               >
-                <span>登出帳號</span>
+                {t.shell.account.logoutButton}
               </button>
             </form>
           </div>
@@ -336,57 +374,75 @@ export function AppShell({
   children,
 }: AppShellProps) {
   const pathname = usePathname();
+  const { locale, t, tr } = useI18n();
   const [secondaryCollapsed, setSecondaryCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const showFinance = hasAnyPermission(profile.permissions, FINANCE_NAV_PERMISSIONS);
   const showAdmin = hasAnyPermission(profile.permissions, ADMIN_NAV_PERMISSIONS);
 
+  if (pathname.startsWith('/tools/project-assistant/viewer')) {
+    return <>{children}</>;
+  }
+
   const activeSection = resolveActiveSection(pathname);
 
   const primaryItems: Array<{
     key: PrimaryNavKey;
     label: string;
+    shortLabel: string;
     href: string;
     badge?: number;
     visible: boolean;
   }> = [
     {
       key: 'ai',
-      label: 'AI 助手',
+      label: tr('AI 助手'),
+      shortLabel: locale === 'en' ? 'AI' : locale === 'ja' ? 'AI' : 'AI 助手',
       href: '/tools/ai-chat',
       visible: true,
     },
     {
+      key: 'project',
+      label: tr('專案助手'),
+      shortLabel: locale === 'en' ? 'Project' : locale === 'ja' ? '案件AI' : '專案助手',
+      href: '/tools/project-assistant',
+      visible: true,
+    },
+    {
       key: 'approvals',
-      label: '簽核管理',
+      label: tr('簽核管理'),
+      shortLabel: locale === 'en' ? 'Approve' : locale === 'ja' ? '承認管理' : '簽核管理',
       href: '/applications',
       badge: pendingApprovalCount,
       visible: true,
     },
     {
       key: 'finance',
-      label: '財會管理',
+      label: tr('財會管理'),
+      shortLabel: locale === 'en' ? 'Finance' : locale === 'ja' ? '財務会計' : '財會管理',
       href: '/case-tracking',
       visible: showFinance,
     },
     {
       key: 'admin',
-      label: '系統管理',
+      label: tr('系統管理'),
+      shortLabel: locale === 'en' ? 'Admin' : locale === 'ja' ? 'システム' : '系統管理',
       href: '/admin/company',
       visible: showAdmin,
     },
     {
       key: 'tools',
-      label: '工具區',
+      label: tr('工具區'),
+      shortLabel: locale === 'en' ? 'Tools' : locale === 'ja' ? 'ツール' : '工具區',
       href: '/tools',
       visible: true,
     },
   ];
 
   // Determine whether this section has a second-level sidebar
-  // Note: 'ai' has its own built-in conversation history sidebar inside AiChatApp
-  const hasSecondaryRail = activeSection !== 'ai';
+  // Note: 'ai' and 'project' manage their own full-screen workspace & sidebars
+  const hasSecondaryRail = activeSection !== 'ai' && activeSection !== 'project';
 
   function renderSecondaryContent() {
     switch (activeSection) {
@@ -395,17 +451,17 @@ export function AppShell({
           <div className="space-y-5">
             <div className="space-y-1">
               <p className="px-2.5 text-[11px] font-semibold tracking-wider text-slate-400">
-                簽核與進度
+                {tr('簽核與進度')}
               </p>
               <SecondaryNavLink
                 href="/applications"
-                label="簽核管理"
+                label={tr('簽核管理')}
                 badge={pendingApprovalCount}
                 active={pathname === '/applications' || pathname === '/approvals'}
               />
               <SecondaryNavLink
                 href="/applications/drafts"
-                label="我的草稿庫"
+                label={tr('我的草稿庫')}
                 active={isUnder(pathname, '/applications/drafts')}
               />
             </div>
@@ -413,13 +469,14 @@ export function AppShell({
             {categories.map((cat) => (
               <div key={cat.id} className="space-y-1">
                 <p className="px-2.5 text-[11px] font-semibold tracking-wider text-slate-400">
-                  新增 · {cat.title}
+                  {t.shell.newPrefix}
+                  {tr(cat.title)}
                 </p>
                 {cat.forms.map((f) => (
                   <SecondaryNavLink
                     key={f.href}
                     href={f.href}
-                    label={f.title}
+                    label={tr(f.title)}
                     active={isUnder(pathname, f.href)}
                   />
                 ))}
@@ -432,13 +489,13 @@ export function AppShell({
         return (
           <div className="space-y-1">
             <p className="px-2.5 text-[11px] font-semibold tracking-wider text-slate-400">
-              公司資訊
+              {tr('公司資訊')}
             </p>
             {COMPANY_INFO_LINKS.map((l) => (
               <SecondaryNavLink
                 key={l.href}
                 href={l.href}
-                label={l.label}
+                label={tr(l.label)}
                 active={isUnder(pathname, l.href)}
               />
             ))}
@@ -449,13 +506,13 @@ export function AppShell({
         return (
           <div className="space-y-1">
             <p className="px-2.5 text-[11px] font-semibold tracking-wider text-slate-400">
-              全公司財會與資產
+              {tr('全公司財會與資產')}
             </p>
             {FINANCE_LINKS.map((l) => (
               <SecondaryNavLink
                 key={l.href}
                 href={l.href}
-                label={l.label}
+                label={tr(l.label)}
                 active={isUnder(pathname, l.href)}
               />
             ))}
@@ -466,13 +523,13 @@ export function AppShell({
         return (
           <div className="space-y-1">
             <p className="px-2.5 text-[11px] font-semibold tracking-wider text-slate-400">
-              系統管理設定
+              {tr('系統管理設定')}
             </p>
             {ADMIN_LINKS.map((l) => (
               <SecondaryNavLink
                 key={l.href}
                 href={l.href}
-                label={l.label}
+                label={tr(l.label)}
                 active={isUnder(pathname, l.href)}
               />
             ))}
@@ -483,13 +540,13 @@ export function AppShell({
         return (
           <div className="space-y-1">
             <p className="px-2.5 text-[11px] font-semibold tracking-wider text-slate-400">
-              實用工具箱
+              {tr('實用工具箱')}
             </p>
             {TOOL_SUB_LINKS.map((l) => (
               <SecondaryNavLink
                 key={l.href}
                 href={l.href}
-                label={l.label}
+                label={tr(l.label)}
                 active={pathname === l.href}
               />
             ))}
@@ -503,11 +560,11 @@ export function AppShell({
 
   const activeSectionTitle =
     activeSection === 'company'
-      ? '公司資訊'
+      ? tr('公司資訊')
       : (primaryItems.find((i) => i.key === activeSection)?.label ?? 'ACCSYS');
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-td-surface">
+    <div className="flex h-screen w-screen overflow-hidden bg-td-surface print:block print:h-auto print:w-full print:overflow-visible print:bg-white">
       {/* Column 1: Far-left Icon Rail */}
       <aside
         aria-label="主導覽列"
@@ -518,7 +575,7 @@ export function AppShell({
           <Link
             href="/announcements"
             onClick={() => setSecondaryCollapsed(false)}
-            title="公司資訊（公司公告 · 公司規章 · 內部問卷）"
+            title={t.shell.companyInfoTooltip}
             className={`flex h-10 w-10 items-center justify-center rounded-xl bg-white p-1.5 transition hover:scale-105 ${
               activeSection === 'company'
                 ? 'shadow-sm ring-2 ring-td-blue'
@@ -527,7 +584,7 @@ export function AppShell({
           >
             <Image
               src={mark}
-              alt="TURING DRIVE 公司資訊"
+              alt="TURING DRIVE"
               className="h-full w-full object-contain"
               sizes="40px"
               loading="eager"
@@ -556,7 +613,7 @@ export function AppShell({
                   >
                     <RailIcon name={item.key} />
                     <span className="mt-1 text-[10px] font-semibold leading-none tracking-tight">
-                      {item.label.slice(0, 4)}
+                      {item.shortLabel}
                     </span>
                     {item.badge != null && item.badge > 0 && (
                       <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-bold text-white shadow-2xs">
@@ -569,8 +626,10 @@ export function AppShell({
           </nav>
         </div>
 
-        {/* Bottom: Employee Account & Assets Trigger */}
-        <div className="flex flex-col items-center gap-2">
+        {/* Bottom: Language Switcher + Global Assistant Hover + Employee Account & Assets Trigger */}
+        <div className="flex flex-col items-center gap-2.5">
+          <LanguageSwitcher variant="rail" />
+          <GlobalAssistant enabled />
           <EmployeeAccountPopover profile={profile} />
         </div>
       </aside>
@@ -603,7 +662,7 @@ export function AppShell({
             <button
               type="button"
               onClick={() => setSecondaryCollapsed((v) => !v)}
-              title={secondaryCollapsed ? '展開第二層選單' : '收合第二層選單'}
+              title={secondaryCollapsed ? t.shell.expandSubmenu : t.shell.collapseSubmenu}
               className="rounded-lg p-1.5 text-slate-500 hover:bg-white hover:text-td-blue-dark"
             >
               {secondaryCollapsed ? '»' : '«'}
@@ -619,7 +678,7 @@ export function AppShell({
       )}
 
       {/* Column 3: Main Content Area */}
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden print:block print:overflow-visible">
         {/* Mobile Top Bar */}
         <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-2.5 md:hidden print:hidden">
           <div className="flex items-center gap-2.5">
@@ -627,7 +686,7 @@ export function AppShell({
               type="button"
               onClick={() => setMobileMenuOpen(true)}
               className="rounded-lg border border-slate-200 p-1.5 text-td-blue-dark"
-              aria-label="開啟選單"
+              aria-label={t.common.openMenu}
             >
               ☰
             </button>
@@ -638,7 +697,10 @@ export function AppShell({
               </span>
             </Link>
           </div>
-          <EmployeeAccountPopover profile={profile} />
+          <div className="flex items-center gap-2">
+            <LanguageSwitcher variant="rail" />
+            <EmployeeAccountPopover profile={profile} />
+          </div>
         </header>
 
         {/* Mobile Drawer */}
@@ -648,7 +710,7 @@ export function AppShell({
               type="button"
               className="flex-1 bg-black/30"
               onClick={() => setMobileMenuOpen(false)}
-              aria-label="關閉選單"
+              aria-label={t.common.closeMenu}
             />
             <div className="flex h-full w-72 flex-col bg-white p-4 shadow-xl">
               <div className="mb-4 flex items-center justify-between border-b border-slate-100 pb-3">
@@ -667,6 +729,10 @@ export function AppShell({
                 >
                   ✕
                 </button>
+              </div>
+              <div className="mb-3 flex items-center justify-between border-b border-slate-100 pb-3">
+                <span className="text-xs font-semibold text-td-muted">🌐 {t.common.language}</span>
+                <LanguageSwitcher variant="row" />
               </div>
               <div className="space-y-1 border-b border-slate-100 pb-3">
                 {primaryItems
@@ -704,7 +770,7 @@ export function AppShell({
         )}
 
         {/* Main Viewport */}
-        <div className="flex-1 overflow-y-auto">{children}</div>
+        <div className="flex-1 overflow-y-auto print:overflow-visible">{children}</div>
       </div>
     </div>
   );

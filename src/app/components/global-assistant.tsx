@@ -10,6 +10,7 @@ import {
   startResubmissionAction,
 } from '@/lib/ai-chat/actions';
 import type { LauncherEvent } from '@/lib/ai-chat/launcher-events';
+import { useI18n } from '@/lib/i18n/context';
 import { SafeMarkdown } from '@/app/tools/ai-chat/safe-markdown';
 import { usePathname } from 'next/navigation';
 
@@ -25,11 +26,12 @@ type Props = {
 };
 
 /**
- * Compact global helper — one mount in the authenticated layout.
- * Driven by durable notifications; never polls the model for “anything new?”.
+ * Compact global helper — placed in the bottom-left sidebar rail right above the employee account avatar.
+ * Opens on mouse hover (or click) and stays open while interacting with the panel.
  */
 export function GlobalAssistant({ enabled }: Props) {
   const pathname = usePathname();
+  const { t } = useI18n();
   const titleId = useId();
   const [open, setOpen] = useState(false);
   const [mutedUntil, setMutedUntil] = useState(0);
@@ -41,9 +43,48 @@ export function GlobalAssistant({ enabled }: Props) {
   const [pending, start] = useTransition();
   const [unread, setUnread] = useState(0);
   const inputFocused = useRef(false);
-  const panelRef = useRef<HTMLDivElement>(null);
-  /** First Enter arms send; second Enter sends. Typing / blur clears the arm. */
-  const enterArmedRef = useRef(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const hoverCloseTimer = useRef<number | null>(null);
+  const isComposingRef = useRef(false);
+  const lastCompositionEndAtRef = useRef(0);
+
+  const clearHoverClose = useCallback(() => {
+    if (hoverCloseTimer.current !== null) {
+      window.clearTimeout(hoverCloseTimer.current);
+      hoverCloseTimer.current = null;
+    }
+  }, []);
+
+  const scheduleHoverClose = useCallback(() => {
+    clearHoverClose();
+    hoverCloseTimer.current = window.setTimeout(() => {
+      if (!inputFocused.current) {
+        setOpen(false);
+      }
+    }, 220);
+  }, [clearHoverClose]);
+
+  useEffect(() => {
+    return () => clearHoverClose();
+  }, [clearHoverClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -57,7 +98,6 @@ export function GlobalAssistant({ enabled }: Props) {
 
   const absorbEvents = useCallback((incoming: LauncherEvent[]) => {
     if (!incoming.length) return;
-    // Multi-tab coordination via BroadcastChannel
     try {
       const bc = new BroadcastChannel(SEEN_CHANNEL);
       bc.postMessage({ type: 'events', keys: incoming.map((e) => e.eventKey) });
@@ -76,12 +116,6 @@ export function GlobalAssistant({ enabled }: Props) {
     const fresh = incoming.filter((e) => e.fresh).length;
     if (fresh === 0) return;
     setUnread((n) => n + fresh);
-    // Do not steal focus while typing.
-    if (!inputFocused.current && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
-      // Soft open only when collapsed and not muted.
-      const mute = Number(sessionStorage.getItem(MUTE_KEY) || '0');
-      if (Date.now() > mute) setOpen(true);
-    }
   }, []);
 
   useEffect(() => {
@@ -90,7 +124,6 @@ export function GlobalAssistant({ enabled }: Props) {
     let timer: number | undefined;
     let delay = 15_000;
 
-    /** Walks every page of a scope, so a long backlog arrives in one go. False when a request failed. */
     async function drain(scope: 'fresh' | 'delivered'): Promise<boolean> {
       let after: string | null = null;
       for (let page = 0; page < 25 && !cancelled; page++) {
@@ -115,13 +148,11 @@ export function GlobalAssistant({ enabled }: Props) {
         timer = window.setTimeout(tick, delay);
         return;
       }
-      // Offline or a deploy in progress: nothing was claimed, so the next tick picks it all up.
       const ok = await drain('fresh').catch(() => false);
       delay = ok ? 15_000 : Math.min(delay * 1.5, 90_000);
       if (!cancelled) timer = window.setTimeout(tick, delay);
     }
 
-    // Reminders already delivered and not dealt with come back quietly after a reload.
     void drain('delivered').catch(() => false);
     timer = window.setTimeout(tick, 4_000);
 
@@ -141,9 +172,6 @@ export function GlobalAssistant({ enabled }: Props) {
         const data = ev.data as { type?: string; keys?: string[] };
         if (data?.type === 'ack' && data.keys?.length) {
           setEvents((prev) => prev.filter((e) => !data.keys!.includes(e.eventKey)));
-        }
-        if (data?.type === 'events' && data.keys?.length) {
-          // Another tab already surfaced these — still show in list but don't bump unread hard.
         }
       };
     } catch {
@@ -170,7 +198,6 @@ export function GlobalAssistant({ enabled }: Props) {
     const left = events.filter((e) => !keys.includes(e.eventKey));
     setEvents(left);
     setUnread(0);
-    // Nothing left to say: no empty panel staying on screen.
     if (left.length === 0 && replies.length === 0) setOpen(false);
   }
 
@@ -234,29 +261,64 @@ export function GlobalAssistant({ enabled }: Props) {
     });
   }
 
-  // Hide on login and while already inside the full assistant workspace.
-  if (!enabled || pathname === '/login' || pathname?.startsWith('/tools/ai-chat')) return null;
+  if (!enabled || pathname === '/login') return null;
 
   const muted = Date.now() < mutedUntil;
+  const badgeCount = unread > 0 ? unread : events.length;
 
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-40 flex flex-col items-end gap-2 pb-[env(safe-area-inset-bottom)]">
+    <div
+      ref={rootRef}
+      className="relative flex flex-col items-center"
+      onMouseEnter={() => {
+        clearHoverClose();
+        setOpen(true);
+        setUnread(0);
+      }}
+      onMouseLeave={() => {
+        scheduleHoverClose();
+      }}
+    >
+      <button
+        type="button"
+        title={t.assistantWidget.hoverTooltip}
+        className={`relative flex h-10 w-10 items-center justify-center rounded-full border text-xs font-extrabold transition ${
+          open
+            ? 'border-td-blue bg-td-blue text-white shadow-md'
+            : 'border-slate-200/90 bg-white text-td-blue-dark shadow-xs hover:scale-105 hover:border-td-blue/60 hover:text-td-blue'
+        }`}
+        aria-label={t.assistantWidget.title}
+        aria-expanded={open}
+        onClick={() => {
+          setOpen((v) => !v);
+          if (!open) setUnread(0);
+        }}
+      >
+        AI
+        {badgeCount > 0 && !open && (
+          <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-bold text-white shadow-2xs">
+            {badgeCount > 9 ? '9+' : badgeCount}
+          </span>
+        )}
+      </button>
+
       {open && (
         <div
-          ref={panelRef}
           role="dialog"
           aria-modal="false"
           aria-labelledby={titleId}
-          className="pointer-events-auto w-[min(100vw-2rem,22rem)] rounded-2xl border border-td-border bg-white shadow-lg"
+          onMouseEnter={() => clearHoverClose()}
+          onMouseLeave={() => scheduleHoverClose()}
+          className="fixed bottom-16 left-16 z-50 w-[min(100vw-5rem,22rem)] rounded-2xl border border-td-border bg-white text-td-blue-dark shadow-2xl"
         >
-          <div className="flex items-center justify-between border-b border-td-border px-3 py-2">
-            <h2 id={titleId} className="text-sm font-semibold text-td-blue-dark">
-              ACCSYS 小助手
+          <div className="flex items-center justify-between border-b border-td-border px-3.5 py-2.5">
+            <h2 id={titleId} className="text-sm font-bold text-td-blue-dark">
+              {t.assistantWidget.title}
             </h2>
-            <div className="flex gap-2">
+            <div className="flex gap-2.5">
               <button
                 type="button"
-                className="text-xs underline"
+                className="text-xs text-td-muted underline hover:text-td-blue-dark"
                 onClick={() => {
                   const until = Date.now() + 60 * 60 * 1000;
                   setMutedUntil(until);
@@ -268,59 +330,95 @@ export function GlobalAssistant({ enabled }: Props) {
                   setOpen(false);
                 }}
               >
-                靜音 1 小時
+                {t.assistantWidget.mute1h}
               </button>
-              <button type="button" className="text-xs underline" onClick={() => setOpen(false)}>
-                收合
+              <button
+                type="button"
+                className="text-xs text-td-muted underline hover:text-td-blue-dark"
+                onClick={() => setOpen(false)}
+              >
+                {t.assistantWidget.collapse}
               </button>
             </div>
           </div>
 
           <div className="max-h-64 space-y-2 overflow-y-auto p-3 text-sm">
-            {muted && <p className="text-xs text-td-muted">已暫時靜音主動提醒。</p>}
+            {muted && <p className="text-xs text-td-muted">{t.assistantWidget.mutedNotice}</p>}
             {events.length === 0 && replies.length === 0 && (
-              <p className="text-td-muted">沒有新的主動提醒。可問短問題，或進入完整助手。</p>
+              <p className="text-xs text-td-muted">{t.assistantWidget.emptyNotice}</p>
             )}
-            {events.length > 3 && (
+            {events.length > 0 && (
               <div className="flex items-center justify-between text-xs">
-                <p className="font-medium text-td-blue-dark">共 {events.length} 則提醒</p>
-                <button type="button" className="underline" onClick={() => dismiss(events.map((e) => e.eventKey), 'dismissed')}>
-                  全部稍後
-                </button>
+                <p className="font-semibold text-td-blue-dark">
+                  {t.assistantWidget.remindersCount(events.length)}
+                </p>
+                {events.length > 1 && (
+                  <button
+                    type="button"
+                    className="underline hover:text-td-blue"
+                    onClick={() => dismiss(events.map((e) => e.eventKey), 'dismissed')}
+                  >
+                    {t.assistantWidget.dismissAllLater}
+                  </button>
+                )}
               </div>
             )}
-            {[...events].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((ev) => (
-              <div key={ev.eventKey} className="rounded-lg border border-td-border px-2 py-2">
-                <p className="font-medium text-td-blue-dark">{ev.title}</p>
-                <p className="mt-0.5 text-xs text-td-muted whitespace-pre-wrap">{ev.body}</p>
-                {ev.reason && !ev.reason.missing && ev.reason.full !== ev.reason.short && (
-                  <details className="mt-1 text-xs">
-                    <summary className="cursor-pointer underline">看完整原因</summary>
-                    <p className="mt-1 whitespace-pre-wrap">{ev.reason.full}</p>
-                  </details>
-                )}
-                {ev.caseNumber && <p className="mt-0.5 text-[11px] text-td-muted">單號 {ev.caseNumber}</p>}
-                <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                  {ev.canResubmit && ev.formId && (
-                    <button type="button" className="font-medium underline" disabled={pending} onClick={() => resubmit(ev)}>
-                      補件
+            {[...events]
+              .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+              .map((ev) => (
+                <div key={ev.eventKey} className="rounded-xl border border-td-border px-3 py-2.5">
+                  <p className="font-semibold text-td-blue-dark">{ev.title}</p>
+                  <p className="mt-0.5 whitespace-pre-wrap text-xs text-td-muted">{ev.body}</p>
+                  {ev.reason && !ev.reason.missing && ev.reason.full !== ev.reason.short && (
+                    <details className="mt-1 text-xs">
+                      <summary className="cursor-pointer underline">
+                        {t.assistantWidget.viewFullReason}
+                      </summary>
+                      <p className="mt-1 whitespace-pre-wrap">{ev.reason.full}</p>
+                    </details>
+                  )}
+                  {ev.caseNumber && (
+                    <p className="mt-0.5 text-[11px] text-td-muted">
+                      {t.assistantWidget.caseNoPrefix} {ev.caseNumber}
+                    </p>
+                  )}
+                  <div className="mt-2 flex flex-wrap gap-2.5 text-xs">
+                    {ev.canResubmit && ev.formId && (
+                      <button
+                        type="button"
+                        className="font-semibold underline hover:text-td-blue"
+                        disabled={pending}
+                        onClick={() => resubmit(ev)}
+                      >
+                        {t.assistantWidget.resubmit}
+                      </button>
+                    )}
+                    {ev.href && (
+                      <Link
+                        href={ev.href}
+                        className="underline hover:text-td-blue"
+                        onClick={() => {
+                          dismiss([ev.eventKey], 'viewed');
+                          setOpen(false);
+                        }}
+                      >
+                        {t.assistantWidget.view}
+                      </Link>
+                    )}
+                    <button
+                      type="button"
+                      className="underline hover:text-td-blue"
+                      onClick={() => dismiss([ev.eventKey], 'dismissed')}
+                    >
+                      {t.assistantWidget.later}
                     </button>
-                  )}
-                  {ev.href && (
-                    <Link href={ev.href} className="underline" onClick={() => dismiss([ev.eventKey], 'viewed')}>
-                      查看
-                    </Link>
-                  )}
-                  <button type="button" className="underline" onClick={() => dismiss([ev.eventKey], 'dismissed')}>
-                    稍後
-                  </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
             {replies.map((m) => (
               <div
                 key={m.id}
-                className={`rounded-lg px-2 py-1 text-xs ${
+                className={`rounded-lg px-2.5 py-1.5 text-xs ${
                   m.role === 'user' ? 'bg-td-blue text-white' : 'bg-slate-50'
                 }`}
               >
@@ -328,46 +426,57 @@ export function GlobalAssistant({ enabled }: Props) {
               </div>
             ))}
             {error && <p className="text-xs text-amber-800">{error}</p>}
-            {pending && <p className="text-xs text-td-muted">處理中…</p>}
+            {pending && <p className="text-xs text-td-muted">{t.common.processing}</p>}
           </div>
 
           <div className="space-y-2 border-t border-td-border p-3">
             <div className="flex gap-2">
               <input
-                className="min-w-0 flex-1 rounded-lg border border-td-border px-2 py-1.5 text-sm"
+                className="min-w-0 flex-1 rounded-lg border border-td-border px-2.5 py-1.5 text-sm focus:border-td-blue focus:outline-none"
                 value={input}
+                onCompositionStart={() => {
+                  isComposingRef.current = true;
+                }}
+                onCompositionEnd={() => {
+                  isComposingRef.current = false;
+                  lastCompositionEndAtRef.current = performance.now();
+                }}
                 onChange={(e) => {
-                  enterArmedRef.current = false;
                   setInput(e.target.value);
                 }}
                 onFocus={() => {
                   inputFocused.current = true;
+                  clearHoverClose();
                 }}
                 onBlur={() => {
                   inputFocused.current = false;
-                  enterArmedRef.current = false;
+                  isComposingRef.current = false;
                 }}
                 onKeyDown={(e) => {
-                  if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
-                  e.preventDefault();
-                  if (enterArmedRef.current) {
-                    enterArmedRef.current = false;
-                    sendQuick();
-                  } else {
-                    enterArmedRef.current = true;
+                  if (
+                    e.key !== 'Enter' ||
+                    e.nativeEvent.isComposing ||
+                    isComposingRef.current ||
+                    e.nativeEvent.keyCode === 229 ||
+                    performance.now() - lastCompositionEndAtRef.current < 40
+                  ) {
+                    return;
                   }
+                  e.preventDefault();
+                  sendQuick();
                 }}
-                placeholder="簡短提問…（按兩次 Enter 傳送）"
-                aria-label="小助手訊息"
+                placeholder={t.assistantWidget.inputPlaceholder}
+                aria-label={t.assistantWidget.title}
               />
               <button type="button" className="btn-primary text-sm" disabled={pending} onClick={sendQuick}>
-                送出
+                {t.assistantWidget.sendButton}
               </button>
             </div>
             <Link
               href={conversationId ? `${FULL_PATH}?c=${encodeURIComponent(conversationId)}` : FULL_PATH}
               className="block text-center text-xs font-medium text-td-blue underline"
               onClick={() => {
+                setOpen(false);
                 if (conversationId) {
                   try {
                     sessionStorage.setItem('accsys.ai.activeConversation', conversationId);
@@ -377,35 +486,16 @@ export function GlobalAssistant({ enabled }: Props) {
                 }
               }}
             >
-              在完整助手繼續
+              {t.assistantWidget.continueInFull}
             </Link>
           </div>
         </div>
       )}
-
-      <button
-        type="button"
-        className="pointer-events-auto relative flex h-12 w-12 items-center justify-center rounded-full border border-td-border bg-white text-sm font-semibold text-td-blue-dark shadow-md"
-        aria-label={open ? '收合小助手' : '開啟小助手'}
-        aria-expanded={open}
-        onClick={() => {
-          setOpen((v) => !v);
-          if (!open) setUnread(0);
-        }}
-      >
-        AI
-        {unread > 0 && !open && (
-          <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-600 px-1 text-[10px] text-white">
-            {unread > 9 ? '9+' : unread}
-          </span>
-        )}
-      </button>
     </div>
   );
 }
 
-/** Prefetch nothing on login pages — layout gates with enabled. */
-export function GlobalAssistantHost({ enabled }: { enabled: boolean }) {
-  if (!enabled) return null;
-  return <GlobalAssistant enabled />;
+/** Legacy host export kept as no-op so nothing renders in the bottom-right corner. */
+export function GlobalAssistantHost({ enabled: _enabled }: { enabled: boolean }) {
+  return null;
 }

@@ -7,7 +7,7 @@ export type ToolDefinition = {
   badge: string;
 };
 
-/** 工具區目錄：AI 助手已提升為左側第一主導覽，此處集中實用輔助工具 */
+/** 工具區目錄：AI 助手與專案助手皆已提升為左側主導覽，此處集中實用輔助工具 */
 export const TOOL_CATALOG: ToolDefinition[] = [
   {
     id: 'pdf-editor',

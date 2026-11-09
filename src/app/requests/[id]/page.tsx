@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ApprovalTimeline } from '@/app/components/approval-timeline';
+import { PrintButton } from '@/app/components/print-button';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { replacementFor } from '@/lib/custom-forms/legacy';
 import { getPurchaseRequestDetail } from '@/lib/purchase-requests/queries';
@@ -38,12 +39,17 @@ export default async function RequestDetailPage({
 
   return (
     <main className="mx-auto max-w-4xl p-8">
-      <h1 className="mb-1 text-2xl font-bold">請購申請單</h1>
-      <p className="mb-4 font-mono text-gray-600">
-        <Link href={`/cases/${detail.caseNumber}`} className="underline">
-          {detail.caseNumber}
-        </Link>
-      </p>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="mb-1 text-2xl font-bold">請購申請單</h1>
+          <p className="font-mono text-gray-600">
+            <Link href={`/cases/${detail.caseNumber}`} className="underline">
+              {detail.caseNumber}
+            </Link>
+          </p>
+        </div>
+        {detail.status === 'approved' && <PrintButton label="列印請購單" />}
+      </div>
 
       <section className="mb-4 rounded border p-4 text-sm">
         <p>申請單位：{detail.departmentName}</p>

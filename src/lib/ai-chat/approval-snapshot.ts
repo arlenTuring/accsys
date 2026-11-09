@@ -80,10 +80,13 @@ function progressFromSteps(
   if (formStatus === 'approved') {
     return { done: total, total, remaining: 0, percent: 100, steps: nodes.map((n) => ({ ...n, state: 'done' })) };
   }
-  const done = nodes.filter((n) => n.state === 'done').length;
-  const remaining = nodes.filter((n) => n.state === 'current' || n.state === 'waiting').length;
-  const percent = Math.min(100, Math.round((done / total) * 100));
-  return { done, total, remaining, percent, steps: nodes };
+    const isReturned = formStatus === 'returned' || nodes.some((n) => n.state === 'returned');
+    const done = nodes.filter((n) => n.state === 'done').length;
+    const remaining = isReturned
+      ? 0
+      : nodes.filter((n) => n.state === 'current' || n.state === 'waiting').length;
+    const percent = Math.min(100, Math.round((done / total) * 100));
+    return { done, total, remaining, percent, steps: nodes };
 }
 
 /**
@@ -229,13 +232,25 @@ export async function getFormApprovalSnapshot(
 
 export function formatWaitingDuration(waitingSinceIso: string | null, now = new Date()): string | null {
   if (!waitingSinceIso) return null;
-  const ms = now.getTime() - new Date(waitingSinceIso).getTime();
+  const since = new Date(waitingSinceIso);
+  const ms = now.getTime() - since.getTime();
   if (!Number.isFinite(ms) || ms < 0) return null;
   const hours = Math.floor(ms / 3_600_000);
-  if (hours < 1) return '未滿 1 小時';
-  if (hours < 48) return `${hours} 小時`;
+  if (hours < 1) {
+    const mins = Math.max(1, Math.floor(ms / 60_000));
+    return `${mins} 分鐘前`;
+  }
+  if (hours < 24) return `${hours} 小時前`;
   const days = Math.floor(hours / 24);
-  return `${days} 天`;
+  if (days <= 3) return `${days} 天前`;
+  const parts = new Intl.DateTimeFormat('zh-TW', {
+    timeZone: 'Asia/Taipei',
+    month: 'numeric',
+    day: 'numeric',
+  }).formatToParts(since);
+  const m = parts.find((p) => p.type === 'month')?.value;
+  const d = parts.find((p) => p.type === 'day')?.value;
+  return m && d ? `${m}月${d}日` : `${since.getMonth() + 1}月${since.getDate()}日`;
 }
 
 /** Batch snapshots for inbox enrichment (best-effort per item). */

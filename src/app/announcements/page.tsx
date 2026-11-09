@@ -5,6 +5,7 @@ import { activateDueScheduled, listVisibleAnnouncements } from '@/lib/announceme
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getDb } from '@/lib/db';
 import { companyAnnouncementReads } from '@/lib/db/schema';
+import { getServerI18n } from '@/lib/i18n/server';
 import { taipeiToday } from '@/lib/taipei-date';
 import {
   AnnouncementsExpandableGrid,
@@ -22,7 +23,7 @@ export default async function AnnouncementsPage({
   if (!employee) redirect('/login?returnTo=/announcements');
   await activateDueScheduled();
 
-  const sp = await searchParams;
+  const [{ t }, sp] = await Promise.all([getServerI18n(), searchParams]);
 
   const [readable, readRows] = await Promise.all([
     listVisibleAnnouncements({
@@ -44,10 +45,10 @@ export default async function AnnouncementsPage({
       const readState = readMap.get(a.id);
       const audienceLabel =
         a.audienceType === 'company'
-          ? '全公司'
+          ? t.announcementsPage.audienceCompany
           : a.audienceType === 'department'
-            ? `指定部門（${a.audienceDepartmentIds?.length ?? 0}）`
-            : `指定同仁（${a.audienceEmployeeIds?.length ?? 0}）`;
+            ? `Dept (${a.audienceDepartmentIds?.length ?? 0})`
+            : `Members (${a.audienceEmployeeIds?.length ?? 0})`;
       const dateSource = a.publishedAt ?? a.publishAt ?? a.createdAt;
 
       return {
@@ -83,11 +84,9 @@ export default async function AnnouncementsPage({
   return (
     <main className="page-shell space-y-6">
       <section>
-        <p className="section-title">公司資訊</p>
-        <h1 className="page-title">公司公告</h1>
-        <p className="page-subtitle">
-          瀏覽公司最新公告與重要通知；直接點擊任一公告卡片即可原地展開閱讀全文與下載附件。
-        </p>
+        <p className="section-title">{t.announcementsPage.sectionTitle}</p>
+        <h1 className="page-title">{t.announcementsPage.title}</h1>
+        <p className="page-subtitle">{t.announcementsPage.subtitle}</p>
       </section>
 
       <AnnouncementsExpandableGrid items={items} initialExpandedId={initialExpandedId} />

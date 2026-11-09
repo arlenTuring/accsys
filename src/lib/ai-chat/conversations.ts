@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, ilike, isNull, lt, or, sql } from 'drizzle-orm';
+import { recordAudit } from '@/lib/audit/record';
 import { getDb } from '@/lib/db';
 import { aiConversations, aiMessages } from '@/lib/db/schema';
 
@@ -37,6 +38,16 @@ export async function createConversation(
     .insert(aiConversations)
     .values({ ownerEmployeeId, title: title.slice(0, 120) })
     .returning();
+  await recordAudit(db, {
+    actorEmployeeId: ownerEmployeeId,
+    action: 'ai.conversation_created',
+    entityType: 'ai_conversation',
+    entityId: created.id,
+    details: {
+      title: created.title || '新對話',
+      createdAt: created.createdAt.toISOString(),
+    },
+  });
   return mapConversation(created);
 }
 
@@ -160,7 +171,7 @@ export async function renameConversation(
   return row ? mapConversation(row) : null;
 }
 
-/** Archive conversation. Does not delete messages, drafts, or submissions. */
+/** Soft-delete (archive) conversation for the user while keeping it in system logs for admins. */
 export async function archiveConversation(
   ownerEmployeeId: string,
   conversationId: string
@@ -168,10 +179,22 @@ export async function archiveConversation(
   const owned = await getOwnedConversation(ownerEmployeeId, conversationId);
   if (!owned) return false;
   const db = getDb();
-  await db
+  const [updated] = await db
     .update(aiConversations)
-    .set({ archivedAt: sql`now()`, updatedAt: sql`now()` })
-    .where(and(eq(aiConversations.id, conversationId), eq(aiConversations.ownerEmployeeId, ownerEmployeeId)));
+    .set({ archivedAt: sql`now()` })
+    .where(and(eq(aiConversations.id, conversationId), eq(aiConversations.ownerEmployeeId, ownerEmployeeId)))
+    .returning({ archivedAt: aiConversations.archivedAt });
+  await recordAudit(db, {
+    actorEmployeeId: ownerEmployeeId,
+    action: 'ai.conversation_deleted',
+    entityType: 'ai_conversation',
+    entityId: conversationId,
+    details: {
+      title: owned.title,
+      createdAt: owned.createdAt.toISOString(),
+      deletedAt: (updated?.archivedAt ?? new Date()).toISOString(),
+    },
+  });
   return true;
 }
 

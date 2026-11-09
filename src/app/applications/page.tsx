@@ -16,6 +16,7 @@ import {
 } from '@/lib/applications/my-applications';
 import { ensureDemoPendingApprovals } from '@/lib/applications/seed-pending-demo';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { getServerI18n } from '@/lib/i18n/server';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,14 +27,6 @@ async function generateDemoApprovalsAction() {
   revalidatePath('/approvals');
   revalidatePath('/dashboard');
 }
-
-const STATUS_TABS = [
-  { key: 'all', label: '全部' },
-  { key: 'to_approve', label: '待我簽核' },
-  { key: 'pending_approval', label: '簽核中' },
-  { key: 'returned', label: '已退回' },
-  { key: 'approved', label: '已核准' },
-] as const;
 
 const CATEGORY_KEYS: MyApplicationCategoryKey[] = [
   'procurement',
@@ -65,10 +58,18 @@ export async function UnifiedApplicationsAndApprovalsView({
   const employee = await getCurrentEmployee();
   if (!employee) redirect(`/login?returnTo=${basePath}`);
 
-  const sp = await searchParams;
+  const [{ t, tr }, sp] = await Promise.all([getServerI18n(), searchParams]);
   const activeStatus = typeof sp.status === 'string' && sp.status.trim() ? sp.status.trim() : 'all';
   const activeCat = typeof sp.cat === 'string' && sp.cat.trim() ? sp.cat.trim() : 'all';
   const query = typeof sp.q === 'string' ? sp.q.trim() : '';
+
+  const statusTabs = [
+    { key: 'all', label: t.approvalsPage.tabs.all },
+    { key: 'to_approve', label: t.approvalsPage.tabs.toApprove },
+    { key: 'pending_approval', label: t.approvalsPage.tabs.pendingApproval },
+    { key: 'returned', label: t.approvalsPage.tabs.returned },
+    { key: 'approved', label: t.approvalsPage.tabs.approved },
+  ] as const;
 
   await ensureDemoPendingApprovals();
 
@@ -100,6 +101,7 @@ export async function UnifiedApplicationsAndApprovalsView({
           const haystack = [
             item.caseNumber,
             item.formLabel,
+            tr(item.formLabel),
             item.categoryLabel,
             item.applicantName,
             item.summary,
@@ -124,6 +126,7 @@ export async function UnifiedApplicationsAndApprovalsView({
           const haystack = [
             item.caseNumber,
             item.formLabel,
+            tr(item.formLabel),
             item.categoryLabel,
             item.summary,
             item.currentNodeLabel ?? '',
@@ -159,10 +162,8 @@ export async function UnifiedApplicationsAndApprovalsView({
       {/* Header */}
       <section className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-td-blue-dark">簽核管理</h1>
-          <p className="text-xs text-td-muted">
-            依表單群組歸類顯示；可獨立收合「待我簽核」、「我的申請」或各分類群組，並直接在卡片上快速簽核。
-          </p>
+          <h1 className="text-xl font-bold text-td-blue-dark">{t.approvalsPage.title}</h1>
+          <p className="text-xs text-td-muted">{t.approvalsPage.subtitle}</p>
         </div>
       </section>
 
@@ -170,7 +171,7 @@ export async function UnifiedApplicationsAndApprovalsView({
       <section className="card space-y-2.5 !p-3.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-1.5">
-            {STATUS_TABS.map((tab) => {
+            {statusTabs.map((tab) => {
               const count =
                 tab.key === 'all'
                   ? totalCombinedCount
@@ -205,15 +206,15 @@ export async function UnifiedApplicationsAndApprovalsView({
               type="text"
               name="q"
               defaultValue={query}
-              placeholder="搜尋單號、申請人、事由…"
+              placeholder={t.approvalsPage.searchPlaceholder}
               className="w-48 rounded-md border border-td-border px-2.5 py-1.5 text-xs focus:border-td-blue focus:outline-none sm:w-56"
             />
             <button type="submit" className="btn-secondary !px-3 !py-1.5 text-xs">
-              搜尋
+              {t.common.search}
             </button>
             {(activeStatus !== 'all' || activeCat !== 'all' || query) && (
               <Link href={basePath} className="px-1 text-xs text-td-muted hover:text-td-blue">
-                重置
+                {t.common.reset}
               </Link>
             )}
           </form>
@@ -221,7 +222,9 @@ export async function UnifiedApplicationsAndApprovalsView({
 
         {/* Category Quick Filter */}
         <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-2">
-          <span className="text-xs font-medium text-td-muted">群組篩選：</span>
+          <span className="text-xs font-medium text-td-muted">
+            {t.approvalsPage.groupFilterLabel}
+          </span>
           <Link
             href={buildFilterHref(basePath, { status: activeStatus, cat: 'all', q: query })}
             className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold transition ${
@@ -230,7 +233,7 @@ export async function UnifiedApplicationsAndApprovalsView({
                 : 'border-td-border bg-white text-td-text hover:bg-slate-50'
             }`}
           >
-            全部群組 ({totalCombinedCount})
+            {t.approvalsPage.allGroups} ({totalCombinedCount})
           </Link>
           {CATEGORY_KEYS.map((catKey) => {
             const count = countByCat.get(catKey) ?? 0;
@@ -246,7 +249,7 @@ export async function UnifiedApplicationsAndApprovalsView({
                     : 'border-td-border bg-white text-td-text hover:bg-slate-50'
                 }`}
               >
-                {APPLICATION_CATEGORY_LABELS[catKey]} ({count})
+                {tr(APPLICATION_CATEGORY_LABELS[catKey])} ({count})
               </Link>
             );
           })}
@@ -256,10 +259,10 @@ export async function UnifiedApplicationsAndApprovalsView({
       {/* Section 1: Pending My Approval (grouped by Category) */}
       {showApprovalsSection && (
         <CollapsibleSection
-          badgeText="待我簽核"
+          badgeText={t.approvalsPage.toApproveBadge}
           badgeClass="bg-amber-100 text-amber-900"
-          title="等待您審核簽核的表單"
-          countText={`${filteredApprovals.length} 件`}
+          title={t.approvalsPage.toApproveSectionTitle}
+          countText={`${filteredApprovals.length} ${t.common.itemsUnit}`}
           defaultOpen
           headerActions={
             <form action={generateDemoApprovalsAction}>
@@ -267,20 +270,20 @@ export async function UnifiedApplicationsAndApprovalsView({
                 type="submit"
                 className="rounded-md border border-td-border bg-white px-2.5 py-1 text-xs font-semibold text-td-blue hover:bg-slate-50"
               >
-                + 補充待簽範例
+                {t.approvalsPage.seedDemoButton}
               </button>
             </form>
           }
         >
           {filteredApprovals.length === 0 ? (
             <div className="card flex flex-wrap items-center justify-between gap-2 !py-4 text-xs text-td-muted">
-              <span>目前沒有等待您簽核的表單。</span>
+              <span>{t.approvalsPage.emptyToApprove}</span>
               {activeStatus === 'to_approve' && myItems.length > 0 && (
                 <Link
                   href={buildFilterHref(basePath, { status: 'all', cat: activeCat, q: query })}
                   className="font-semibold text-td-blue hover:underline"
                 >
-                  顯示全部單據（{myItems.length} 件）→
+                  {t.approvalsPage.showAllApplicationsLink(myItems.length)}
                 </Link>
               )}
             </div>
@@ -293,8 +296,8 @@ export async function UnifiedApplicationsAndApprovalsView({
                   key={`pending-group-${catKey}`}
                   variant="group"
                   categoryKey={catKey}
-                  title={APPLICATION_CATEGORY_LABELS[catKey]}
-                  countText={`${groupItems.length} 件`}
+                  title={tr(APPLICATION_CATEGORY_LABELS[catKey])}
+                  countText={`${groupItems.length} ${t.common.itemsUnit}`}
                   defaultOpen
                 >
                   {groupItems.map((item) => (
@@ -310,17 +313,17 @@ export async function UnifiedApplicationsAndApprovalsView({
       {/* Section 2: My Submitted Applications (grouped by Category) */}
       {showMyItemsSection && (
         <CollapsibleSection
-          badgeText="我的申請"
+          badgeText={t.approvalsPage.myApplicationsBadge}
           badgeClass="bg-blue-100 text-td-blue-dark"
-          title="我送出的申請單據與簽核進度"
-          countText={`${filteredMyItems.length} 件`}
+          title={t.approvalsPage.myApplicationsSectionTitle}
+          countText={`${filteredMyItems.length} ${t.common.itemsUnit}`}
           defaultOpen
         >
           {filteredMyItems.length === 0 ? (
             <div className="card !py-6 text-center text-xs text-td-muted">
               {myItems.length === 0
-                ? '您目前還沒有送出過任何申請表單。'
-                : '找不到符合篩選條件的申請紀錄。'}
+                ? t.approvalsPage.emptyMyApplicationsNone
+                : t.approvalsPage.emptyMyApplicationsFiltered}
             </div>
           ) : (
             CATEGORY_KEYS.map((catKey) => {
@@ -331,8 +334,8 @@ export async function UnifiedApplicationsAndApprovalsView({
                   key={`mine-group-${catKey}`}
                   variant="group"
                   categoryKey={catKey}
-                  title={APPLICATION_CATEGORY_LABELS[catKey]}
-                  countText={`${groupItems.length} 件`}
+                  title={tr(APPLICATION_CATEGORY_LABELS[catKey])}
+                  countText={`${groupItems.length} ${t.common.itemsUnit}`}
                   defaultOpen
                 >
                   {groupItems.map((item) => (

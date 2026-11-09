@@ -142,41 +142,12 @@ export async function bootstrapAssistantConversation(input?: {
   }
 
   const firstPage = await listMessages(conversation.id, employee.id, 40);
-  let welcomeInserted = false;
-
-  const lastMsg = firstPage.messages[firstPage.messages.length - 1];
-  const lastIsRecentWelcome =
-    lastMsg?.role === 'system' &&
-    Date.now() - lastMsg.createdAt.getTime() < 30 * 60 * 1000;
-
-  if (firstPage.messages.length === 0 || (!input?.conversationId && !lastIsRecentWelcome)) {
-    const hourSlot = Math.floor(Date.now() / (30 * 60 * 1000));
-    const clientMsgId =
-      firstPage.messages.length === 0
-        ? welcomeClientMessageId(conversation.id)
-        : `${welcomeClientMessageId(conversation.id)}:${hourSlot}`;
-    const summary = await buildWelcomeSummary(conversation.id);
-    const appended = await appendMessage({
-      conversationId: conversation.id,
-      ownerEmployeeId: employee.id,
-      role: 'system',
-      contentText: summary.text,
-      clientMessageId: clientMsgId,
-      blocks: summary.blocks,
-    });
-    welcomeInserted = !appended.replayed;
-  }
-
-  const refreshed =
-    welcomeInserted || firstPage.messages.length === 0
-      ? await listMessages(conversation.id, employee.id, 40)
-      : firstPage;
 
   return {
     ok: true,
     conversationId: conversation.id,
     title: conversation.title,
-    messages: refreshed.messages.map((m) => ({
+    messages: firstPage.messages.map((m) => ({
       id: m.id,
       role: m.role,
       text: m.contentText,
@@ -184,8 +155,8 @@ export async function bootstrapAssistantConversation(input?: {
       blocks: sanitizeBlocks(m.blocks, conversation.id),
       createdAt: m.createdAt.toISOString(),
     })),
-    hasOlder: refreshed.hasOlder,
-    welcomeInserted,
+    hasOlder: firstPage.hasOlder,
+    welcomeInserted: false,
   };
 }
 
@@ -1093,6 +1064,8 @@ export async function removeDraftFileAction(input: {
   return { ok: false, error: 'remove_failed', message: '移除失敗' };
 }
 
+let docHeadingsPrewarmed = false;
+
 export async function pollLauncherEventsAction(input: {
   scope: 'fresh' | 'delivered';
   after?: string | null;
@@ -1102,6 +1075,21 @@ export async function pollLauncherEventsAction(input: {
 > {
   const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: publicError('unauthenticated') };
+  if (!docHeadingsPrewarmed) {
+    docHeadingsPrewarmed = true;
+    void import('@/lib/projects/drive-doc-writer')
+      .then(async ({ ensureGoogleDocSectionHeadings }) => {
+        await ensureGoogleDocSectionHeadings({
+          driveFileId: '1-b6tU7mBHC0VVAf9ROWz4n-JCYp-ynF87lVecnmQv4U',
+          userEmail: employee.email,
+        });
+        await ensureGoogleDocSectionHeadings({
+          driveFileId: '1dQVfqQeBzvu0ezosoMUM09j1jDIYp15fVsRAiO8N3gY',
+          userEmail: employee.email,
+        });
+      })
+      .catch(() => null);
+  }
   const { allowed } = await hitRateLimit(`ai-chat:launcher:${employee.id}`, {
     limit: 120,
     windowSeconds: 600,

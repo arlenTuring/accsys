@@ -6,6 +6,7 @@ import {
   listConversationsAction,
   renameConversationAction,
 } from '@/lib/ai-chat/actions';
+import { useI18n } from '@/lib/i18n/context';
 
 type Item = { id: string; title: string; updatedAt: string };
 
@@ -20,6 +21,7 @@ type Props = {
   activeId: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
+  onDeleted?: (id: string) => void;
   refreshKey?: number;
 };
 
@@ -75,8 +77,10 @@ export function ConversationSidebar({
   activeId,
   onSelect,
   onNew,
+  onDeleted,
   refreshKey = 0,
 }: Props) {
+  const { locale, t } = useI18n();
   const titleId = useId();
   const searchRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
@@ -108,8 +112,8 @@ export function ConversationSidebar({
   }, [refreshKey]);
 
   useEffect(() => {
-    const t = window.setTimeout(() => load(true), 250);
-    return () => window.clearTimeout(t);
+    const tmr = window.setTimeout(() => load(true), 250);
+    return () => window.clearTimeout(tmr);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query]);
 
@@ -119,10 +123,10 @@ export function ConversationSidebar({
       if (e.key === 'Escape') onMobileOpenChange(false);
     };
     window.addEventListener('keydown', onKey);
-    const t = window.setTimeout(() => searchRef.current?.focus(), 50);
+    const tmr = window.setTimeout(() => searchRef.current?.focus(), 50);
     return () => {
       window.removeEventListener('keydown', onKey);
-      window.clearTimeout(t);
+      window.clearTimeout(tmr);
     };
   }, [mobileOpen, onMobileOpenChange]);
 
@@ -130,27 +134,30 @@ export function ConversationSidebar({
     <>
       <div className="space-y-2 border-b border-td-border p-3">
         <button type="button" className="btn-primary w-full text-base" onClick={onNew}>
-          新對話
+          {t.aiChat.newChat}
         </button>
         <label className="block text-sm text-td-muted">
-          搜尋對話
+          {t.aiChat.searchChat}
           <input
             ref={searchRef}
             className="mt-1 w-full rounded-lg border border-td-border px-3 py-2 text-base"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="對話名稱"
+            placeholder={t.aiChat.searchPlaceholder}
           />
         </label>
       </div>
       <div className="flex-1 overflow-y-auto p-2">
         {error && <p className="px-2 text-base text-amber-800">{error}</p>}
-        {pending && items.length === 0 && <p className="px-2 text-base text-td-muted">載入中…</p>}
+        {pending && items.length === 0 && (
+          <p className="px-2 text-base text-td-muted">{t.common.loading}</p>
+        )}
         <ul className="space-y-1">
           {items.map((item) => (
             <li key={item.id}>
               <ConversationRow
                 item={item}
+                locale={locale}
                 active={item.id === activeId}
                 onSelect={() => {
                   onSelect(item.id);
@@ -159,7 +166,10 @@ export function ConversationSidebar({
                 onRenamed={(title) =>
                   setItems((prev) => prev.map((x) => (x.id === item.id ? { ...x, title } : x)))
                 }
-                onArchived={() => setItems((prev) => prev.filter((x) => x.id !== item.id))}
+                onArchived={() => {
+                  setItems((prev) => prev.filter((x) => x.id !== item.id));
+                  onDeleted?.(item.id);
+                }}
               />
             </li>
           ))}
@@ -170,7 +180,7 @@ export function ConversationSidebar({
             className="mt-2 w-full text-base text-td-blue underline"
             onClick={() => load(false, nextCursor)}
           >
-            載入更多
+            {t.aiChat.loadMore}
           </button>
         )}
       </div>
@@ -185,7 +195,7 @@ export function ConversationSidebar({
           collapsed ? 'w-12' : ''
         }`}
         style={collapsed ? undefined : { width: `${width}px` }}
-        aria-label="對話側欄"
+        aria-label={t.aiChat.sidebarTitle}
       >
         <div className="flex h-14 items-center justify-between gap-1 border-b border-slate-200/70 px-3">
           {!collapsed && (
@@ -199,27 +209,27 @@ export function ConversationSidebar({
                 </span>
               </div>
               <h2 id={titleId} className="truncate text-[11px] font-semibold text-slate-500">
-                AI 助手 · 對話紀錄
+                {t.aiChat.sidebarTitle}
               </h2>
             </div>
           )}
           <button
             type="button"
             className="rounded-lg p-1.5 text-slate-500 hover:bg-white hover:text-td-blue-dark"
-            aria-label={collapsed ? '展開側欄' : '收合側欄'}
-            title={collapsed ? '展開' : '收合'}
+            aria-label={collapsed ? t.shell.expandSubmenu : t.shell.collapseSubmenu}
+            title={collapsed ? t.shell.expandSubmenu : t.shell.collapseSubmenu}
             onClick={() => onCollapsedChange(!collapsed)}
           >
             {collapsed ? '»' : '«'}
           </button>
         </div>
         {collapsed ? (
-          <nav className="flex flex-col items-center gap-1 p-2" aria-label="側欄捷徑">
-            <IconBtn label="新對話" onClick={onNew}>
+          <nav className="flex flex-col items-center gap-1 p-2" aria-label={t.aiChat.sidebarTitle}>
+            <IconBtn label={t.aiChat.newChat} onClick={onNew}>
               ✎
             </IconBtn>
             <IconBtn
-              label="搜尋對話"
+              label={t.aiChat.searchChat}
               onClick={() => {
                 onCollapsedChange(false);
                 window.setTimeout(() => searchRef.current?.focus(), 50);
@@ -235,20 +245,29 @@ export function ConversationSidebar({
 
       {/* Mobile overlay drawer */}
       {mobileOpen && (
-        <div className="fixed inset-0 z-50 flex md:hidden" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <div
+          className="fixed inset-0 z-50 flex md:hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+        >
           <button
             type="button"
             className="flex-1 bg-black/30"
-            aria-label="關閉對話清單"
+            aria-label={t.common.close}
             onClick={() => onMobileOpenChange(false)}
           />
           <aside className="flex h-full w-full max-w-sm flex-col border-l border-td-border bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-td-border px-4 py-3">
               <h2 id={titleId} className="text-base font-semibold text-td-blue-dark">
-                對話清單
+                {t.aiChat.chatListTitle}
               </h2>
-              <button type="button" className="btn-secondary text-base" onClick={() => onMobileOpenChange(false)}>
-                關閉
+              <button
+                type="button"
+                className="btn-secondary text-base"
+                onClick={() => onMobileOpenChange(false)}
+              >
+                {t.common.close}
               </button>
             </div>
             <div className="flex min-h-0 flex-1 flex-col">{list}</div>
@@ -283,17 +302,20 @@ function IconBtn({
 
 function ConversationRow({
   item,
+  locale,
   active,
   onSelect,
   onRenamed,
   onArchived,
 }: {
   item: Item;
+  locale: string;
   active: boolean;
   onSelect: () => void;
   onRenamed: (title: string) => void;
   onArchived: () => void;
 }) {
+  const { t } = useI18n();
   const [menu, setMenu] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState(item.title);
@@ -320,19 +342,21 @@ function ConversationRow({
             className="flex-1 rounded border border-td-border px-2 py-1 text-base"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            aria-label="對話名稱"
+            aria-label={t.aiChat.searchPlaceholder}
             autoFocus
           />
           <button type="submit" className="text-base text-td-blue">
-            存
+            {t.aiChat.saveShort}
           </button>
         </form>
       ) : (
         <div className="flex items-start gap-1">
           <button type="button" className="min-w-0 flex-1 text-left" onClick={onSelect}>
-            <div className="truncate text-base font-medium text-td-blue-dark">{item.title || '對話'}</div>
+            <div className="truncate text-base font-medium text-td-blue-dark">
+              {item.title || t.aiChat.untitledChat}
+            </div>
             <div className="text-sm text-td-muted">
-              {new Date(item.updatedAt).toLocaleString('zh-TW', {
+              {new Date(item.updatedAt).toLocaleString(locale === 'zh-Hant' ? 'zh-TW' : locale, {
                 month: 'numeric',
                 day: 'numeric',
                 hour: '2-digit',
@@ -343,7 +367,7 @@ function ConversationRow({
           <button
             type="button"
             className="px-1 text-td-muted"
-            aria-label="對話選單"
+            aria-label="Menu"
             aria-expanded={menu}
             onClick={() => setMenu((v) => !v)}
           >
@@ -361,19 +385,19 @@ function ConversationRow({
               setRenaming(true);
             }}
           >
-            重新命名
+            {t.aiChat.rename}
           </button>
           <button
             type="button"
-            className="underline text-amber-800"
+            className="text-rose-600 underline hover:text-rose-700"
             onClick={async () => {
-              if (!window.confirm('封存此對話？草稿與單據不會刪除。')) return;
+              if (!window.confirm(t.aiChat.archiveConfirm)) return;
               const res = await archiveConversationAction({ conversationId: item.id });
               if (res.ok) onArchived();
               setMenu(false);
             }}
           >
-            封存
+            {t.aiChat.archive}
           </button>
         </div>
       )}

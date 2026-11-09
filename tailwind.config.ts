@@ -12,6 +12,8 @@ const config: Config = {
           apex: '#E8A838',
           'apex-dark': '#C8871E',
           'apex-light': '#FEF6E8',
+          accent: '#E8A838',
+          text: '#0F2D5C',
           surface: '#F8FAFC',
           border: '#E2E8F0',
           muted: '#64748B',

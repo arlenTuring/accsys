@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useTransition } from 'rea
 import { useRouter } from 'next/navigation';
 import { acknowledgeAction, markReadAction } from '@/lib/announcements/actions';
 import { formatBytesLabel } from '@/lib/attachments/policy';
+import { useI18n } from '@/lib/i18n/context';
 import type { AnnouncementFileItem } from './announcement-files';
 
 export type ExpandableAnnouncementItem = {
@@ -21,33 +22,19 @@ export type ExpandableAnnouncementItem = {
   files: AnnouncementFileItem[];
 };
 
-const PRIORITY_STYLE: Record<string, { label: string; badge: string; ring: string }> = {
+const PRIORITY_STYLE: Record<string, { badge: string; ring: string }> = {
   urgent: {
-    label: '緊急公告',
     badge: 'bg-rose-100 text-rose-800 border-rose-200',
     ring: 'border-rose-300',
   },
   important: {
-    label: '重要公告',
     badge: 'bg-amber-100 text-amber-900 border-amber-200',
     ring: 'border-amber-300',
   },
   normal: {
-    label: '一般公告',
     badge: 'bg-slate-100 text-slate-700 border-slate-200',
     ring: 'border-td-border',
   },
-};
-
-const CATEGORY_LABEL: Record<string, string> = {
-  general: '一般行政',
-  hr: '人資福委',
-  finance: '財會稅務',
-  it: '資訊安全',
-  security: '資訊安全',
-  event: '活動福委',
-  facility: '總務廠務',
-  policy: '制度規章',
 };
 
 type SavedRect = {
@@ -78,6 +65,7 @@ export function AnnouncementsExpandableGrid({
   initialExpandedId?: string | null;
 }) {
   const router = useRouter();
+  const { t } = useI18n();
   const [expandedId, setExpandedId] = useState<string | null>(initialExpandedId ?? null);
   const [animatingId, setAnimatingId] = useState<string | null>(null);
   const [readIds, setReadIds] = useState<Set<string>>(
@@ -155,11 +143,9 @@ export function AnnouncementsExpandableGrid({
     const shouldCenter = shouldCenterOnExpandRef.current;
     shouldCenterOnExpandRef.current = false;
 
-    // Step 1: If a card is expanded, center it vertically inside the scroll container before measuring final FLIP rects
     if (shouldCenter && expandedId) {
       const targetEl = cardRefs.current.get(expandedId);
       if (targetEl) {
-        // Cancel any in-flight Web Animations on the target before measuring its layout box
         for (const anim of targetEl.getAnimations()) {
           anim.cancel();
         }
@@ -170,7 +156,6 @@ export function AnnouncementsExpandableGrid({
           const parentRect = scrollParent.getBoundingClientRect();
           const cardCenterY = rect.top + rect.height / 2;
           const viewportCenterY = parentRect.top + parentRect.height / 2;
-          // If the card is taller than 82% of the viewport, align top with a comfortable margin
           const deltaY =
             rect.height > parentRect.height * 0.82
               ? rect.top - parentRect.top - 28
@@ -190,7 +175,6 @@ export function AnnouncementsExpandableGrid({
 
     if (prevRects.size === 0) return;
 
-    // Step 2: Animate toolbar smoothly if scroll position shifted
     if (toolbarRef.current && prevToolbarTopRef.current !== null) {
       for (const anim of toolbarRef.current.getAnimations()) {
         anim.cancel();
@@ -205,7 +189,6 @@ export function AnnouncementsExpandableGrid({
       }
     }
 
-    // Step 3: FLIP animate every card from its old screen rect to its new centered/grid rect
     for (const [id, el] of cardRefs.current.entries()) {
       if (!el || !el.isConnected) continue;
       const oldRect = prevRects.get(id);
@@ -272,6 +255,17 @@ export function AnnouncementsExpandableGrid({
     });
   }
 
+  function priorityLabel(p: string): string {
+    if (p === 'urgent') return t.announcementsPage.priority.urgent;
+    if (p === 'important') return t.announcementsPage.priority.important;
+    return t.announcementsPage.priority.normal;
+  }
+
+  function categoryLabel(cat: string): string {
+    const map = t.announcementsPage.category as Record<string, string>;
+    return map[cat] ?? cat;
+  }
+
   const activeOriginalIndex = expandedId
     ? filteredItems.findIndex((i) => i.id === expandedId)
     : -1;
@@ -302,7 +296,7 @@ export function AnnouncementsExpandableGrid({
                 : 'bg-white text-td-text ring-1 ring-td-border hover:bg-slate-50'
             }`}
           >
-            全部公告 ({items.length})
+            {t.announcementsPage.allTab(items.length)}
           </button>
           <button
             type="button"
@@ -318,7 +312,7 @@ export function AnnouncementsExpandableGrid({
                   : 'bg-white text-td-text ring-1 ring-td-border hover:bg-slate-50'
             }`}
           >
-            未讀 ({unreadCount})
+            {t.announcementsPage.unreadTab(unreadCount)}
           </button>
           {pinnedCount > 0 && (
             <button
@@ -333,19 +327,17 @@ export function AnnouncementsExpandableGrid({
                   : 'bg-amber-50 text-amber-900 ring-1 ring-amber-200 hover:bg-amber-100/70'
               }`}
             >
-              📌 置頂 ({pinnedCount})
+              {t.announcementsPage.pinnedTab(pinnedCount)}
             </button>
           )}
         </div>
 
-        <p className="text-xs text-td-muted">
-          點擊任意小卡會自動展開並置中顯示；再點其他小卡可無縫切換放大對象
-        </p>
+        <p className="text-xs text-td-muted">{t.announcementsPage.helperHint}</p>
       </div>
 
       {orderedItems.length === 0 ? (
         <div className="card py-12 text-center text-sm text-td-muted">
-          目前沒有符合條件的公司公告。
+          {t.announcementsPage.emptyMessage}
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -355,7 +347,8 @@ export function AnnouncementsExpandableGrid({
             const isRead = readIds.has(item.id);
             const isAck = ackIds.has(item.id);
             const prio = PRIORITY_STYLE[item.priority] ?? PRIORITY_STYLE.normal;
-            const catLabel = CATEGORY_LABEL[item.category] ?? item.category;
+            const pLabel = priorityLabel(item.priority);
+            const catLabel = categoryLabel(item.category);
 
             return (
               <article
@@ -399,19 +392,21 @@ export function AnnouncementsExpandableGrid({
                       <div className="flex flex-wrap items-center gap-2">
                         {item.pinned && (
                           <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-bold text-amber-900">
-                            📌 置頂
+                            {t.announcementsPage.pinnedBadge}
                           </span>
                         )}
                         <span
                           className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${prio.badge}`}
                         >
-                          {prio.label}
+                          {pLabel}
                         </span>
                         <span className="rounded-full bg-white px-2.5 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
                           {catLabel}
                         </span>
                         <span className="text-xs text-td-muted">
-                          發布日期：{item.dateLabel} · 對象：{item.audienceLabel}
+                          {t.announcementsPage.publishedDate}
+                          {item.dateLabel} · {t.announcementsPage.audience}
+                          {item.audienceLabel}
                         </span>
                       </div>
 
@@ -424,9 +419,9 @@ export function AnnouncementsExpandableGrid({
                               handleSelectCard(prevItem.id);
                             }}
                             className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:border-td-blue/50 hover:text-td-blue"
-                            title={`上一則：${prevItem.title}`}
+                            title={prevItem.title}
                           >
-                            ← 上一則
+                            {t.announcementsPage.prevBtn}
                           </button>
                         )}
                         {nextItem && (
@@ -437,9 +432,9 @@ export function AnnouncementsExpandableGrid({
                               handleSelectCard(nextItem.id);
                             }}
                             className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:border-td-blue/50 hover:text-td-blue"
-                            title={`下一則：${nextItem.title}`}
+                            title={nextItem.title}
                           >
-                            下一則 →
+                            {t.announcementsPage.nextBtn}
                           </button>
                         )}
                         <button
@@ -450,7 +445,7 @@ export function AnnouncementsExpandableGrid({
                           }}
                           className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
                         >
-                          <span>收合卡片 ✕</span>
+                          <span>{t.announcementsPage.collapseCard}</span>
                         </button>
                       </div>
                     </div>
@@ -469,7 +464,7 @@ export function AnnouncementsExpandableGrid({
                       {item.files.length > 0 && (
                         <div className="space-y-2 rounded-xl border border-slate-200/80 bg-white p-4">
                           <h3 className="text-xs font-bold uppercase tracking-wider text-td-muted">
-                            相關附件（{item.files.length}）
+                            {t.announcementsPage.attachmentsHeader(item.files.length)}
                           </h3>
                           <ul className="flex flex-wrap gap-2">
                             {item.files.map((f) => {
@@ -504,11 +499,11 @@ export function AnnouncementsExpandableGrid({
                       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
                         <div className="flex items-center gap-2 text-xs">
                           <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 font-semibold text-emerald-700">
-                            ✓ 已閱讀
+                            {t.announcementsPage.readBadge}
                           </span>
                           {isAck && (
                             <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-1 font-semibold text-td-blue">
-                              ✓ 已確認知悉
+                              {t.announcementsPage.acknowledgedBadge}
                             </span>
                           )}
                         </div>
@@ -521,7 +516,9 @@ export function AnnouncementsExpandableGrid({
                               onClick={(e) => handleAcknowledge(item.id, e)}
                               className="rounded-lg bg-td-blue px-4 py-2 text-xs font-semibold text-white shadow-xs transition hover:bg-td-blue-dark disabled:opacity-50"
                             >
-                              {pendingAckId === item.id ? '確認中…' : '✓ 我已知悉此公告'}
+                              {pendingAckId === item.id
+                                ? t.announcementsPage.acknowledging
+                                : t.announcementsPage.acknowledgeBtn}
                             </button>
                           )}
                         </div>
@@ -536,13 +533,13 @@ export function AnnouncementsExpandableGrid({
                         <div className="flex flex-wrap items-center gap-1.5">
                           {item.pinned && (
                             <span className="rounded-md bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900">
-                              📌 置頂
+                              {t.announcementsPage.pinnedBadge}
                             </span>
                           )}
                           <span
                             className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold ${prio.badge}`}
                           >
-                            {prio.label}
+                            {pLabel}
                           </span>
                           <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
                             {catLabel}
@@ -551,14 +548,16 @@ export function AnnouncementsExpandableGrid({
 
                         {!isRead ? (
                           <span className="inline-flex items-center gap-1 rounded-full bg-td-blue px-2 py-0.5 text-[10px] font-bold text-white">
-                            ● 未讀
+                            {t.announcementsPage.unreadBadge}
                           </span>
                         ) : isAck ? (
                           <span className="text-[11px] font-medium text-emerald-700">
-                            ✓ 已知悉
+                            {t.announcementsPage.acknowledgedShort}
                           </span>
                         ) : (
-                          <span className="text-[11px] text-td-muted">已讀</span>
+                          <span className="text-[11px] text-td-muted">
+                            {t.announcementsPage.readShort}
+                          </span>
                         )}
                       </div>
 
@@ -579,12 +578,12 @@ export function AnnouncementsExpandableGrid({
                         <span>{item.dateLabel}</span>
                         {item.files.length > 0 && (
                           <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">
-                            📎 {item.files.length} 附件
+                            {t.announcementsPage.attachmentsCountBadge(item.files.length)}
                           </span>
                         )}
                       </div>
                       <span className="font-semibold text-td-blue group-hover:underline">
-                        點擊展開 ⤢
+                        {t.announcementsPage.clickToExpand}
                       </span>
                     </div>
                   </>

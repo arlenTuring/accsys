@@ -19,4 +19,10 @@ supabase/.temp
 # local temporary & graphify artifacts
 tmp/
 graphify-out/
+.drive-oauth-tokens.json
+.drive-*-cache.json
+.drive-native-gdoc-map.json
+.native-gdoc-map.json
+.tmp-*
+
 

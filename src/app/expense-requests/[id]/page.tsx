@@ -7,6 +7,7 @@ import { loadAttachmentPanelExtras } from '@/lib/attachments/analysis-queries';
 import { getAttachments } from '@/lib/attachments/queries';
 import { ApprovalTimeline } from '@/app/components/approval-timeline';
 import { AttachmentsPanel } from '@/app/components/attachments-panel';
+import { PrintButton } from '@/app/components/print-button';
 import { ApprovalActions } from './approval-actions';
 import { WithdrawButton } from '@/app/requests/[id]/withdraw-button';
 
@@ -42,14 +43,17 @@ export default async function ExpenseRequestDetailPage({
 
   return (
     <main className="mx-auto max-w-4xl space-y-4 p-8">
-      <div>
-        <h1 className="mb-1 text-2xl font-bold">費用申請單</h1>
-        <p className="font-mono text-gray-600">
-          <Link href={`/cases/${detail.caseNumber}`} className="underline">
-            {detail.caseNumber}
-          </Link>
-          （項次 D1）
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="mb-1 text-2xl font-bold">費用申請單</h1>
+          <p className="font-mono text-gray-600">
+            <Link href={`/cases/${detail.caseNumber}`} className="underline">
+              {detail.caseNumber}
+            </Link>
+            （項次 D1）
+          </p>
+        </div>
+        {detail.status === 'approved' && <PrintButton label="列印費用申請單" />}
       </div>
 
       <section className="rounded border p-4 text-sm">

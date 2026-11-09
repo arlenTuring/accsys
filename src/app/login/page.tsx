@@ -4,6 +4,8 @@ import { BrandLogo } from '@/app/components/brand-logo';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getLoginErrorMessage } from '@/lib/auth/login-errors';
 import { DEFAULT_AFTER_LOGIN, safeReturnTo } from '@/lib/auth/redirect';
+import { LanguageSwitcher } from '@/lib/i18n/context';
+import { getServerI18n } from '@/lib/i18n/server';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,7 +24,7 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<{ error?: string; returnTo?: string }>;
 }) {
-  const params = await searchParams;
+  const [{ t }, params] = await Promise.all([getServerI18n(), searchParams]);
   const returnTo = safeReturnTo(params.returnTo ?? null, configuredOrigin());
   const employee = await getCurrentEmployee();
   if (employee) redirect(returnTo === DEFAULT_AFTER_LOGIN ? '/tools/ai-chat' : returnTo);
@@ -39,32 +41,42 @@ export default async function LoginPage({
       <div className="pointer-events-none absolute -left-24 top-16 h-72 w-72 rounded-full bg-td-blue/10 blur-3xl" />
       <div className="pointer-events-none absolute -right-16 bottom-10 h-64 w-64 rounded-full bg-td-apex/15 blur-3xl" />
 
-      <div className="relative mx-auto flex min-h-[80vh] max-w-md flex-col items-center justify-center">
+      <div className="relative mx-auto flex max-w-md justify-end pb-2">
+        <LanguageSwitcher variant="row" />
+      </div>
+
+      <div className="relative mx-auto flex min-h-[75vh] max-w-md flex-col items-center justify-center">
         <BrandLogo href={undefined} showProduct />
-        <p className="mt-4 text-center text-sm leading-6 text-td-muted">電子採購與簽核系統 · 請使用公司 Google 帳號登入</p>
+        <p className="mt-4 text-center text-sm leading-6 text-td-muted">{t.loginPage.subtitle}</p>
 
         {errorMessage && (
-          <p role="alert" className="mt-6 w-full rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <p
+            role="alert"
+            className="mt-6 w-full rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+          >
             {errorMessage}
           </p>
         )}
 
         <div className="card mt-8 w-full space-y-4">
-          <a href={googleHref} className="btn-primary flex w-full items-center justify-center gap-2 !py-3 text-base">
+          <a
+            href={googleHref}
+            className="btn-primary flex w-full items-center justify-center gap-2 !py-3 text-base"
+          >
             <GoogleMark />
-            使用 Google 帳號登入
+            {t.loginPage.googleLoginBtn}
           </a>
           <p className="text-center text-xs leading-5 text-td-muted">
-            僅限公司 Workspace 帳號（@turing-drive.com）。點擊後可選擇 Google 帳號；若瀏覽器已登入公司帳號，通常不必再輸入密碼。員工資料已登錄相同信箱時可直接進入；否則須管理員在「帳號與權限」核准綁定。
+            {t.loginPage.workspaceNotice}
           </p>
         </div>
 
         <p className="mt-8 text-center text-xs text-td-muted">
-          遇到問題請聯絡系統管理員，或返回{' '}
+          {t.loginPage.supportPrefix}{' '}
           <Link href="/" className="text-td-blue underline">
-            首頁
+            {t.loginPage.homeLink}
           </Link>
-          。
+          .
         </p>
       </div>
     </main>

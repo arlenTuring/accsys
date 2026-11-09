@@ -140,6 +140,15 @@
     @apply btn bg-red-600 text-white hover:bg-red-700;
   }
 
+  .btn-quick-approve {
+    background-color: #059669;
+    color: #ffffff;
+  }
+
+  .btn-quick-approve:hover {
+    background-color: #047857;
+  }
+
   .nav-link {
     @apply whitespace-nowrap rounded-md px-2.5 py-2 text-sm font-medium text-white/80 hover:bg-white/10 hover:text-white;
   }

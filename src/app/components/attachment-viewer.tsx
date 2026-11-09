@@ -42,6 +42,8 @@ export function AttachmentViewer({ items, initialIndex = 0, open, onClose }: Pro
   const [error, setError] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const viewportAreaRef = useRef<HTMLDivElement>(null);
+  const pinchStartDistRef = useRef<number | null>(null);
   const pdfDocRef = useRef<{ numPages: number; getPage: (n: number) => Promise<unknown>; destroy: () => Promise<void> } | null>(
     null
   );
@@ -196,6 +198,78 @@ export function AttachmentViewer({ items, initialIndex = 0, open, onClose }: Pro
     }
   }, [open]);
 
+  // Support trackpad pinch, mouse wheel zoom (Ctrl/Cmd/Alt + wheel), and touch pinch inside AttachmentViewer
+  useEffect(() => {
+    const el = viewportAreaRef.current;
+    if (!open || !el) return;
+
+    const clampScale = (s: number) => Math.min(4, Math.max(0.4, s));
+
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) {
+        e.preventDefault();
+        const factor = Math.exp(-e.deltaY * 0.01);
+        setScale((prev) => clampScale(Number((prev * factor).toFixed(3))));
+      }
+    };
+
+    let lastGestureScale = 1;
+    const onGestureStart = (e: Event) => {
+      e.preventDefault();
+      lastGestureScale = 1;
+    };
+    const onGestureChange = (e: Event) => {
+      e.preventDefault();
+      const ge = e as unknown as { scale: number };
+      if (typeof ge.scale === 'number' && ge.scale > 0) {
+        const factor = ge.scale / lastGestureScale;
+        lastGestureScale = ge.scale;
+        setScale((prev) => clampScale(Number((prev * factor).toFixed(3))));
+      }
+    };
+    const onGestureEnd = (e: Event) => {
+      e.preventDefault();
+    };
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        const [t1, t2] = [e.touches[0], e.touches[1]];
+        pinchStartDistRef.current = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      }
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length === 2 && pinchStartDistRef.current) {
+        e.preventDefault();
+        const [t1, t2] = [e.touches[0], e.touches[1]];
+        const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        const factor = dist / pinchStartDistRef.current;
+        pinchStartDistRef.current = dist;
+        setScale((prev) => clampScale(Number((prev * factor).toFixed(3))));
+      }
+    };
+    const onTouchEnd = () => {
+      pinchStartDistRef.current = null;
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: false });
+    el.addEventListener('gesturestart', onGestureStart, { passive: false });
+    el.addEventListener('gesturechange', onGestureChange, { passive: false });
+    el.addEventListener('gestureend', onGestureEnd, { passive: false });
+    el.addEventListener('touchstart', onTouchStart, { passive: false });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', onTouchEnd);
+
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('gesturestart', onGestureStart);
+      el.removeEventListener('gesturechange', onGestureChange);
+      el.removeEventListener('gestureend', onGestureEnd);
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
+    };
+  }, [open]);
+
   if (!open || !item) return null;
 
   const shellClass = fullscreen
@@ -291,7 +365,11 @@ export function AttachmentViewer({ items, initialIndex = 0, open, onClose }: Pro
         </div>
       )}
 
-      <div className="relative flex-1 overflow-auto bg-slate-100 p-4">
+      <div
+        ref={viewportAreaRef}
+        onDoubleClick={() => setScale((prev) => (Math.abs(prev - 1) > 0.05 ? 1 : 2))}
+        className="relative flex-1 overflow-auto bg-slate-100 p-4"
+      >
         {status === 'loading' && <p className="text-sm text-slate-600">載入預覽中…</p>}
         {status === 'failed' && <p className="text-sm text-red-700">{error ?? SCAN_FAIL_HINT}</p>}
         {status === 'ready' && imageUrl && (

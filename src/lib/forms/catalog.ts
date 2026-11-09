@@ -88,14 +88,14 @@ export const FINANCE_LINKS: RecordLink[] = [
 export const ADMIN_LINKS: RecordLink[] = [
   { label: '公司資料', href: '/admin/company' },
   { label: '主檔資料', href: '/admin/master-data' },
-  { label: '帳號與權限', href: '/admin/accounts' },
-  { label: '組織與簽核', href: '/admin/org' },
-  { label: '表單設計器', href: '/admin/form-builder' },
+  { label: '帳號權限', href: '/admin/accounts' },
+  { label: '組織簽核', href: '/admin/org' },
+  { label: '表單設計', href: '/admin/form-builder' },
   { label: '系統日誌', href: '/admin/system-logs' },
-  { label: '系統操作教學', href: '/admin/guide' },
   { label: '公告管理', href: '/admin/announcements' },
   { label: '規章管理', href: '/admin/regulations' },
   { label: '問卷管理', href: '/admin/surveys' },
+  { label: '操作教學', href: '/admin/guide' },
 ];
 
 /** Company-wide info links every employee can open (read / respond). */

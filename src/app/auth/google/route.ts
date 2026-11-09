@@ -22,8 +22,14 @@ export async function GET(request: NextRequest) {
 
   try {
     const returnTo = safeReturnTo(request.nextUrl.searchParams.get('returnTo'), cfg.appOrigin);
+    const loginHint = request.nextUrl.searchParams.get('loginHint')?.trim() || undefined;
+    const isSilent = request.nextUrl.searchParams.get('silent') === '1';
+    const isDrivePopup = returnTo.includes('driveAuthPopup=1');
     const { checks, cookieValue } = await startLogin(cfg, returnTo);
-    const url = await buildAuthorizationUrl(cfg, checks);
+    const url = await buildAuthorizationUrl(cfg, checks, {
+      loginHint,
+      prompt: isSilent ? 'none' : isDrivePopup && loginHint ? 'omit' : 'select_account',
+    });
     const res = NextResponse.redirect(url, 303);
     setLoginCookie(res, cfg, cookieValue);
     return noStore(res);

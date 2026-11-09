@@ -56,6 +56,7 @@ import { formatSizeCompare, optimizeChatImage } from './optimize-chat-image';
 import { SafeMarkdown } from './safe-markdown';
 import type { ChatProgressStep } from '@/lib/ai-chat/progress';
 import type { AiChatActionResult } from '@/lib/ai-chat/turn';
+import { useI18n } from '@/lib/i18n/context';
 
 type UiMessage = {
   id: string;
@@ -179,6 +180,7 @@ async function streamAssistantTurn(
 }
 
 export function AiChatApp() {
+  const { t, tr } = useI18n();
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [title, setTitle] = useState('AI 助手');
   const [messages, setMessages] = useState<UiMessage[]>([]);
@@ -417,11 +419,51 @@ export function AiChatApp() {
     ['processing', 'selected', 'uploading', 'scanning', 'attaching'].includes(a.status)
   );
   const messagesRef = useRef<HTMLDivElement | null>(null);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const lastMessageId = messages[messages.length - 1]?.id;
+
+  const updateScrollToBottomState = useCallback(() => {
+    const el = messagesRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setShowScrollToBottom(distanceFromBottom > 120);
+  }, []);
+
+  const scrollToBottomFast = useCallback(() => {
+    const el = messagesRef.current;
+    if (!el) return;
+    const startTop = el.scrollTop;
+    const targetTop = el.scrollHeight - el.clientHeight;
+    const distance = targetTop - startTop;
+    if (distance <= 0) {
+      setShowScrollToBottom(false);
+      return;
+    }
+    const duration = 160;
+    const startTime = performance.now();
+    const step = (now: number) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(1, elapsed / duration);
+      // Fast ease-out cubic
+      const eased = 1 - Math.pow(1 - progress, 3);
+      el.scrollTop = startTop + distance * eased;
+      if (progress < 1) {
+        requestAnimationFrame(step);
+      } else {
+        el.scrollTop = el.scrollHeight;
+        setShowScrollToBottom(false);
+      }
+    };
+    requestAnimationFrame(step);
+  }, []);
+
   // Follow the newest message (sent, answered, or added by a card) — older pages loaded above do not move it.
   useEffect(() => {
     const el = messagesRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+      setShowScrollToBottom(false);
+    }
   }, [lastMessageId]);
 
   const loadConversation = useCallback(
@@ -529,6 +571,11 @@ export function AiChatApp() {
       if (draft?.draftId) openDraftRef.current(draft.draftId, { title: draft.title ?? '草稿' });
       else if (draftFromUrl && /^[0-9a-f-]{36}$/i.test(draftFromUrl)) {
         openDraftRef.current(draftFromUrl, { title: '草稿' });
+      }
+      const prefill = sessionStorage.getItem('accsys.ai.prefillPrompt');
+      if (prefill) {
+        sessionStorage.removeItem('accsys.ai.prefillPrompt');
+        setInput(prefill);
       }
     } catch {
       /* ignore */
@@ -970,6 +1017,17 @@ export function AiChatApp() {
             bootGen.current += 1;
             loadConversation({ conversationId: id });
           }}
+          onDeleted={(deletedId) => {
+            if (deletedId === conversationId) {
+              try {
+                sessionStorage.removeItem(CONV_PREF);
+              } catch {
+                /* ignore */
+              }
+              bootGen.current += 1;
+              loadConversation({});
+            }
+          }}
           onNew={() => {
             setMobileDrawerOpen(false);
             startNav(async () => {
@@ -1027,14 +1085,17 @@ export function AiChatApp() {
           aria-expanded={mobileDrawerOpen}
           onClick={() => setMobileDrawerOpen(true)}
         >
-          對話清單
+          {t.aiChat.chatListTitle}
         </button>
-        <h1 className="min-w-0 flex-1 truncate text-xl font-semibold text-td-blue-dark">{title}</h1>
+        <h1 className="min-w-0 flex-1 truncate text-xl font-semibold text-td-blue-dark">
+          {title === 'AI 助手' || title === '新對話' ? tr(title) : title}
+        </h1>
         {conversationId && (
           <button
             type="button"
             className="rounded-lg border border-td-border bg-white px-3 py-1.5 text-xs font-semibold text-td-blue transition hover:bg-slate-50"
             disabled={pending}
+            title={t.aiChat.briefingTitle}
             onClick={() => {
               startNav(async () => {
                 const res = await refreshWelcomeAction({ conversationId });
@@ -1044,7 +1105,7 @@ export function AiChatApp() {
               });
             }}
           >
-            🔔 待簽與公告播報
+            {t.aiChat.briefingButton}
           </button>
         )}
         {docsCollapsed && tabs.length > 0 && (
@@ -1119,7 +1180,11 @@ export function AiChatApp() {
                 載入更早訊息
               </button>
             )}
-            <div ref={messagesRef} className="flex-1 space-y-5 overflow-y-auto px-4 py-5 sm:px-6">
+            <div
+              ref={messagesRef}
+              onScroll={updateScrollToBottomState}
+              className="flex-1 space-y-5 overflow-y-auto px-4 py-5 sm:px-6"
+            >
               {messages.map((m) => {
                 const isUser = m.role === 'user';
                 const isModel = m.role === 'model';
@@ -1233,7 +1298,37 @@ export function AiChatApp() {
               )}
             </div>
 
-            <div className="border-t border-td-border p-3">
+            <div className="relative border-t border-td-border p-3">
+              {showScrollToBottom && (
+                <button
+                  type="button"
+                  onClick={scrollToBottomFast}
+                  aria-label={t.aiChat.scrollToBottom}
+                  title={t.aiChat.scrollToBottom}
+                  className="
+                    absolute -top-11 left-1/2 z-20 flex h-9 w-9 -translate-x-1/2
+                    items-center justify-center rounded-full border
+                    border-slate-200/90 bg-white text-slate-800 shadow-md
+                    transition duration-150 hover:scale-105
+                    hover:border-slate-300 hover:bg-slate-50 active:scale-95
+                  "
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="h-4.5 w-4.5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    aria-hidden
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M12 5v14m0 0l-6-6m6 6l6-6"
+                    />
+                  </svg>
+                </button>
+              )}
               {boundDraft && (
                 <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
                   <span className="rounded-full bg-td-blue-light/60 px-2 py-1 text-td-blue-dark">
@@ -1314,7 +1409,7 @@ export function AiChatApp() {
                 inputRef={inputRef}
                 value={input}
                 onChange={setInput}
-                onSend={() => onSend()}
+                onSend={(overrideText) => onSend(overrideText)}
                 onFilesSelected={(files) => void onFilesSelected(files)}
                 disabled={!conversationId || pending}
                 pending={pending}
@@ -1328,15 +1423,19 @@ export function AiChatApp() {
                 sendTitle={attachmentsBusy ? '請等待檔案處理完成' : undefined}
                 placeholder={
                   replyingTo
-                    ? '輸入你要回覆的內容…（按兩次 Enter 傳送）'
+                    ? t.aiChat.composerPlaceholder
                     : editingMessageId
-                      ? '修改後按兩次 Enter 傳送…'
-                      : '輸入訊息，或把檔案拖進來…（按兩次 Enter 傳送）'
+                      ? t.aiChat.composerPlaceholder
+                      : t.aiChat.composerPlaceholder
                 }
                 sendLabel={
-                  pending ? '傳送中…' : attachmentsBusy ? '處理中…' : replyingTo ? '送出回覆' : '傳送'
+                  pending
+                    ? t.common.processing
+                    : attachmentsBusy
+                      ? t.common.processing
+                      : t.aiChat.sendButton
                 }
-                modelLabel={statusMeta?.model ? String(statusMeta.model) : 'AI 助手'}
+                modelLabel={statusMeta?.model ? String(statusMeta.model) : tr('AI 助手')}
               />
             </div>
           </div>

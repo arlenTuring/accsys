@@ -97,10 +97,13 @@ function Track({ applicantName, submittedAt, nodes }: { applicantName: string; s
   );
 }
 
-/** Approval progress in the style of the previous system's horizontal timeline (vertical on phones). */
+/** Approval progress in the style of the previous system's horizontal timeline (vertical on phones), plus a detailed sign-off table for printing. */
 export async function ApprovalTimeline({ formType, formId }: { formType: FormType; formId: string }) {
   const data = await getApprovalTimeline(formType, formId);
   if (!data) return null;
+  const th = 'border border-td-border bg-slate-50 px-2.5 py-1.5 text-left text-xs font-semibold text-td-blue-dark';
+  const td = 'border border-td-border px-2.5 py-1.5 text-xs text-td-blue-dark';
+
   return (
     <section className="card">
       <h2 className="mb-4 text-sm font-semibold text-td-blue-dark">
@@ -111,7 +114,66 @@ export async function ApprovalTimeline({ formType, formId }: { formType: FormTyp
           {data.formStatus === 'approved' ? '此表單不需簽核（已自動核准）。' : '目前沒有簽核關卡。'}
         </p>
       ) : (
-        <Track applicantName={data.applicantName} submittedAt={data.submittedAt} nodes={data.nodes} />
+        <>
+          <Track applicantName={data.applicantName} submittedAt={data.submittedAt} nodes={data.nodes} />
+
+          {/* Detailed Approval Record Table (always included in print, also visible as structured sign-off record) */}
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full border-collapse">
+              <thead>
+                <tr>
+                  <th className={`${th} w-20 text-center`}>關卡</th>
+                  <th className={th}>簽核單位／職責</th>
+                  <th className={th}>簽核人員</th>
+                  <th className={`${th} w-28 text-center`}>簽核結果</th>
+                  <th className={`${th} w-36`}>簽核時間</th>
+                  <th className={th}>簽核意見／備註</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td className={`${td} text-center text-td-muted`}>送出</td>
+                  <td className={td}>申請人送出</td>
+                  <td className={`${td} font-semibold`}>{data.applicantName}</td>
+                  <td className={`${td} text-center font-medium text-td-blue`}>送出申請</td>
+                  <td className={`${td} font-mono text-td-muted`}>{when(data.submittedAt) ?? '—'}</td>
+                  <td className={`${td} text-td-muted`}>—</td>
+                </tr>
+                {data.nodes.map((n, idx) => {
+                  const s = STATE[n.state];
+                  const roleTitle =
+                    n.sourceLabel && n.sourceLabel !== n.label
+                      ? `${n.sourceLabel}・${n.label}`
+                      : n.label;
+                  const personName = n.approverName
+                    ? n.delegatedFromName
+                      ? `${n.delegatedFromName}（由 ${n.approverName} 代理）`
+                      : n.approverName
+                    : '（無簽核人）';
+                  const noteText =
+                    [n.comment, n.systemNote].filter(Boolean).join(' · ') || '—';
+
+                  return (
+                    <tr key={n.key}>
+                      <td className={`${td} text-center font-mono text-td-muted`}>
+                        第 {idx + 1} 關
+                      </td>
+                      <td className={td}>{roleTitle}</td>
+                      <td className={`${td} font-semibold`}>{personName}</td>
+                      <td className={`${td} text-center font-semibold ${s.badge}`}>
+                        {s.icon} {s.text}
+                      </td>
+                      <td className={`${td} font-mono text-td-muted`}>
+                        {when(n.actedAt) ?? '—'}
+                      </td>
+                      <td className={`${td} whitespace-pre-wrap`}>{noteText}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
       {data.previousRounds.length > 0 && (
         <details className="mt-4 rounded border border-td-border bg-slate-50/60 px-4 py-3 print:hidden">

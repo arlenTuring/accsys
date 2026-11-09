@@ -95,8 +95,13 @@ export async function uploadRegulationAttachment(
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (bytes.byteLength !== file.size) return { ok: false, error: '檔案大小不一致' };
 
-  const sniffed = sniffAllowedType(bytes, file.name);
-  if (!sniffed.ok) return sniffed;
+  const mime = sniffAllowedType(bytes);
+  if (!mime) {
+    return {
+      ok: false,
+      error: '僅接受 PDF、JPEG、PNG、WebP、HEIC／HEIF、DOCX／XLSX／PPTX（以檔案內容判斷）',
+    };
+  }
 
   const existingCount = await listRegulationAttachments(regulationId);
   if (existingCount.length >= MAX_REGULATION_FILES) {
@@ -104,21 +109,21 @@ export async function uploadRegulationAttachment(
   }
 
   const attachmentId = randomUUID();
-  const safeName = sanitizeFileName(file.name);
+  const safeName = sanitizeFileName(file.name, mime);
   const sha256 = createHash('sha256').update(bytes).digest('hex');
   const qKey = quarantineKey(attachmentId);
-  const finalKey = ['company_regulations', regulationId, `${attachmentId}${sniffed.ext}`].join('/');
+  const finalKey = ['company_regulations', regulationId, `${attachmentId}`].join('/');
 
   await writeNew(qKey, bytes);
 
   let scanStatus: 'clean' | 'infected' | 'scan_failed' | 'unscanned' = 'unscanned';
   try {
     const verdict = await scanBytes(bytes, scanner);
-    if (verdict.status === 'infected') {
+    if (verdict === 'infected') {
       await removeKey(qKey);
       return { ok: false, error: '檔案未通過安全掃描' };
     }
-    scanStatus = verdict.status;
+    scanStatus = verdict;
   } catch (err) {
     await removeKey(qKey);
     if (err instanceof ScannerUnavailable) {
@@ -133,16 +138,16 @@ export async function uploadRegulationAttachment(
     insert into company_regulation_attachments (
       id, regulation_id, uploaded_by_employee_id, storage_path, file_name, mime_type, file_size_bytes, sha256, scan_status, scanned_at
     ) values (
-      ${attachmentId}::uuid, ${regulationId}::uuid, ${actor.id}::uuid, ${finalKey}, ${safeName}, ${sniffed.mimeType}, ${bytes.byteLength}, ${sha256}, ${scanStatus}, now()
+      ${attachmentId}::uuid, ${regulationId}::uuid, ${actor.id}::uuid, ${finalKey}, ${safeName}, ${mime}, ${bytes.byteLength}, ${sha256}, ${scanStatus}, now()
     )
   `);
 
-  await recordAudit({
+  await recordAudit(getDb(), {
     actorEmployeeId: actor.id,
     action: 'company_regulation.attachment_upload',
-    targetType: 'company_regulation',
-    targetId: regulationId,
-    after: { attachmentId, fileName: safeName, size: bytes.byteLength },
+    entityType: 'company_regulation',
+    entityId: regulationId,
+    details: { attachmentId, fileName: safeName, size: bytes.byteLength },
   });
 
   return { ok: true, attachmentId, scanStatus };
@@ -173,12 +178,12 @@ export async function deleteRegulationAttachment(
   `);
   await removeKey(row.storage_path).catch(() => {});
 
-  await recordAudit({
+  await recordAudit(getDb(), {
     actorEmployeeId: actor.id,
     action: 'company_regulation.attachment_delete',
-    targetType: 'company_regulation',
-    targetId: regulationId,
-    before: { attachmentId, fileName: row.file_name },
+    entityType: 'company_regulation',
+    entityId: regulationId,
+    details: { attachmentId, fileName: row.file_name },
   });
 
   return { ok: true };

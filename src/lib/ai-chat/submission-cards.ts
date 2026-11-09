@@ -72,10 +72,14 @@ export function cardsFromPendingApprovals(
 export function cardsFromMySubmissions(
   items: Array<MySubmissionHit & { snapshot?: ApprovalSnapshot | null }>
 ): AiMessageBlock[] {
-  return items.slice(0, 12).map((i) => {
+  return items.slice(0, 30).map((i) => {
     const lines: Array<{ label: string; value: string }> = [];
     if (i.summary) lines.push({ label: '摘要', value: i.summary });
     lines.push({ label: '狀態', value: statusLabel(i.status) });
+    if (i.currentNodeLabel) lines.push({ label: '目前關卡', value: i.currentNodeLabel });
+    const amt = money(i.totalAmount);
+    if (amt) lines.push({ label: '金額', value: amt });
+    if (i.returnReason) lines.push({ label: '退回原因', value: i.returnReason });
     if (i.approvedAt) lines.push({ label: '核准時間', value: i.approvedAt.replace('T', ' ').slice(0, 16) });
     const progress = cardProgress(i.snapshot, i.status);
     return {
@@ -83,7 +87,7 @@ export function cardsFromMySubmissions(
       id: `sc_mine_${i.formId}`,
       formType: i.formType,
       formId: i.formId,
-      formKey: i.formKey,
+      formKey: i.formKey || undefined,
       formNumber: i.formNumber,
       formName: i.formName,
       mode: 'mine' as const,
@@ -91,7 +95,7 @@ export function cardsFromMySubmissions(
       summary: i.summary || i.formName,
       lines,
       canApprove: false,
-      href: `/f/${i.formKey}/${i.formId}`,
+      href: i.href || (i.formKey ? `/f/${i.formKey}/${i.formId}` : `/applications`),
       progress,
     };
   });

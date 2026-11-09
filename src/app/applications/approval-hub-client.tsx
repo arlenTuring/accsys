@@ -4,6 +4,7 @@ import { useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { STATUS_BADGE, STATUS_LABELS } from '@/app/components/form-labels';
+import { QuickPrintButton } from '@/app/components/print-button';
 import type {
   MyApplicationCategoryKey,
   MyApplicationItem,
@@ -13,6 +14,7 @@ import {
   quickApproveFormAction,
   quickReturnFormAction,
 } from '@/lib/applications/quick-actions';
+import { useI18n } from '@/lib/i18n/context';
 import { sealAmountLabel } from '@/lib/seal-requests/constants';
 
 const CATEGORY_ACCENT: Record<
@@ -47,7 +49,7 @@ const CATEGORY_ACCENT: Record<
 };
 
 /**
- * Streamlined, always-visible approval step pipeline.
+ * Streamlined, compact approval step pipeline with state above the progress ball.
  */
 function StreamlinedStepPipeline({
   progress,
@@ -56,6 +58,7 @@ function StreamlinedStepPipeline({
   progress: MyApplicationItem['progress'];
   highlightSelf?: boolean;
 }) {
+  const { t, tr } = useI18n();
   const steps = progress?.steps ?? [];
   if (steps.length === 0) return null;
 
@@ -63,53 +66,131 @@ function StreamlinedStepPipeline({
   const doneSteps = progress?.done ?? 0;
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-slate-200/80 bg-slate-50/70 px-3 py-1.5 text-xs">
-      <span className="mr-1 shrink-0 rounded bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600 shadow-2xs ring-1 ring-slate-200/80">
-        關卡 {doneSteps}/{totalSteps}
+    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200/70 bg-slate-50/60 px-2.5 py-1.5 text-xs">
+      <span className="shrink-0 rounded bg-white px-1.5 py-0.5 text-[11px] font-semibold text-slate-600 shadow-2xs ring-1 ring-slate-200/80">
+        {t.approvalsPage.stepBadge(doneSteps, totalSteps)}
       </span>
 
-      <div className="flex flex-wrap items-center gap-1.5">
-        {steps.map((step, idx) => {
-          const isDone = step.state === 'done';
-          const isCurrent = step.state === 'current';
-          const isReturned = step.state === 'returned';
-
-          const pillCls = isDone
-            ? 'border-emerald-200 bg-emerald-50/90 text-emerald-800'
-            : isCurrent
-              ? highlightSelf
-                ? 'border-amber-400 bg-amber-100/90 text-amber-950 font-semibold shadow-2xs'
-                : 'border-td-blue bg-blue-50 text-td-blue-dark font-semibold shadow-2xs'
-              : isReturned
-                ? 'border-rose-300 bg-rose-50 text-rose-800 font-semibold'
-                : 'border-slate-200 bg-white text-slate-500';
-
-          const badgeIcon = isDone
-            ? '✓'
-            : isCurrent
-              ? '●'
-              : isReturned
-                ? '↩'
-                : String(idx + 1);
-
+      <ol className="flex min-w-[12rem] flex-1 items-start gap-0 overflow-x-auto">
+        {steps.map((step, i) => {
+          const next = steps[i + 1];
+          const lineDone =
+            step.state === 'done' && next && (next.state === 'done' || next.state === 'current');
+          const linePartial = step.state === 'done' && next?.state === 'waiting';
+          const lineReturnedLeft = step.state === 'returned' && i > 0;
+          const lineReturnedRight = next?.state === 'returned';
+          const stateText =
+            step.state === 'done'
+              ? '已簽'
+              : step.state === 'current'
+                ? '簽核中'
+                : step.state === 'returned'
+                  ? '已退回'
+                  : '待簽';
           return (
-            <span key={step.key} className="inline-flex items-center gap-1.5">
+            <li
+              key={step.key}
+              className="flex min-w-[4.25rem] flex-1 flex-col items-center text-center"
+            >
               <span
-                className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs ${pillCls}`}
+                className={`mb-0.5 text-[10px] leading-none ${
+                  step.state === 'current'
+                    ? highlightSelf
+                      ? 'font-semibold text-amber-700'
+                      : 'font-semibold text-td-blue'
+                    : step.state === 'done'
+                      ? 'font-medium text-emerald-600'
+                      : step.state === 'returned'
+                        ? 'font-semibold text-rose-700'
+                        : 'text-slate-400'
+                }`}
               >
-                <span className="text-[10px] opacity-80">{badgeIcon}</span>
-                <span>{step.label}</span>
-                {step.name && <span className="opacity-80">· {step.name}</span>}
+                {tr(stateText)}
               </span>
-              {idx < steps.length - 1 && (
-                <span className="text-xs text-slate-300" aria-hidden>
-                  →
+              <div className="flex w-full items-center">
+                <div
+                  className={`h-0.5 flex-1 ${
+                    i === 0
+                      ? 'bg-transparent'
+                      : lineReturnedLeft
+                        ? 'bg-rose-400'
+                        : lineDone || linePartial
+                          ? 'bg-emerald-500'
+                          : 'bg-slate-200'
+                  }`}
+                  aria-hidden
+                />
+                <span
+                  className={`relative z-[1] flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[10px] font-semibold ${
+                    step.state === 'done'
+                      ? 'border-emerald-500 bg-emerald-500 text-white'
+                      : step.state === 'current'
+                        ? highlightSelf
+                          ? 'border-2 border-amber-500 bg-white text-amber-600 ring-2 ring-amber-400/20'
+                          : 'border-2 border-td-blue bg-white text-td-blue ring-2 ring-td-blue/15'
+                        : step.state === 'returned'
+                          ? 'border-rose-500 bg-rose-500 text-white'
+                          : 'border-slate-300 bg-white text-slate-400'
+                  }`}
+                >
+                  {step.state === 'done' ? (
+                    <svg viewBox="0 0 16 16" className="h-2.5 w-2.5" aria-hidden>
+                      <path
+                        fill="currentColor"
+                        d="M6.5 11.2 3.3 8l1.1-1.1 2.1 2.1 5-5L12.6 5.1z"
+                      />
+                    </svg>
+                  ) : step.state === 'returned' ? (
+                    <svg viewBox="0 0 16 16" className="h-2.5 w-2.5" aria-hidden>
+                      <path
+                        fill="currentColor"
+                        d="M4.2 4.2 5.3 3.1 8 5.8l2.7-2.7 1.1 1.1L9.1 7l2.7 2.7-1.1 1.1L8 8.1 5.3 10.8 4.2 9.7 6.9 7z"
+                      />
+                    </svg>
+                  ) : step.state === 'current' ? (
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${
+                        highlightSelf ? 'bg-amber-500' : 'bg-td-blue'
+                      }`}
+                      aria-hidden
+                    />
+                  ) : null}
                 </span>
-              )}
-            </span>
+                <div
+                  className={`h-0.5 flex-1 ${
+                    i === steps.length - 1
+                      ? 'bg-transparent'
+                      : lineReturnedRight
+                        ? 'bg-rose-400'
+                        : lineDone
+                          ? 'bg-emerald-500'
+                          : 'bg-slate-200'
+                  }`}
+                  aria-hidden
+                />
+              </div>
+              <div className="mt-0.5 flex max-w-full flex-wrap items-baseline justify-center gap-x-1 px-0.5 leading-tight">
+                {step.name && (
+                  <span
+                    className={`truncate text-xs font-medium ${
+                      step.state === 'current'
+                        ? 'text-td-blue-dark'
+                        : step.state === 'done'
+                          ? 'text-emerald-800'
+                          : step.state === 'returned'
+                            ? 'text-rose-800'
+                            : 'text-td-muted'
+                    }`}
+                  >
+                    {step.name}
+                  </span>
+                )}
+                <span className="truncate text-[10px] text-td-muted">{tr(step.label)}</span>
+              </div>
+            </li>
           );
         })}
-      </div>
+      </ol>
     </div>
   );
 }
@@ -135,6 +216,7 @@ export function CollapsibleSection({
   defaultOpen?: boolean;
   children: ReactNode;
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(defaultOpen);
 
   if (variant === 'group') {
@@ -159,7 +241,7 @@ export function CollapsibleSection({
             </span>
           </div>
           <span className="inline-flex items-center gap-1 text-xs font-medium text-td-muted">
-            <span>{open ? '收合群組' : '展開群組'}</span>
+            <span>{open ? t.approvalsPage.collapseGroup : t.approvalsPage.expandGroup}</span>
             <svg
               className={`h-4 w-4 transition-transform ${open ? 'rotate-180' : ''}`}
               viewBox="0 0 20 20"
@@ -211,7 +293,7 @@ export function CollapsibleSection({
             {countText}
           </span>
           <span className="ml-auto text-xs font-medium text-td-muted hover:text-td-blue">
-            {open ? '收合區塊 ▲' : '展開區塊 ▼'}
+            {open ? t.approvalsPage.collapseSection : t.approvalsPage.expandSection}
           </span>
         </button>
 
@@ -225,6 +307,7 @@ export function CollapsibleSection({
 
 export function QuickPendingApprovalRow({ item }: { item: PendingApprovalRichItem }) {
   const router = useRouter();
+  const { t, tr } = useI18n();
   const [phase, setPhase] = useState<
     'idle' | 'approving' | 'returning' | 'approved' | 'returned'
   >('idle');
@@ -274,7 +357,7 @@ export function QuickPendingApprovalRow({ item }: { item: PendingApprovalRichIte
 
   return (
     <div
-      className={`space-y-2.5 p-4 transition ${
+      className={`space-y-1.5 px-3.5 py-2.5 transition ${
         phase === 'approved'
           ? 'bg-emerald-50/40'
           : phase === 'returned'
@@ -286,15 +369,18 @@ export function QuickPendingApprovalRow({ item }: { item: PendingApprovalRichIte
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-bold text-td-blue-dark">{item.formLabel}</span>
+            <span className="text-sm font-bold text-td-blue-dark">{tr(item.formLabel)}</span>
             <Link href={item.href} className="mono-case text-xs hover:underline">
               {item.caseNumber}
             </Link>
             <span className="rounded-md bg-blue-50 px-2 py-0.5 text-xs font-semibold text-td-blue-dark">
-              申請人：{item.applicantName}
+              {t.approvalsPage.applicantPrefix}
+              {item.applicantName}
             </span>
             {item.waitingFor && (
-              <span className="text-xs text-td-muted">· 已等候 {item.waitingFor}</span>
+              <span className="text-xs text-td-muted">
+                {t.approvalsPage.waitingForPrefix(item.waitingFor)}
+              </span>
             )}
           </div>
 
@@ -310,11 +396,11 @@ export function QuickPendingApprovalRow({ item }: { item: PendingApprovalRichIte
 
           {phase === 'approved' ? (
             <span className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700">
-              ✓ 已簽核通過
+              {t.approvalsPage.approvedDone}
             </span>
           ) : phase === 'returned' ? (
             <span className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700">
-              ↩ 已退回申請人
+              {t.approvalsPage.returnedDone}
             </span>
           ) : (
             <div className="flex items-center gap-1.5">
@@ -322,9 +408,10 @@ export function QuickPendingApprovalRow({ item }: { item: PendingApprovalRichIte
                 type="button"
                 disabled={busy}
                 onClick={handleApprove}
-                className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-2xs transition hover:bg-emerald-700 disabled:opacity-50"
+                style={{ backgroundColor: '#059669', color: '#ffffff' }}
+                className="btn-quick-approve inline-flex items-center gap-1 rounded-lg border border-emerald-700/20 bg-status-approved px-3 py-1.5 text-xs font-semibold text-white shadow-2xs transition hover:opacity-95 disabled:opacity-50"
               >
-                {phase === 'approving' ? '簽核中…' : '✓ 快速簽核'}
+                {phase === 'approving' ? t.approvalsPage.approving : t.approvalsPage.quickApprove}
               </button>
               <button
                 type="button"
@@ -332,13 +419,13 @@ export function QuickPendingApprovalRow({ item }: { item: PendingApprovalRichIte
                 onClick={() => setShowReturnInput((v) => !v)}
                 className="rounded-lg border border-rose-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-50 disabled:opacity-50"
               >
-                退回
+                {t.approvalsPage.returnBtn}
               </button>
               <Link
                 href={item.href}
                 className="rounded-lg border border-td-border bg-white px-2.5 py-1.5 text-xs font-medium text-td-text transition hover:bg-slate-50"
               >
-                詳情 →
+                {t.common.details}
               </Link>
             </div>
           )}
@@ -355,7 +442,7 @@ export function QuickPendingApprovalRow({ item }: { item: PendingApprovalRichIte
             type="text"
             value={returnReason}
             onChange={(e) => setReturnReason(e.target.value)}
-            placeholder="請輸入退回原因（選填，預設：請補充說明後重送）…"
+            placeholder={t.approvalsPage.returnReasonPlaceholder}
             className="min-w-[14rem] flex-1 rounded-md border border-rose-200 bg-white px-2.5 py-1 text-xs focus:border-rose-400 focus:outline-none"
           />
           <button
@@ -364,7 +451,7 @@ export function QuickPendingApprovalRow({ item }: { item: PendingApprovalRichIte
             onClick={handleReturn}
             className="rounded-md bg-rose-600 px-3 py-1 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
           >
-            {phase === 'returning' ? '退回中…' : '確認退回'}
+            {phase === 'returning' ? t.approvalsPage.returning : t.approvalsPage.confirmReturn}
           </button>
           <button
             type="button"
@@ -372,7 +459,7 @@ export function QuickPendingApprovalRow({ item }: { item: PendingApprovalRichIte
             onClick={() => setShowReturnInput(false)}
             className="px-2 py-1 text-xs text-slate-600 hover:underline"
           >
-            取消
+            {t.common.cancel}
           </button>
         </div>
       )}
@@ -383,9 +470,12 @@ export function QuickPendingApprovalRow({ item }: { item: PendingApprovalRichIte
 }
 
 export function CompactMyApplicationRow({ item }: { item: MyApplicationItem }) {
+  const { t, tr } = useI18n();
+  const rawStatusLabel = STATUS_LABELS[item.status] ?? item.status;
+
   return (
     <div
-      className={`space-y-2.5 p-4 transition hover:bg-slate-50/60 ${
+      className={`space-y-1.5 px-3.5 py-2.5 transition hover:bg-slate-50/60 ${
         item.status === 'returned' ? 'bg-rose-50/20' : ''
       }`}
     >
@@ -393,16 +483,17 @@ export function CompactMyApplicationRow({ item }: { item: MyApplicationItem }) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-bold text-td-blue-dark">{item.formLabel}</span>
+            <span className="text-sm font-bold text-td-blue-dark">{tr(item.formLabel)}</span>
             <Link href={item.href} className="mono-case text-xs hover:underline">
               {item.caseNumber}
             </Link>
             <span className={STATUS_BADGE[item.status] ?? 'badge-withdrawn'}>
-              {STATUS_LABELS[item.status] ?? item.status}
+              {tr(rawStatusLabel)}
             </span>
             {item.status === 'pending_approval' && item.pendingApproverNames.length > 0 && (
               <span className="text-xs font-medium text-td-blue-dark">
-                待簽核人：{item.pendingApproverNames.join('、')}
+                {t.approvalsPage.pendingApproversPrefix}
+                {item.pendingApproverNames.join('、')}
               </span>
             )}
           </div>
@@ -412,9 +503,10 @@ export function CompactMyApplicationRow({ item }: { item: MyApplicationItem }) {
           {item.status === 'returned' && (
             <div className="rounded-md border border-rose-200 bg-rose-50/80 px-3 py-1.5 text-xs text-rose-900">
               <span className="font-semibold">
-                退回原因{item.returnedByName ? `（${item.returnedByName}）` : ''}：
+                {t.approvalsPage.returnReasonPrefix}
+                {item.returnedByName ? ` (${item.returnedByName})` : ''}:{' '}
               </span>
-              <span>{item.returnReason || '請依審核意見修正後重新送出'}</span>
+              <span>{item.returnReason || t.approvalsPage.defaultReturnHint}</span>
             </div>
           )}
         </div>
@@ -426,19 +518,20 @@ export function CompactMyApplicationRow({ item }: { item: MyApplicationItem }) {
             </span>
           )}
           <span className="text-xs text-td-muted">{item.dateLabel}</span>
+          {item.status === 'approved' && <QuickPrintButton href={item.href} size="sm" />}
           {item.editHref && (
             <Link
               href={item.editHref}
               className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
             >
-              修改重送
+              {t.approvalsPage.editAndResubmit}
             </Link>
           )}
           <Link
             href={item.href}
             className="rounded-lg border border-td-border bg-white px-3 py-1.5 text-xs font-medium text-td-blue hover:bg-slate-50"
           >
-            查看詳情 →
+            {t.common.viewDetails}
           </Link>
         </div>
       </div>
