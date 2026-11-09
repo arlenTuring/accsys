@@ -2581,8 +2581,9 @@ export function ProjectLiveCoAuthor({
             id: string;
             code: string;
             title: string;
-            snippet: string;
+            content: string;
             headingId?: string;
+            level?: 2 | 3;
           }>;
         }>
       | undefined;

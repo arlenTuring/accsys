@@ -40,7 +40,7 @@ async function queryAllQueues() {
 
 /** Every form waiting for the current employee's decision, across all form types. */
 export async function getMyApprovalQueueAll(): Promise<ApprovalQueueItem[]> {
-  let [
+  const [
     requests,
     orders,
     acceptances,
@@ -49,8 +49,9 @@ export async function getMyApprovalQueueAll(): Promise<ApprovalQueueItem[]> {
     expenseClaims,
     seals,
     assetTransfers,
-    custom,
+    initialCustom,
   ] = await queryAllQueues();
+  let custom = initialCustom;
 
   const initialTotal =
     requests.length +

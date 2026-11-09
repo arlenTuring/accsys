@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { safeReturnTo } from './redirect';
+import { DEFAULT_AFTER_LOGIN, safeReturnTo } from './redirect';
 
 const ORIGIN = 'https://accsys.example.com';
 
@@ -33,7 +33,7 @@ describe('safeReturnTo', () => {
     '/./auth/logout',
     `/${'a'.repeat(600)}`,
   ])('replaces %s with the default page', (input) => {
-    expect(safeReturnTo(input, ORIGIN)).toBe('/dashboard');
+    expect(safeReturnTo(input, ORIGIN)).toBe(DEFAULT_AFTER_LOGIN);
   });
 
   it('keeps percent-encoded CR/LF encoded (cannot split the Location header)', () => {
