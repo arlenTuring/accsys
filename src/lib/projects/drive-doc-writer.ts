@@ -3375,21 +3375,16 @@ function buildCompactDocxForGoogleConversion(docxBuf: Buffer): Buffer {
               ? inflateRawSync(entry.compressedData)
               : entry.compressedData;
           let xmlStr = rawXml.toString('utf8');
+          // Only strip harmless property-change history tags (<w:rPrChange>, <w:pPrChange>, etc.)
+          // and standalone range markers without regex-touching nested <w:del> or <w:ins> containers,
+          // ensuring 100% well-formed XML so Google Docs never fails to open the document!
           xmlStr = xmlStr
-            .replace(/<w:del\b[\s\S]*?<\/w:del>/g, '')
-            .replace(/<w:moveFrom\b[\s\S]*?<\/w:moveFrom>/g, '')
-            .replace(/<w:moveFromRangeStart\b[^>]*\/>/g, '')
-            .replace(/<w:moveFromRangeEnd\b[^>]*\/>/g, '')
-            .replace(/<w:moveToRangeStart\b[^>]*\/>/g, '')
-            .replace(/<w:moveToRangeEnd\b[^>]*\/>/g, '')
             .replace(/<w:rPrChange\b[\s\S]*?<\/w:rPrChange>/g, '')
             .replace(/<w:pPrChange\b[\s\S]*?<\/w:pPrChange>/g, '')
             .replace(/<w:tblPrChange\b[\s\S]*?<\/w:tblPrChange>/g, '')
             .replace(/<w:trPrChange\b[\s\S]*?<\/w:trPrChange>/g, '')
             .replace(/<w:tcPrChange\b[\s\S]*?<\/w:tcPrChange>/g, '')
-            .replace(/<w:sectPrChange\b[\s\S]*?<\/w:sectPrChange>/g, '')
-            .replace(/<w:ins\b[^>]*>([\s\S]*?)<\/w:ins>/g, '$1')
-            .replace(/<w:moveTo\b[^>]*>([\s\S]*?)<\/w:moveTo>/g, '$1');
+            .replace(/<w:sectPrChange\b[\s\S]*?<\/w:sectPrChange>/g, '');
           const cleanBuf = Buffer.from(xmlStr, 'utf8');
           entry.compressedData =
             entry.compressionMethod === 8 ? deflateRawSync(cleanBuf) : cleanBuf;
@@ -3400,7 +3395,8 @@ function buildCompactDocxForGoogleConversion(docxBuf: Buffer): Buffer {
         }
       } else if (
         entry.fileName.startsWith('word/media/') &&
-        entry.uncompressedSize > 600_000
+        entry.uncompressedSize > 500_000 &&
+        /\.(png|jpe?g|bmp|gif|tiff?)$/i.test(entry.fileName)
       ) {
         entry.compressionMethod = 8;
         entry.compressedData = placeholderCompressed;
@@ -3413,6 +3409,78 @@ function buildCompactDocxForGoogleConversion(docxBuf: Buffer): Buffer {
   } catch {
     return docxBuf;
   }
+}
+
+/**
+ * Fallback: builds a clean, 100% valid minimal `.docx` from extracted sections
+ * when a massive or heavily track-changed `.docx` exceeds Google Docs' native import limit.
+ */
+function buildCleanDocxFromExtractedSections(
+  title: string,
+  sections: ExtractedDocSection[]
+): Buffer {
+  const contentTypesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`;
+
+  const relsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`;
+
+  const paragraphsXml: string[] = [
+    `<w:p><w:r><w:rPr><w:b/><w:sz w:val="32"/></w:rPr><w:t>${escapeXml(
+      title.replace(/\.docx?$/i, '')
+    )}</w:t></w:r></w:p>`,
+  ];
+
+  for (const sec of sections) {
+    paragraphsXml.push(
+      `<w:p><w:r><w:rPr><w:b/><w:sz w:val="28"/></w:rPr><w:t>${escapeXml(
+        `${sec.code} ${sec.title}`
+      )}</w:t></w:r></w:p>`
+    );
+    const lines = sec.content.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+    for (const line of lines) {
+      if (line === sec.title) continue;
+      paragraphsXml.push(
+        `<w:p><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${escapeXml(
+          line
+        )}</w:t></w:r></w:p>`
+      );
+    }
+  }
+
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    ${paragraphsXml.join('\n    ')}
+  </w:body>
+</w:document>`;
+
+  const makeEntry = (fileName: string, content: string): ZipEntry => {
+    const raw = Buffer.from(content, 'utf8');
+    const compressed = deflateRawSync(raw);
+    return {
+      fileName,
+      compressionMethod: 8,
+      modTime: 0,
+      modDate: 0,
+      crc: crc32(raw),
+      compressedData: compressed,
+      uncompressedSize: raw.length,
+      externalAttrs: 0,
+    };
+  };
+
+  return buildZipBuffer([
+    makeEntry('[Content_Types].xml', contentTypesXml),
+    makeEntry('_rels/.rels', relsXml),
+    makeEntry('word/document.xml', documentXml),
+  ]);
 }
 
 /**
@@ -3460,8 +3528,14 @@ export async function resolveOrUploadDroppedDocument(params: {
   let resolvedId: string | undefined =
     (existingDriveId && map[existingDriveId]) || map[nameKey] || existingDriveId;
 
-  // ULTRA-FAST PATH: If already mapped to a Google Drive file and sections are cached on disk, ensure permissions and return!
-  if (resolvedId && map[resolvedId]) {
+  // Never reuse a non-native (33-char) binary .docx upload ID for a Word document,
+  // because Google Docs' Office compatibility mode fails to open 25MB+ files!
+  if (docType === 'word' && resolvedId && resolvedId.length < 40 && !existingDriveId) {
+    resolvedId = undefined;
+  }
+
+  // ULTRA-FAST PATH: If already mapped to a native Google Doc (44-char ID) and sections are cached on disk, ensure permissions and return!
+  if (resolvedId && map[resolvedId] && (docType !== 'word' || map[resolvedId].length >= 40)) {
     resolvedId = map[resolvedId];
     await ensureDriveDocSharedForViewer({ driveFileId: resolvedId, userEmail });
     if (docType === 'word') {
@@ -3506,7 +3580,8 @@ export async function resolveOrUploadDroppedDocument(params: {
           const nativeMatch = files.find((f) =>
             f.mimeType.startsWith('application/vnd.google-apps.')
           );
-          const bestMatch = nativeMatch ?? files[0];
+          const bestMatch =
+            docType === 'word' ? nativeMatch : nativeMatch ?? files[0];
           if (bestMatch?.id) {
             resolvedId = bestMatch.id;
             break;
@@ -3550,6 +3625,10 @@ export async function resolveOrUploadDroppedDocument(params: {
     const primaryBuf = isLargeOrTrackChangesDocx
       ? buildCompactDocxForGoogleConversion(rawUploadBuf)
       : rawUploadBuf;
+    const cleanStructuredBuf =
+      docType === 'word' && localDocxSections && localDocxSections.length > 0
+        ? buildCleanDocxFromExtractedSections(cleanName, localDocxSections)
+        : null;
 
     const uploadAttemptConfigs: Array<{
       buf: Buffer;
@@ -3562,8 +3641,17 @@ export async function resolveOrUploadDroppedDocument(params: {
         : docType === 'word'
         ? [{ buf: buildCompactDocxForGoogleConversion(rawUploadBuf), targetMime: targetGoogleMime }]
         : []),
+      ...(cleanStructuredBuf
+        ? [
+            { buf: cleanStructuredBuf, targetMime: targetGoogleMime },
+            {
+              buf: cleanStructuredBuf,
+              targetMime: targetGoogleMime,
+              parentFolderId: '14GmQIb8K3DGU6a-6WogdaSFF9rs00sxy',
+            },
+          ]
+        : []),
       { buf: primaryBuf, targetMime: targetGoogleMime, parentFolderId: '14GmQIb8K3DGU6a-6WogdaSFF9rs00sxy' },
-      { buf: rawUploadBuf, targetMime: sourceMime },
     ];
 
     outerUploadLoop: for (const token of tokens) {

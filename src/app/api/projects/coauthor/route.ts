@@ -2135,13 +2135,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
   const docId = request.nextUrl.searchParams.get('docId')?.trim();
-  const targetDocIds = Array.from(
-    new Set(
-      [docId, '1U3azvxa1j8IEW0-3NrWU6TYMpAfoQ5Ig'].filter((x): x is string =>
-        Boolean(x)
-      )
-    )
-  );
+  const targetDocIds = docId ? [docId] : [];
   await Promise.allSettled(
     targetDocIds.map((id) =>
       ensureDriveDocSharedForViewer({
