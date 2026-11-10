@@ -807,7 +807,7 @@ export function ProjectLiveCoAuthor({
       if (/^※\s*\S+/.test(clean)) return true;
       if (/^[一二三四五六七八九十]+、\s*\S+/.test(clean)) return true;
       if (/^[(（][一二三四五六七八九十\d]+[)）]\s*\S+/.test(clean)) return true;
-      if (/^\d+(?:\.\d+)+\.?\s*\S+/.test(clean)) return true;
+      if (/^[1-9]\d*(?:\.\d+)+\.?\s*[^\d\s]/.test(clean) && !/次\/|%|公里|小時|萬元|千元/.test(clean)) return true;
       if (/^[1-9]\d*\.\s+\S+/.test(clean) && clean.length <= 42) return true;
       if (
         /^[\u4e00-\u9fff()（）/、，\s]{2,18}\s+[A-Z][A-Za-z0-9\s,&/()-]{3,42}[：:]?$/.test(

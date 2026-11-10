@@ -776,6 +776,57 @@ export async function ensureNativeGoogleDocForLiveEditing(params: {
             saveNativeGdocMapEntry(driveFileId, copied.id);
             return copied.id;
           }
+        } else {
+          // If `/copy` with `mimeType: 'application/vnd.google-apps.document'` fails (e.g. 500 Internal Error due to nested track changes),
+          // download the `.docx`, accept track changes while preserving 100% of tables, styles, and images, and upload as native Google Doc!
+          const dlRes = await fetch(
+            `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(
+              driveFileId
+            )}?alt=media&supportsAllDrives=true`,
+            {
+              headers: { Authorization: `Bearer ${token}` },
+              signal: AbortSignal.timeout(20_000),
+              cache: 'no-store',
+            }
+          );
+          if (dlRes.ok) {
+            const rawDocxBuf = Buffer.from(await dlRes.arrayBuffer());
+            const cleanDocxBuf = buildDocxForGoogleConversion(rawDocxBuf, {
+              compactLargeMedia: false,
+            });
+            const boundary = '-------accsys_convert_docx_' + Date.now();
+            const metaJson = JSON.stringify({
+              name: cleanTitle,
+              mimeType: 'application/vnd.google-apps.document',
+            });
+            const multipartBody = Buffer.concat([
+              Buffer.from(
+                `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metaJson}\r\n--${boundary}\r\nContent-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document\r\n\r\n`
+              ),
+              cleanDocxBuf,
+              Buffer.from(`\r\n--${boundary}--`),
+            ]);
+            const upRes = await fetch(
+              'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id',
+              {
+                method: 'POST',
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  'Content-Type': `multipart/related; boundary=${boundary}`,
+                },
+                body: multipartBody,
+                signal: AbortSignal.timeout(35_000),
+              }
+            );
+            if (upRes.ok) {
+              const upData = (await upRes.json()) as { id?: string };
+              if (upData?.id) {
+                await grantDriveFileEditorAccess(upData.id, token, userEmail);
+                saveNativeGdocMapEntry(driveFileId, upData.id);
+                return upData.id;
+              }
+            }
+          }
         }
       }
     } catch {
@@ -878,7 +929,7 @@ async function fetchAndCacheGoogleDocParas(
       const res = await fetch(
         `https://docs.googleapis.com/v1/documents/${encodeURIComponent(
           docId
-        )}?fields=body(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))`,
+        )}?fields=body(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content))),table(tableRows(tableCells(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))))))`,
         {
           headers: { Authorization: `Bearer ${token}` },
           signal: AbortSignal.timeout(15_000),
@@ -888,43 +939,86 @@ async function fetchAndCacheGoogleDocParas(
       if (!res.ok) return null;
 
       const doc = (await res.json()) as {
-        body?: {
-          content?: Array<{
-            startIndex?: number;
-            endIndex?: number;
-            paragraph?: {
-              elements?: Array<{
-                startIndex?: number;
-                endIndex?: number;
-                textRun?: { content?: string };
+      body?: {
+        content?: Array<{
+          startIndex?: number;
+          endIndex?: number;
+          paragraph?: {
+            elements?: Array<{
+              startIndex?: number;
+              endIndex?: number;
+              textRun?: { content?: string };
+            }>;
+          };
+          table?: {
+            tableRows?: Array<{
+              tableCells?: Array<{
+                content?: Array<{
+                  startIndex?: number;
+                  endIndex?: number;
+                  paragraph?: {
+                    elements?: Array<{
+                      startIndex?: number;
+                      endIndex?: number;
+                      textRun?: { content?: string };
+                    }>;
+                  };
+                }>;
               }>;
-            };
-          }>;
-        };
+            }>;
+          };
+        }>;
       };
+    };
 
       const paras: GdocParaSpan[] = [];
-      for (const el of doc.body?.content ?? []) {
+      const pushParagraphSpan = (pEl: {
+        startIndex?: number;
+        endIndex?: number;
+        paragraph?: {
+          elements?: Array<{
+            startIndex?: number;
+            endIndex?: number;
+            textRun?: { content?: string };
+          }>;
+        };
+      }) => {
         if (
-          !el.paragraph ||
-          typeof el.startIndex !== 'number' ||
-          typeof el.endIndex !== 'number'
+          !pEl.paragraph ||
+          typeof pEl.startIndex !== 'number' ||
+          typeof pEl.endIndex !== 'number'
         ) {
-          continue;
+          return;
         }
-        const raw = (el.paragraph.elements ?? [])
+        const raw = (pEl.paragraph.elements ?? [])
           .map((e) => e.textRun?.content ?? '')
           .join('');
         const plain = raw.replace(/\r?\n$/u, '').trim();
-        if (!plain) continue;
+        if (!plain) return;
         // Exclude the trailing newline character at `endIndex - 1` so paragraph styles are preserved
-        const safeEnd = Math.max(el.startIndex, el.endIndex - 1);
+        const safeEnd = Math.max(pEl.startIndex, pEl.endIndex - 1);
         paras.push({
-          startIndex: el.startIndex,
+          startIndex: pEl.startIndex,
           endIndex: safeEnd,
           plainText: plain,
           normText: normalizeForMatch(plain),
         });
+      };
+
+      for (const el of doc.body?.content ?? []) {
+        if (el.paragraph) {
+          pushParagraphSpan(el);
+        } else if (el.table) {
+          for (const row of el.table.tableRows ?? []) {
+            for (const cell of row.tableCells ?? []) {
+              for (const cellEl of cell.content ?? []) {
+                if (cellEl.paragraph) {
+                  pushParagraphSpan(cellEl);
+                }
+              }
+            }
+          }
+        }
       }
 
       if (paras.length > 0) {
@@ -2263,6 +2357,11 @@ function isMajorDocSectionHeading(txt: string, style?: string): boolean {
   if (!clean || clean.length > 56 || clean.includes('｜')) return false;
   if (/[。；！？]$/.test(clean)) return false;
 
+  // Exclude Table of Contents (TOC) index lines that end with page numbers (e.g. "壹、申請人簡介10", "一、基本資料\t10")
+  if (/(\t|\.{2,}|\s{2,})\d{1,3}$/.test(clean) || /^[^\d]+\d{1,3}$/.test(clean)) {
+    return false;
+  }
+
   // Cross-reference lines like "第01330章 – 資料送審 Section 01330 – Submittals" are Level 2 items under Related Sections, not Level 1 chapters
   if (/^第\d+[A-Z]?章\s*[–—-]/.test(clean)) return false;
 
@@ -2285,7 +2384,9 @@ function isMajorDocSectionHeading(txt: string, style?: string): boolean {
     /^附件[一二三四五六七八九十\d]+[、：:\s]/.test(clean) ||
     /^第[一二三四五六七八九十\d]+[A-Z]?[章節篇](?!\s*[–—-])/.test(clean) ||
     /^\d+\.0\s+\S+/.test(clean) ||
-    /^(?:計畫書摘要表|申請紀錄說明|計畫書目錄)/.test(clean) ||
+    /^(?:計畫書摘要表|無人載具科技創新實驗計畫摘要表|申請紀錄說明|計畫書目錄|目\s*錄|申請人簡介|計畫緣起|計畫內容|計畫可行性與關鍵能力分析|其他建議事項|附\s*件)$/.test(
+      clean
+    ) ||
     /^(?:相關準則與標準\s*Relevant|產品\s*Products|系統功能\s*System\s*Functions|施工\s*Execution|檢驗與測試\s*Inspection)/i.test(
       clean
     );
@@ -2295,11 +2396,16 @@ function isMajorDocSectionHeading(txt: string, style?: string): boolean {
 
 export function isSubSectionDocHeading(txt: string, style?: string): boolean {
   const clean = cleanDocHeadingText(txt);
-  if (!clean || clean.length < 3 || clean.length > 56 || clean.includes('｜')) {
+  if (!clean || clean.length < 2 || clean.length > 56 || clean.includes('｜')) {
     return false;
   }
   if (/[。；！？]$/.test(clean)) return false;
   if (isMajorDocSectionHeading(clean, style)) return false;
+
+  // Exclude Table of Contents (TOC) index lines that end with page numbers (e.g. "一、基本資料10")
+  if (/(\t|\.{2,}|\s{2,})\d{1,3}$/.test(clean) || /^[^\d]+\d{1,3}$/.test(clean)) {
+    return false;
+  }
 
   // Exclude summary lines that cram multiple headings into a single line
   if (
@@ -2324,12 +2430,12 @@ export function isSubSectionDocHeading(txt: string, style?: string): boolean {
   // 3. Secondary parenthesized sub-headings: (一)公司簡介, (五)參與並獲得通過教育部產學攜手合作計畫2.0說明, etc.
   if (/^[(（][一二三四五六七八九十]+[)）]\s*\S+/.test(clean)) return true;
 
-  // 4. Decimal sub-headings: 2.1.創新或研究發展研發之人事費, 3.1年度經費使用分配表, 1.1 通則
-  if (/^\d+\.\d+\.?\s*[^\d\s]/.test(clean)) return true;
+  // 4. Decimal sub-headings: 2.1.創新或研究發展研發之人事費, 3.1年度經費使用分配表, 1.1 通則 (exclude 0.x decimal numbers like "0.0967 次/")
+  if (/^[1-9]\d*\.\d+\.?\s*[^\d\s]/.test(clean) && !/次\/|%|公里|小時|萬元|千元/.test(clean)) return true;
 
-  // 5. Proposal front-matter sub-blocks
+  // 5. Proposal front-matter & standard sandbox proposal sub-blocks (when auto-numbering is stored in Word numPr)
   if (
-    /^(?:曾經參與政府相關研發計畫之實績|目前申請中之計畫|近3年曾申請未通過之計畫說明|本次申請計畫與前次申請之差異說明|綜合資料|計畫摘要表[（(]續[)）])/.test(
+    /^(?:曾經參與政府相關研發計畫之實績|目前申請中之計畫|近3年曾申請未通過之計畫說明|本次申請計畫與前次申請之差異說明|綜合資料|計畫摘要表[（(]續[)）]|基本資料|無人載具科技\/應用發展相關經驗及實績|無人載具核心能力說明|申請創新實驗計畫之緣由|申請經驗說明（如無則免填）|與過去申請本創新實驗計畫比較說明(?:（如無則免填）)?|實驗目標|實驗內容|實驗場域規劃說明|載具形式及數量|實施方式|團隊組成分工與任務|預定進度規劃|場域配合措施|其他配合措施（如無則免填）|創新性之說明|辦理創新實驗所涉及之交通及其他相關法規之排除適用分析|無人載具或其裝置符合安全性之文件或說明|完成模擬分析或封閉場域實驗之說明|涉及營運行為之規劃說明|主要管理及執行創新實驗者|辦理創新實驗所採用之資訊系統及其安全控管措施|與參與實驗者間之契約與說明|場域所在地管理機關或所有權人同意配合創新實驗計畫實施之文件|取得交通主管機關核發相關牌照所需文件|創新實驗預期效益及達成效益之衡量標準|設置無人載具運行紀錄器及提供紀錄資料之說明|交通影響分析及因應措施|創新實驗期間之潛在風險評估、風險管理機制及降低風險措施|書面申請停止創新實驗、經主管機關廢止核准或創新實驗期間屆滿之退場機制|對參與實驗者及實驗利害關係人所規劃之保護措施|投保保險之規劃)$/.test(
       clean
     )
   ) {
@@ -2362,7 +2468,7 @@ export function buildSubSectionsFromLines(params: {
   secId: string;
   secIndex: number;
   secTitle: string;
-  lines: Array<{ text: string; headingId?: string }>;
+  lines: Array<{ text: string; headingId?: string; isTopLevel?: boolean }>;
 }): ExtractedDocSubSection[] {
   const { secId, secIndex, secTitle, lines } = params;
   const subRaw: Array<{
@@ -2392,7 +2498,7 @@ export function buildSubSectionsFromLines(params: {
       continue;
     }
 
-    if (isSubSectionDocHeading(cleanLine)) {
+    if (lines[i].isTopLevel !== false && isSubSectionDocHeading(cleanLine)) {
       const companyMatch = cleanLine.match(
         /^※\s*(?:主導|聯合)?申請公司[：:]\s*([^\s(（]+)/
       );
@@ -2783,7 +2889,7 @@ export async function ensureGoogleDocSectionHeadings(params: {
         const isFirstTitle = seenNonEmpty === 0;
         seenNonEmpty++;
 
-        if (isFirstTitle || (isMajorDocSectionHeading(cleanTxt) && currentMajorIdx < 25)) {
+        if (isFirstTitle || (isMajorDocSectionHeading(cleanTxt, style) && currentMajorIdx < 25)) {
           currentMajorIdx++;
           currentSubCount = 0;
           const secId = `sec-${currentMajorIdx + 1}`;
@@ -2904,37 +3010,50 @@ export async function ensureGoogleDocSectionHeadings(params: {
       const majorParas = headingParas.filter((hp) => hp.isMajor);
       updatedSections = cachedSections.map((s, idx) => {
         const normS = normalizeForMatch(s.title);
-        const byTitle = majorParas.find(
-          (hp) => hp.normTitle.includes(normS) || normS.includes(hp.normTitle)
+        const byExactTitle = majorParas.find((hp) => hp.normTitle === normS);
+        const bySubstringTitle = majorParas.find(
+          (hp) =>
+            normS.length >= 4 &&
+            hp.normTitle.length >= 4 &&
+            (hp.normTitle.includes(normS) || normS.includes(hp.normTitle))
         );
+        const byTitle = byExactTitle ?? bySubstringTitle;
         const hId =
-          headingBySectionId[s.id] ||
           byTitle?.headingId ||
           majorParas[idx]?.headingId ||
+          headingBySectionId[s.id] ||
           s.headingId;
         if (hId) headingBySectionId[s.id] = hId;
 
+        const matchedMajorSecIdx = byTitle ? byTitle.secIdx : idx;
         const subParasForSec = headingParas.filter(
-          (hp) => !hp.isMajor && hp.secIdx === idx
+          (hp) => !hp.isMajor && hp.secIdx === matchedMajorSecIdx
         );
         const nextSubSections = (s.subSections ?? []).map((sub, subIdx) => {
           const rawSubTitle = sub.title.replace(/^\[[^\]]+\]\s*/, '');
           const normSub = normalizeForMatch(rawSubTitle);
-          const subByOrder = subParasForSec[subIdx];
-          const subByTitle = subParasForSec.find(
+          const subByExact = subParasForSec.find((hp) => hp.normTitle === normSub);
+          const subBySubstr = subParasForSec.find(
             (hp) =>
-              hp.normTitle.includes(normSub) || normSub.includes(hp.normTitle)
+              normSub.length >= 4 &&
+              hp.normTitle.length >= 4 &&
+              (hp.normTitle.includes(normSub) || normSub.includes(hp.normTitle))
           );
           const subAnyByTitle = headingParas.find(
             (hp) =>
               !hp.isMajor &&
-              (hp.normTitle.includes(normSub) || normSub.includes(hp.normTitle))
+              (hp.normTitle === normSub ||
+                (normSub.length >= 4 &&
+                  hp.normTitle.length >= 4 &&
+                  (hp.normTitle.includes(normSub) || normSub.includes(hp.normTitle))))
           );
+          const subByOrder = subParasForSec[subIdx];
           const subHId =
-            headingBySectionId[sub.id] ||
-            subByOrder?.headingId ||
-            subByTitle?.headingId ||
+            subByExact?.headingId ||
+            subBySubstr?.headingId ||
             subAnyByTitle?.headingId ||
+            subByOrder?.headingId ||
+            headingBySectionId[sub.id] ||
             sub.headingId;
           if (subHId) headingBySectionId[sub.id] = subHId;
           return {
@@ -3183,12 +3302,12 @@ export async function extractWordSectionsFromGoogleDoc(
 
     const rawSections: Array<{
       title: string;
-      lines: Array<{ text: string; headingId?: string }>;
+      lines: Array<{ text: string; headingId?: string; isTopLevel?: boolean }>;
       headingId?: string;
     }> = [];
     let current: {
       title: string;
-      lines: Array<{ text: string; headingId?: string }>;
+      lines: Array<{ text: string; headingId?: string; isTopLevel?: boolean }>;
       headingId?: string;
     } = {
       title: cleanDocHeadingText(blocks[0].text).slice(0, 42),
@@ -3198,25 +3317,33 @@ export async function extractWordSectionsFromGoogleDoc(
 
     for (let i = 0; i < blocks.length; i++) {
       const b = blocks[i];
-      if (i > 0 && b.isHeading && rawSections.length < 18) {
+      if (i > 0 && b.isHeading && rawSections.length < 22) {
         if (current.lines.length === 0) {
-          current.lines.push({ text: current.title, headingId: current.headingId });
+          current.lines.push({
+            text: current.title,
+            headingId: current.headingId,
+            isTopLevel: true,
+          });
         }
         rawSections.push(current);
         current = {
           title: cleanDocHeadingText(b.text).slice(0, 42),
-          lines: [{ text: b.text, headingId: b.headingId }],
+          lines: [{ text: b.text, headingId: b.headingId, isTopLevel: b.isTopLevel }],
           headingId: b.headingId,
         };
       } else {
-        current.lines.push({ text: b.text, headingId: b.headingId });
+        current.lines.push({
+          text: b.text,
+          headingId: b.headingId,
+          isTopLevel: b.isTopLevel,
+        });
       }
     }
     if (current.lines.length > 0 || rawSections.length === 0) {
       rawSections.push(current);
     }
 
-    const extracted: ExtractedDocSection[] = rawSections.slice(0, 18).map((s, idx) => {
+    const extracted: ExtractedDocSection[] = rawSections.slice(0, 22).map((s, idx) => {
       const secId = `sec-${idx + 1}`;
       const subSections = buildSubSectionsFromLines({
         secId,
@@ -3244,6 +3371,111 @@ export async function extractWordSectionsFromGoogleDoc(
 }
 
 /**
+ * Safely accepts all Track Changes in OOXML (`word/document.xml`, headers, footers, etc.)
+ * using a depth-aware container scanner so nested `<w:del>` / `<w:moveFrom>` tags are cleanly removed
+ * and `<w:ins>` / `<w:moveTo>` tags are unwrapped without ever corrupting XML tag balance.
+ * This preserves 100% of original tables, borders, cell widths, BiauKai/custom fonts, and images,
+ * while preventing Google Drive's `.docx` -> Google Docs converter from returning `500 Internal Error`.
+ */
+function acceptTrackChangesInOoxml(xml: string): string {
+  // 1. Remove standalone property-change history metadata blocks
+  let s = xml
+    .replace(/<w:rPrChange\b[\s\S]*?<\/w:rPrChange>/g, '')
+    .replace(/<w:pPrChange\b[\s\S]*?<\/w:pPrChange>/g, '')
+    .replace(/<w:tblPrChange\b[\s\S]*?<\/w:tblPrChange>/g, '')
+    .replace(/<w:tblPrExChange\b[\s\S]*?<\/w:tblPrExChange>/g, '')
+    .replace(/<w:trPrChange\b[\s\S]*?<\/w:trPrChange>/g, '')
+    .replace(/<w:tcPrChange\b[\s\S]*?<\/w:tcPrChange>/g, '')
+    .replace(/<w:sectPrChange\b[\s\S]*?<\/w:sectPrChange>/g, '')
+    .replace(/<w:tblGridChange\b[\s\S]*?<\/w:tblGridChange>/g, '');
+
+  // 2. Remove self-closing track-change markers (e.g. <w:del/> or <w:ins/> inside <w:rPr>/<w:pPr>) and range markers
+  s = s
+    .replace(/<w:(?:del|ins|moveFrom|moveTo)\b[^>]*\/>/g, '')
+    .replace(
+      /<w:(?:moveFromRangeStart|moveFromRangeEnd|moveToRangeStart|moveToRangeEnd|customXmlInsRangeStart|customXmlInsRangeEnd|customXmlDelRangeStart|customXmlDelRangeEnd|customXmlMoveFromRangeStart|customXmlMoveFromRangeEnd|customXmlMoveToRangeStart|customXmlMoveToRangeEnd)\b[^>]*\/>/g,
+      ''
+    );
+
+  // 3. Remove paired <w:del ...>...</w:del> and <w:moveFrom ...>...</w:moveFrom> containers using a depth-aware scanner
+  const stripPairedContainer = (input: string, tagName: string): string => {
+    const openPrefix = `<${tagName}`;
+    const closeTag = `</${tagName}>`;
+    let out = '';
+    let idx = 0;
+    let depth = 0;
+    while (idx < input.length) {
+      const nextOpen = input.indexOf(openPrefix, idx);
+      const nextClose = depth > 0 ? input.indexOf(closeTag, idx) : -1;
+
+      if (depth === 0) {
+        if (nextOpen === -1) {
+          out += input.slice(idx);
+          break;
+        }
+        const afterChar = input[nextOpen + openPrefix.length];
+        if (
+          afterChar === ' ' ||
+          afterChar === '>' ||
+          afterChar === '\t' ||
+          afterChar === '\r' ||
+          afterChar === '\n'
+        ) {
+          out += input.slice(idx, nextOpen);
+          const tagEnd = input.indexOf('>', nextOpen);
+          if (tagEnd !== -1 && input[tagEnd - 1] === '/') {
+            idx = tagEnd + 1;
+          } else if (tagEnd !== -1) {
+            depth = 1;
+            idx = tagEnd + 1;
+          } else {
+            out += input.slice(nextOpen);
+            break;
+          }
+        } else {
+          out += input.slice(idx, nextOpen + openPrefix.length);
+          idx = nextOpen + openPrefix.length;
+        }
+      } else {
+        if (nextClose === -1) {
+          break;
+        }
+        if (nextOpen !== -1 && nextOpen < nextClose) {
+          const afterChar = input[nextOpen + openPrefix.length];
+          if (
+            afterChar === ' ' ||
+            afterChar === '>' ||
+            afterChar === '\t' ||
+            afterChar === '\r' ||
+            afterChar === '\n'
+          ) {
+            const tagEnd = input.indexOf('>', nextOpen);
+            if (tagEnd !== -1 && input[tagEnd - 1] !== '/') {
+              depth++;
+            }
+            idx = (tagEnd !== -1 ? tagEnd : nextOpen) + 1;
+            continue;
+          }
+        }
+        depth--;
+        idx = nextClose + closeTag.length;
+      }
+    }
+    return out;
+  };
+
+  s = stripPairedContainer(s, 'w:del');
+  s = stripPairedContainer(s, 'w:moveFrom');
+
+  // 4. Unwrap <w:ins ...>...</w:ins> and <w:moveTo ...>...</w:moveTo> (keep inner children, remove wrapper tags)
+  s = s
+    .replace(/<w:(?:ins|moveTo)(?:\s[^>]*)?>/g, '')
+    .replace(/<\/w:(?:ins|moveTo)>/g, '');
+
+  return s;
+}
+
+/**
  * Fast local `.docx` chapter and content parser (`word/document.xml`).
  * Accepts track changes (`<w:ins>` kept, `<w:del>` / `<w:moveFrom>` stripped)
  * and extracts structured sections in < 20ms even before or without Google Drive upload.
@@ -3261,16 +3493,33 @@ export function extractWordSectionsFromDocxBuffer(
       docEntry.compressionMethod === 8
         ? inflateRawSync(docEntry.compressedData)
         : docEntry.compressedData;
-    const cleanedXml = rawXml
-      .toString('utf8')
-      .replace(/<w:del\b[\s\S]*?<\/w:del>/g, '')
-      .replace(/<w:moveFrom\b[\s\S]*?<\/w:moveFrom>/g, '');
+    const cleanedXml = acceptTrackChangesInOoxml(rawXml.toString('utf8'));
+    const bodyMatch = cleanedXml.match(/<w:body>([\s\S]*?)<\/w:body>/);
+    const bodyXml = bodyMatch ? bodyMatch[1] : cleanedXml;
 
-    const blocks: Array<{ isHeading: boolean; text: string }> = [];
-    const pRegex = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+    // Scan top-level paragraphs vs tables by tracking <w:tbl> and </w:tbl> depth
+    // so table cell paragraphs with <w:outlineLvl> are NEVER misidentified as top-level document chapters!
+    const blocks: Array<{
+      isHeading: boolean;
+      isSubHeading: boolean;
+      isTopLevel: boolean;
+      text: string;
+    }> = [];
+    const tokenRegex = /<w:tbl(?:\s[^>]*)?>|<\/w:tbl>|<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+    let tblDepth = 0;
     let m: RegExpExecArray | null;
-    while ((m = pRegex.exec(cleanedXml)) !== null) {
-      const pXml = m[0];
+    while ((m = tokenRegex.exec(bodyXml)) !== null) {
+      const tok = m[0];
+      if (tok.startsWith('<w:tbl')) {
+        tblDepth++;
+        continue;
+      }
+      if (tok === '</w:tbl>') {
+        tblDepth = Math.max(0, tblDepth - 1);
+        continue;
+      }
+
+      const pXml = tok;
       const tMatches = [...pXml.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)];
       if (tMatches.length === 0) continue;
       const txt = unescapeXml(tMatches.map((tm) => tm[1]).join(''))
@@ -3278,19 +3527,50 @@ export function extractWordSectionsFromDocxBuffer(
         .trim();
       if (!txt) continue;
 
+      if (tblDepth > 0) {
+        // Inside a table cell: include text in chapter body content, but never treat as a top-level chapter heading
+        blocks.push({ isHeading: false, isSubHeading: false, isTopLevel: false, text: txt });
+        continue;
+      }
+
       const styleMatch = pXml.match(/<w:pStyle\s+w:val="([^"]+)"/);
       const rawStyle = styleMatch ? styleMatch[1] : '';
+      const isTocStyle = /^(?:toc\s*[1-9]|11|25|33|41|51|[6-9])$/i.test(rawStyle);
+      if (isTocStyle) {
+        blocks.push({ isHeading: false, isSubHeading: false, isTopLevel: false, text: txt });
+        continue;
+      }
+
+      const outlineMatch = pXml.match(/<w:outlineLvl\s+w:val="([^"]+)"/);
+      const outlineVal = outlineMatch ? outlineMatch[1] : '';
+
       const normStyle =
-        /^(?:heading\s*[123]|[123]|title|toc\s*heading)$/i.test(rawStyle) ||
-        rawStyle.startsWith('Heading')
+        /^(?:heading\s*1|1|title|afff)$/i.test(rawStyle) ||
+        rawStyle === 'Heading1' ||
+        outlineVal === '0'
           ? 'HEADING_1'
+          : /^(?:heading\s*[23]|[23])$/i.test(rawStyle) ||
+            rawStyle === 'Heading2' ||
+            rawStyle === 'Heading3' ||
+            outlineVal === '1'
+          ? 'HEADING_2'
           : '';
-      const hasOutlineLvl = /<w:outlineLvl\s+w:val="[01]"/.test(pXml);
+
+      const isMajor =
+        isMajorDocSectionHeading(txt, normStyle) ||
+        (outlineVal === '0' &&
+          txt.length <= 48 &&
+          !isSubSectionDocHeading(txt) &&
+          !/(\t|\.{2,}|\s{2,})\d{1,3}$/.test(txt));
+      const isSub =
+        !isMajor &&
+        (isSubSectionDocHeading(txt, normStyle) ||
+          (outlineVal === '1' && txt.length <= 48));
 
       blocks.push({
-        isHeading:
-          isMajorDocSectionHeading(txt, normStyle) ||
-          (hasOutlineLvl && txt.length <= 48),
+        isHeading: isMajor,
+        isSubHeading: isSub,
+        isTopLevel: true,
         text: txt,
       });
     }
@@ -3299,11 +3579,11 @@ export function extractWordSectionsFromDocxBuffer(
 
     const rawSections: Array<{
       title: string;
-      lines: Array<{ text: string; headingId?: string }>;
+      lines: Array<{ text: string; headingId?: string; isTopLevel?: boolean }>;
     }> = [];
     let current: {
       title: string;
-      lines: Array<{ text: string; headingId?: string }>;
+      lines: Array<{ text: string; headingId?: string; isTopLevel?: boolean }>;
     } = {
       title: cleanDocHeadingText(blocks[0].text).slice(0, 42),
       lines: [],
@@ -3313,15 +3593,15 @@ export function extractWordSectionsFromDocxBuffer(
       const b = blocks[i];
       if (i > 0 && b.isHeading && rawSections.length < 22) {
         if (current.lines.length === 0) {
-          current.lines.push({ text: current.title });
+          current.lines.push({ text: current.title, isTopLevel: true });
         }
         rawSections.push(current);
         current = {
           title: cleanDocHeadingText(b.text).slice(0, 42),
-          lines: [{ text: b.text }],
+          lines: [{ text: b.text, isTopLevel: b.isTopLevel }],
         };
       } else {
-        current.lines.push({ text: b.text });
+        current.lines.push({ text: b.text, isTopLevel: b.isTopLevel });
       }
     }
     if (current.lines.length > 0 || rawSections.length === 0) {
@@ -3353,55 +3633,54 @@ export function extractWordSectionsFromDocxBuffer(
 }
 
 /**
- * Cleans track-change revision bloat (`<w:del>`, `<w:rPrChange>`, `<w:pPrChange>`, `<w:ins>`)
- * and compacts oversized embedded raster media (`word/media/*` > 600 KB) so large 25MB+
- * `.docx` proposals convert to Native Google Docs (`application/vnd.google-apps.document`)
- * in 2–3 seconds without hitting Google Drive's import conversion limit or timeout.
+ * Prepares a `.docx` buffer for high-fidelity Google Docs conversion (`application/vnd.google-apps.document`)
+ * while preserving 100% of original tables, cell borders, BiauKai/custom fonts, headers/footers, and images:
+ * - Safely accepts Track Changes across `word/*.xml` using `acceptTrackChangesInOoxml` so nested `<w:del>` / `<w:ins>`
+ *   tags inside complex tables never trigger Google Drive's `500 Internal Error`.
+ * - Optionally compacts oversized media (`options.compactLargeMedia = true`) ONLY as a secondary fallback if needed.
  */
-function buildCompactDocxForGoogleConversion(docxBuf: Buffer): Buffer {
+function buildDocxForGoogleConversion(
+  docxBuf: Buffer,
+  options?: { compactLargeMedia?: boolean }
+): Buffer {
   try {
     const entries = parseZipEntries(docxBuf);
     if (!entries) return docxBuf;
 
-    const placeholderPng = buildFallbackDiagramPngBuffer();
-    const placeholderCompressed = deflateRawSync(placeholderPng);
-    const placeholderCrc = crc32(placeholderPng);
+    // 1x1 transparent PNG used only if `compactLargeMedia` fallback is explicitly requested
+    const tinyPng = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      'base64'
+    );
+    const tinyCompressed = deflateRawSync(tinyPng);
+    const tinyCrc = crc32(tinyPng);
 
     for (const entry of entries) {
-      if (entry.fileName === 'word/document.xml') {
+      if (entry.fileName.startsWith('word/') && entry.fileName.endsWith('.xml')) {
         try {
           const rawXml =
             entry.compressionMethod === 8
               ? inflateRawSync(entry.compressedData)
               : entry.compressedData;
-          let xmlStr = rawXml.toString('utf8');
-          // Only strip harmless property-change history tags (<w:rPrChange>, <w:pPrChange>, etc.)
-          // and standalone range markers without regex-touching nested <w:del> or <w:ins> containers,
-          // ensuring 100% well-formed XML so Google Docs never fails to open the document!
-          xmlStr = xmlStr
-            .replace(/<w:rPrChange\b[\s\S]*?<\/w:rPrChange>/g, '')
-            .replace(/<w:pPrChange\b[\s\S]*?<\/w:pPrChange>/g, '')
-            .replace(/<w:tblPrChange\b[\s\S]*?<\/w:tblPrChange>/g, '')
-            .replace(/<w:trPrChange\b[\s\S]*?<\/w:trPrChange>/g, '')
-            .replace(/<w:tcPrChange\b[\s\S]*?<\/w:tcPrChange>/g, '')
-            .replace(/<w:sectPrChange\b[\s\S]*?<\/w:sectPrChange>/g, '');
-          const cleanBuf = Buffer.from(xmlStr, 'utf8');
+          const cleanXmlStr = acceptTrackChangesInOoxml(rawXml.toString('utf8'));
+          const cleanBuf = Buffer.from(cleanXmlStr, 'utf8');
           entry.compressedData =
             entry.compressionMethod === 8 ? deflateRawSync(cleanBuf) : cleanBuf;
           entry.uncompressedSize = cleanBuf.length;
           entry.crc = crc32(cleanBuf);
         } catch {
-          // keep original document.xml if decompression fails
+          // keep original XML entry if decompression fails
         }
       } else if (
+        options?.compactLargeMedia &&
         entry.fileName.startsWith('word/media/') &&
-        entry.uncompressedSize > 500_000 &&
-        /\.(png|jpe?g|bmp|gif|tiff?)$/i.test(entry.fileName)
+        (entry.uncompressedSize > 800_000 ||
+          /\.(emf|wdp|wmf|tiff?)$/i.test(entry.fileName))
       ) {
         entry.compressionMethod = 8;
-        entry.compressedData = placeholderCompressed;
-        entry.uncompressedSize = placeholderPng.length;
-        entry.crc = placeholderCrc;
+        entry.compressedData = tinyCompressed;
+        entry.uncompressedSize = tinyPng.length;
+        entry.crc = tinyCrc;
       }
     }
 
@@ -3409,78 +3688,6 @@ function buildCompactDocxForGoogleConversion(docxBuf: Buffer): Buffer {
   } catch {
     return docxBuf;
   }
-}
-
-/**
- * Fallback: builds a clean, 100% valid minimal `.docx` from extracted sections
- * when a massive or heavily track-changed `.docx` exceeds Google Docs' native import limit.
- */
-function buildCleanDocxFromExtractedSections(
-  title: string,
-  sections: ExtractedDocSection[]
-): Buffer {
-  const contentTypesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-</Types>`;
-
-  const relsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
-</Relationships>`;
-
-  const paragraphsXml: string[] = [
-    `<w:p><w:r><w:rPr><w:b/><w:sz w:val="32"/></w:rPr><w:t>${escapeXml(
-      title.replace(/\.docx?$/i, '')
-    )}</w:t></w:r></w:p>`,
-  ];
-
-  for (const sec of sections) {
-    paragraphsXml.push(
-      `<w:p><w:r><w:rPr><w:b/><w:sz w:val="28"/></w:rPr><w:t>${escapeXml(
-        `${sec.code} ${sec.title}`
-      )}</w:t></w:r></w:p>`
-    );
-    const lines = sec.content.split(/\n+/).map((l) => l.trim()).filter(Boolean);
-    for (const line of lines) {
-      if (line === sec.title) continue;
-      paragraphsXml.push(
-        `<w:p><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${escapeXml(
-          line
-        )}</w:t></w:r></w:p>`
-      );
-    }
-  }
-
-  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:body>
-    ${paragraphsXml.join('\n    ')}
-  </w:body>
-</w:document>`;
-
-  const makeEntry = (fileName: string, content: string): ZipEntry => {
-    const raw = Buffer.from(content, 'utf8');
-    const compressed = deflateRawSync(raw);
-    return {
-      fileName,
-      compressionMethod: 8,
-      modTime: 0,
-      modDate: 0,
-      crc: crc32(raw),
-      compressedData: compressed,
-      uncompressedSize: raw.length,
-      externalAttrs: 0,
-    };
-  };
-
-  return buildZipBuffer([
-    makeEntry('[Content_Types].xml', contentTypesXml),
-    makeEntry('_rels/.rels', relsXml),
-    makeEntry('word/document.xml', documentXml),
-  ]);
 }
 
 /**
@@ -3618,16 +3825,15 @@ export async function resolveOrUploadDroppedDocument(params: {
         ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         : 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
 
-    // For large `.docx` (> 6MB) or track-changes `.docx`, prepare a compact conversion-ready buffer
-    const isLargeOrTrackChangesDocx =
-      docType === 'word' &&
-      (rawUploadBuf.length > 6 * 1024 * 1024 || cleanName.includes('追蹤修訂'));
-    const primaryBuf = isLargeOrTrackChangesDocx
-      ? buildCompactDocxForGoogleConversion(rawUploadBuf)
-      : rawUploadBuf;
-    const cleanStructuredBuf =
-      docType === 'word' && localDocxSections && localDocxSections.length > 0
-        ? buildCleanDocxFromExtractedSections(cleanName, localDocxSections)
+    // Always preserve 100% of original document XML structure, tables, cell borders, BiauKai/custom fonts, and images!
+    // Never degrade or rebuild a plain-text placeholder document.
+    const fullFidelityAcceptedBuf =
+      docType === 'word'
+        ? buildDocxForGoogleConversion(rawUploadBuf, { compactLargeMedia: false })
+        : rawUploadBuf;
+    const compactMediaAcceptedBuf =
+      docType === 'word'
+        ? buildDocxForGoogleConversion(rawUploadBuf, { compactLargeMedia: true })
         : null;
 
     const uploadAttemptConfigs: Array<{
@@ -3635,23 +3841,22 @@ export async function resolveOrUploadDroppedDocument(params: {
       targetMime: string;
       parentFolderId?: string;
     }> = [
-      { buf: primaryBuf, targetMime: targetGoogleMime },
-      ...(primaryBuf !== rawUploadBuf
-        ? []
-        : docType === 'word'
-        ? [{ buf: buildCompactDocxForGoogleConversion(rawUploadBuf), targetMime: targetGoogleMime }]
-        : []),
-      ...(cleanStructuredBuf
+      { buf: fullFidelityAcceptedBuf, targetMime: targetGoogleMime },
+      ...(compactMediaAcceptedBuf
         ? [
-            { buf: cleanStructuredBuf, targetMime: targetGoogleMime },
+            { buf: compactMediaAcceptedBuf, targetMime: targetGoogleMime },
             {
-              buf: cleanStructuredBuf,
+              buf: compactMediaAcceptedBuf,
               targetMime: targetGoogleMime,
               parentFolderId: '14GmQIb8K3DGU6a-6WogdaSFF9rs00sxy',
             },
           ]
         : []),
-      { buf: primaryBuf, targetMime: targetGoogleMime, parentFolderId: '14GmQIb8K3DGU6a-6WogdaSFF9rs00sxy' },
+      {
+        buf: fullFidelityAcceptedBuf,
+        targetMime: targetGoogleMime,
+        parentFolderId: '14GmQIb8K3DGU6a-6WogdaSFF9rs00sxy',
+      },
     ];
 
     outerUploadLoop: for (const token of tokens) {
