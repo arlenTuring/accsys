@@ -161,7 +161,7 @@ async function exchangeRefreshToken(params: {
  */
 export async function getCandidateDriveWriteTokens(
   userEmail?: string,
-  options?: { includeSlowFallbacks?: boolean }
+  options?: { includeSlowFallbacks?: boolean; currentUserOnly?: boolean }
 ): Promise<string[]> {
   const tokens: string[] = [];
   const addToken = (t: string | null | undefined) => {
@@ -188,10 +188,10 @@ export async function getCandidateDriveWriteTokens(
 
   // 1. Saved OAuth token from user login — FAST PATH (0ms if cached accessToken is still valid)
   const store = readTokenStore();
-  const emailKey = userEmail?.trim().toLowerCase() || store.latestEmail;
+  const emailKey = userEmail?.trim().toLowerCase() || (options?.currentUserOnly ? undefined : store.latestEmail);
   const entries = [
     ...(emailKey && store.byEmail[emailKey] ? [store.byEmail[emailKey]] : []),
-    ...Object.values(store.byEmail),
+    ...(options?.currentUserOnly ? [] : Object.values(store.byEmail)),
   ];
   for (const entry of entries) {
     const isFresh =
@@ -222,6 +222,7 @@ export async function getCandidateDriveWriteTokens(
     }
   }
 
+  if (options?.currentUserOnly) return tokens;
   // If we already have a valid user OAuth token and slow fallbacks aren't explicitly needed, return immediately in 0ms!
   if (tokens.length > 0 && !options?.includeSlowFallbacks) {
     return tokens;
@@ -3251,7 +3252,7 @@ export async function extractWordSectionsFromGoogleDoc(
       };
     };
 
-    const blocks: Array<{ isHeading: boolean; text: string; headingId?: string }> = [];
+    const blocks: Array<{ isHeading: boolean; text: string; headingId?: string; isTopLevel?: boolean }> = [];
 
     for (const el of doc.body?.content ?? []) {
       if (el.paragraph) {
@@ -3266,6 +3267,7 @@ export async function extractWordSectionsFromGoogleDoc(
 
         blocks.push({
           isHeading: isMajorDocSectionHeading(txt, style),
+          isTopLevel: isMajorDocSectionHeading(txt, style),
           text: txt,
           headingId: hId,
         });

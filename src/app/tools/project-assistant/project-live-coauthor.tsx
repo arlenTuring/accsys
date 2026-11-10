@@ -81,6 +81,7 @@ type QueuedPromptItem = {
   attachedRefs: StagedRefAttachment[];
   scopeMode: 'whole_doc' | 'target_region';
   linkedSelectionSnapshot: {
+    anchor?: import('@/lib/projects/doc-selection').DocAnchor;
     sectionId?: string;
     label: string;
     snippetText: string;
@@ -724,6 +725,7 @@ export function ProjectLiveCoAuthor({
     snippetText: '',
   });
   const [linkedSelection, setLinkedSelection] = useState<{
+    anchor?: import('@/lib/projects/doc-selection').DocAnchor;
     sectionId?: string;
     label: string;
     snippetText: string;
@@ -743,6 +745,7 @@ export function ProjectLiveCoAuthor({
     allowCursorContext: boolean;
     startedAt: number;
     promise: Promise<{
+      anchor?: import('@/lib/projects/doc-selection').DocAnchor;
       sectionId?: string;
       sectionLabel: string;
       snippetText: string;
@@ -2163,6 +2166,7 @@ export function ProjectLiveCoAuthor({
     orbTopPx: number,
     allowCursorContext = false
   ): Promise<{
+    anchor?: import('@/lib/projects/doc-selection').DocAnchor;
     sectionId?: string;
     sectionLabel: string;
     snippetText: string;
@@ -2190,6 +2194,7 @@ export function ProjectLiveCoAuthor({
       let visualHeadingHint: string | undefined;
       let visualBeforeFallback: string | undefined;
       let visualAfterFallback: string | undefined;
+      let visualAnchor: import('@/lib/projects/doc-selection').DocAnchor | undefined;
 
       // 1. Check DOM selection in parent window first
       const domSelected = window.getSelection()?.toString().trim();
@@ -2232,6 +2237,7 @@ export function ProjectLiveCoAuthor({
           });
           if (res.ok) {
             const data = (await res.json()) as {
+              anchor?: import('@/lib/projects/doc-selection').DocAnchor;
               resolved?: {
                 mode?: 'highlight' | 'cursor';
                 selectedText?: string;
@@ -2241,6 +2247,7 @@ export function ProjectLiveCoAuthor({
               } | null;
             };
             visualMode = data.resolved?.mode;
+            visualAnchor = data.anchor;
             visualHeadingHint = data.resolved?.sectionHeading?.trim();
             visualBeforeFallback = data.resolved?.visibleBeforeText?.trim();
             visualAfterFallback = data.resolved?.visibleAfterText?.trim();
@@ -2273,6 +2280,17 @@ export function ProjectLiveCoAuthor({
       }
 
       if (verifiedExplicitText) {
+        if (visualAnchor) {
+          return {
+            anchor: visualAnchor,
+            sectionId: undefined,
+            sectionLabel: visualHeadingHint || '框選段落',
+            snippetText: visualAnchor.paragraphs.map((p) => p.text).join('\n'),
+            contextBefore: visualBeforeFallback || '', contextAfter: visualAfterFallback || '',
+            fullContextText: visualAnchor.paragraphs.map((p) => p.text).join('\n'),
+            blockIndex: undefined, insertMode: 'replace' as const,
+          };
+        }
         const matchedFromDoc = matchTextInActiveDocumentWithContext(
           verifiedExplicitText,
           visualHeadingHint
@@ -2402,6 +2420,7 @@ export function ProjectLiveCoAuthor({
           blockIndex: visualResolved.blockIndex,
         }));
         const upgradedLinked = {
+          anchor: visualResolved.anchor,
           sectionId: visualResolved.sectionId,
           label: visualResolved.sectionLabel,
           snippetText: visualResolved.snippetText,
@@ -3234,6 +3253,7 @@ export function ProjectLiveCoAuthor({
             autoResolved.cursorAnchorAfter)
         ) {
           const nextAutoLinked = {
+            anchor: autoResolved.anchor,
             sectionId: autoResolved.sectionId,
             label: autoResolved.sectionLabel,
             snippetText: autoResolved.snippetText,
@@ -3333,6 +3353,7 @@ export function ProjectLiveCoAuthor({
                 selectedRowIndex: item.selectedRowIndexSnapshot ?? selectedCell?.row ?? null,
                 currentTargetContent: effectiveTargetContent,
                 linkedSnippetText: effectiveLinked?.snippetText,
+                selectionAnchor: effectiveLinked?.anchor,
                 userExplicitlyLockedTarget: Boolean(
                   effectiveLinked || userLockedSectionInSidebarRef.current
                 ),
@@ -3364,10 +3385,10 @@ export function ProjectLiveCoAuthor({
         }
       }
 
-      if (modifiedParagraphText) {
+      if (modifiedParagraphText && data.writeResult?.status === 'applied') {
         if (linkedSelection) {
           setLinkedSelection((prev) =>
-            prev ? { ...prev, snippetText: modifiedParagraphText } : null
+            prev ? { ...prev, snippetText: modifiedParagraphText, anchor: data.selectionAnchor } : null
           );
         }
         setSelectionOrb((prev) =>
@@ -3390,15 +3411,9 @@ export function ProjectLiveCoAuthor({
         );
       } else if (data.driveFileUpdated && !data.driveLiveStreaming) {
         setIframeReloadSeq((s) => s + 1);
-      } else if (data.needsDriveOAuth && modifiedParagraphText && activeDoc) {
-        const fallbackDriveId =
-          activeDoc.docType === 'word'
-            ? '1dQVfqQeBzvu0ezosoMUM09j1jDIYp15fVsRAiO8N3gY'
-            : activeDoc.docType === 'excel'
-            ? '1wiEayjDmsuI6s0qouLQGyw_ZZ6GNxom9'
-            : '1fs5Kpu6kh9Lt_527Or-_CQiTh_CULw5B';
+      } else if (data.needsDriveOAuth && modifiedParagraphText && activeDoc?.driveItemId) {
         pendingDrivePatchRef.current = {
-          driveFileId: activeDoc.driveItemId || fallbackDriveId,
+          driveFileId: activeDoc.driveItemId,
           targetSnippet:
             linkedSelection?.snippetText || currentTargetInfo.content || '',
           newContent: modifiedParagraphText,
@@ -3407,7 +3422,9 @@ export function ProjectLiveCoAuthor({
         openDriveWriteAuthPopup();
       }
 
-      const displayReply =
+      const displayReply = data.writeResult && data.writeResult.status !== 'applied'
+        ? `${data.writeResult.message}\n\n建議內容：\n${modifiedParagraphText ?? ''}`
+        :
         modifiedParagraphText && attachedRefs.length === 0
           ? modifiedParagraphText
           : stripClientAuxiliaryPhrases(data.reply || '已完成。');
@@ -3443,6 +3460,7 @@ export function ProjectLiveCoAuthor({
             createNewBlankDocument(op.docType);
           }
         } else if (op.kind === 'write_word_section' && activeDoc) {
+          if (data.writeResult?.status !== 'applied') continue;
           hasStreamAnimation = true;
           setScopeMode('target_region');
           const matchedSec = (activeDoc.wordSections ?? []).find(
@@ -5088,15 +5106,7 @@ export function ProjectLiveCoAuthor({
             const matchedDriveId =
               activeDoc.driveItemId ||
               findMatchingProjectAndDriveItem(activeDoc.title).driveItem?.id;
-            const isUploadedCustomDoc = activeDoc.id.startsWith('upload-');
-            const fallbackDriveId = isUploadedCustomDoc
-              ? undefined
-              : activeDoc.docType === 'word'
-              ? '1dQVfqQeBzvu0ezosoMUM09j1jDIYp15fVsRAiO8N3gY'
-              : activeDoc.docType === 'excel'
-              ? '1wiEayjDmsuI6s0qouLQGyw_ZZ6GNxom9'
-              : '1fs5Kpu6kh9Lt_527Or-_CQiTh_CULw5B';
-            const effectiveDriveId = matchedDriveId || fallbackDriveId;
+            const effectiveDriveId = matchedDriveId;
             const isNativeGoogleDocId = Boolean(effectiveDriveId && effectiveDriveId.length >= 40);
             const nativeEditorUrl = effectiveDriveId
               ? buildDriveEmbedPreviewUrl(

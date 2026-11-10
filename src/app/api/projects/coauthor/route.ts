@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getVertexAccessToken } from '@/lib/ai-chat/auth';
+import { anchorDocumentSelection } from '@/lib/projects/doc-selection';
+import type { DocAnchor } from '@/lib/projects/doc-selection';
+import { readGoogleDocument, writeAnchoredDocument } from '@/lib/projects/anchored-doc-write';
 import { loadAiChatConfig } from '@/lib/ai-chat/config';
 import {
   filterYearGroupsForViewer,
@@ -60,6 +63,7 @@ type CoAuthorRequest = {
     selectedRowIndex?: number | null;
     currentTargetContent?: string;
     linkedSnippetText?: string;
+    selectionAnchor?: DocAnchor;
     insertMode?: 'replace' | 'insert_at_cursor' | 'insert_before' | 'insert_after';
     cursorAnchorBefore?: string;
     cursorAnchorAfter?: string;
@@ -127,6 +131,9 @@ export type CoAuthorOperation =
     };
 
 export type CoAuthorResponse = {
+  intent?: 'edit' | 'discuss';
+  selectionAnchor?: DocAnchor;
+  writeResult?: { status: 'applied' | 'not_applied' | 'needs_auth' | 'unknown'; reason: string; message: string };
   refusedCompanyAdmin?: boolean;
   reply: string;
   operations: CoAuthorOperation[];
@@ -654,10 +661,12 @@ ${effectiveProjectsDigest}【重要規則】：
    - 絕對禁止在 reply 或 content 中出現諸如「已為您強化『1.1 通則 General — 本章概要 Summary』段落。」、「已為您修改…」、「已為您更新…」、「好的，以下是…」、「本次修訂依據…」等輔助詞或修改說明！
    - 當使用者針對框選段落或章節要求修改、強化、精簡、改寫時：
      * operations[0].content 必須直接輸出修改後的正式段落內文（若使用者框選的是單一段落，請直接針對該段落進行強化或改寫，保持原本段落結構與上下文銜接，不要擅自改成 1. 2. 3. 整章條列）。
+     * 框選多個段落時，輸出的段落數必須與框選原文相同，依原有順序以換行分隔，保留各段格式。
      * reply 也請直接輸出修改後的正式內文本身，不要加任何「已為您強化…段落。」等前言後語！
 7. 當使用者要求調整 Word 排版、建立或隱藏目錄索引（TOC）、頁碼、頁首頁尾、字型（如改標楷體/明體/黑體/Times New Roman）、字級大小、段落行距、首行縮排或章節重新編號時，請在 operations 中回傳 format_word_document 操作！
 8. 請只回傳合法 JSON 物件（不要加上其他非 JSON 的前後綴說明）：
 {
+  "intent": "edit" | "discuss",
   "reply": "直接輸出修改後的正式內文，或針對使用者提問的完整查證回覆（嚴禁加上『已為您強化…段落。』等輔助詞）",
   "operations": [
     { "kind": "write_word_section", "sectionId": "目標sectionId", "sectionTitle": "章節標題", "content": "正式文件段落內文", "mode": "replace" | "append" | "add_section", "newSectionCode": "5.0" },
@@ -794,6 +803,7 @@ ${effectiveProjectsDigest}【重要規則】：
     }
 
     let parsed: {
+      intent?: 'edit' | 'discuss';
       reply?: string;
       operations?: Array<Record<string, unknown>>;
     } | null = null;
@@ -808,27 +818,15 @@ ${effectiveProjectsDigest}【重要規則】：
         try {
           parsed = JSON.parse(jsonCandidate);
         } catch {
-          // If the model included literal newlines inside JSON string values, fall back to regex or raw text
-          const replyMatch = jsonCandidate.match(/"reply"\s*:\s*"([\s\S]*?)"\s*(?:,\s*"operations"|\})/);
-          if (replyMatch?.[1]) {
-            parsed = {
-              reply: replyMatch[1]
-                .replace(/\\n/g, '\n')
-                .replace(/\\"/g, '"'),
-              operations: [],
-            };
-          }
+          return { response: null, errorReason: '模型回傳格式無法解析' };
         }
       }
       if (!parsed) {
-        parsed = {
-          reply: stripMarkdownAsterisks(rawText),
-          operations: [],
-        };
+        return { response: null, errorReason: '模型回傳格式無法解析' };
       }
     }
 
-    if (!parsed?.reply) {
+    if (!parsed?.reply || !['edit', 'discuss'].includes(parsed.intent ?? '') || !Array.isArray(parsed.operations) || (parsed.intent === 'edit' && parsed.operations.length === 0) || (parsed.intent === 'discuss' && parsed.operations.length > 0)) {
       return { response: null, errorReason: '模型回傳格式無法解析' };
     }
 
@@ -978,6 +976,7 @@ ${effectiveProjectsDigest}【重要規則】：
 
     return {
       response: {
+        intent: parsed.intent,
         reply: cleanReply,
         operations: ops,
         webSearch: webSearchMeta,
@@ -1907,6 +1906,7 @@ async function buildSmartProjectCoAuthorResponse(
 }
 
 export async function POST(request: NextRequest) {
+  const correlationId = crypto.randomUUID();
   const employee = await getCurrentEmployee();
   if (!employee) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
@@ -1930,13 +1930,6 @@ export async function POST(request: NextRequest) {
   }
   body.prompt = prompt;
 
-  // Pre-warm the Google Doc paragraph span index in parallel while Vertex AI is generating the response
-  if (body.activeDoc?.docType === 'word' && body.activeDoc.driveItemId) {
-    prewarmGoogleDocParagraphCache({
-      driveFileId: body.activeDoc.driveItemId,
-      userEmail: employee.email,
-    });
-  }
 
   const viewer: ProjectViewerContext = {
     name: employee.name,
@@ -2015,7 +2008,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(refusal);
   }
 
-  const isDiscussionTurn = isDiscussionOrReviewIntent(prompt, body.scopeMode, body.history);
   const vertexOutcome = await tryVertexStructuredCoAuthor(
     body,
     digestText,
@@ -2036,27 +2028,36 @@ export async function POST(request: NextRequest) {
 
   const vertexResult = vertexOutcome.response;
   const ops = [...vertexResult.operations];
-  if (
-    ops.length === 0 &&
-    !isDiscussionTurn &&
-    hasExplicitDocumentWriteIntent(prompt) &&
-    body.activeDoc?.docType === 'word' &&
-    vertexResult.reply.trim()
-  ) {
-    const cleanBody = stripAuxiliaryMetaPhrases(vertexResult.reply);
-    ops.push({
-      kind: 'write_word_section',
-      sectionId: body.activeDoc.selectedTargetId,
-      sectionTitle: body.activeDoc.selectedTargetLabel || '文件段落',
-      content: cleanBody,
-      mode: 'replace',
-    });
-  }
   const finalResult: CoAuthorResponse = {
     ...vertexResult,
     operations: ops,
     graphRetrieval: vertexResult.webSearch ? undefined : graphRetrievalMeta,
   };
+
+  // Resolve the selection against the actual document before any write.
+  if (body.activeDoc?.linkedSnippetText && finalResult.operations.some((op) => op.kind === 'write_word_section')) {
+    const anchor = body.activeDoc.selectionAnchor;
+    const op = finalResult.operations.find((entry) => entry.kind === 'write_word_section');
+    if (!anchor || !body.activeDoc.driveItemId || anchor.docId !== body.activeDoc.driveItemId || !Array.isArray(anchor.paragraphs) || !anchor.revisionId || !Number.isInteger(anchor.startIndex) || !Number.isInteger(anchor.endIndex)) {
+      finalResult.writeResult = { status: 'not_applied', reason: 'unverified_selection', message: '未寫入文件：無法確認框選段落，請重新框選。' };
+    } else if (op?.kind === 'write_word_section') {
+      const tokens = await getCandidateDriveWriteTokens(employee.email, { currentUserOnly: true });
+      const result = tokens[0] ? await writeAnchoredDocument(tokens[0], anchor, op.content) : { ok: false as const, reason: 'no_tokens' as const };
+      finalResult.writeResult = result.ok
+        ? { status: 'applied', reason: 'applied', message: '已更新文件。' }
+        : { status: result.reason === 'verification_unknown' ? 'unknown' : result.reason === 'no_tokens' || result.reason === 'auth_failed' ? 'needs_auth' : 'not_applied', reason: result.reason, message: result.reason === 'verification_unknown' ? '寫入結果尚無法確認，請先檢查文件，避免重複寫入。' : `未寫入文件：${result.reason}，請重新框選或檢查授權。` };
+      if (result.ok) finalResult.selectionAnchor = result.anchor;
+    }
+    finalResult.driveFileUpdated = finalResult.writeResult?.status === 'applied';
+    console.info('[coauthor-write]', JSON.stringify({ correlationId, operation: 'write_word_section', confidence: anchor?.confidence, status: finalResult.writeResult?.status, reason: finalResult.writeResult?.reason }));
+    return NextResponse.json({ ...finalResult, correlationId });
+  }
+
+  if (finalResult.operations.some((op) => op.kind === 'write_word_section')) {
+    finalResult.writeResult = { status: 'not_applied', reason: 'target_not_found', message: '未寫入文件：請先框選要修改的段落。' };
+    finalResult.driveFileUpdated = false;
+    return NextResponse.json({ ...finalResult, correlationId });
+  }
 
   // Directly apply modification to Google Drive file (.docx / Google Docs) in-place so user does not need to copy-paste
   if (body.activeDoc && body.activeDoc.driveItemId) {
@@ -2089,6 +2090,9 @@ export async function POST(request: NextRequest) {
           cursorAnchorAfter: body.activeDoc.cursorAnchorAfter,
         });
         finalResult.driveFileUpdated = patchRes.updated;
+        finalResult.writeResult = patchRes.updated
+          ? { status: 'applied', reason: 'applied', message: '已更新文件。' }
+          : { status: patchRes.reason === 'no_tokens' ? 'needs_auth' : 'not_applied', reason: patchRes.reason ?? 'api_error', message: `未寫入文件：${patchRes.reason ?? '發生錯誤'}。` };
         finalResult.driveLiveStreaming = patchRes.liveStreaming;
         finalResult.resolvedNativeDocId = patchRes.resolvedNativeDocId;
         if (
@@ -2100,6 +2104,7 @@ export async function POST(request: NextRequest) {
         }
       } else {
         finalResult.driveFileUpdated = false;
+        finalResult.writeResult = { status: 'not_applied', reason: 'target_not_found', message: '未寫入文件：找不到目標段落。' };
       }
     }
 
@@ -2126,6 +2131,9 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  if (!body.activeDoc?.driveItemId && finalResult.operations.some((op) => op.kind === 'write_word_section')) {
+    finalResult.writeResult = { status: 'not_applied', reason: 'missing_file_id', message: '未寫入文件：缺少文件 ID。' };
+  }
   return NextResponse.json(finalResult);
 }
 
@@ -2370,9 +2378,9 @@ export async function PATCH(request: NextRequest) {
     };
 
     if (body.action === 'resolve_section_heading') {
+      if (!body.driveFileId) return NextResponse.json({ error: 'missing_file_id' }, { status: 400 });
       const headingInfo = await ensureGoogleDocSectionHeadings({
-        driveFileId:
-          body.driveFileId || '1dQVfqQeBzvu0ezosoMUM09j1jDIYp15fVsRAiO8N3gY',
+        driveFileId: body.driveFileId,
         userEmail: employee.email,
         sectionId: body.sectionId,
         sectionTitle: body.sectionTitle,
@@ -2381,31 +2389,26 @@ export async function PATCH(request: NextRequest) {
     }
 
     if (body.action === 'resolve_visual_selection') {
-      if (body.driveFileId) {
-        prewarmGoogleDocParagraphCache({
-          driveFileId: body.driveFileId,
-          userEmail: employee.email,
-        });
-      }
+      if (!body.driveFileId) return NextResponse.json({ error: 'missing_file_id' }, { status: 400 });
       const resolved = await resolveVisualSelectionFromScreen({
         screenRect: body.screenRect,
         imageBase64: body.imageBase64,
         allowCursorContext: Boolean(body.allowCursorContext),
       });
+      if (resolved?.mode === 'highlight' && resolved.selectedText) {
+        const tokens = await getCandidateDriveWriteTokens(employee.email, { currentUserOnly: true });
+        if (!tokens[0]) return NextResponse.json({ resolved: null, reason: 'no_tokens' });
+        const read = await readGoogleDocument(body.driveFileId, tokens[0]);
+        if (!read.ok) return NextResponse.json({ resolved: null, reason: read.reason });
+        const result = anchorDocumentSelection(body.driveFileId, read.doc, resolved.selectedText);
+        if (!result.ok) return NextResponse.json({ resolved: null, reason: result.reason });
+        resolved.selectedText = result.anchor.paragraphs.map((p) => p.text).join('\n');
+        return NextResponse.json({ resolved, anchor: result.anchor });
+      }
       return NextResponse.json({ resolved });
     }
 
-    const res = await patchDriveDocumentInPlace({
-      driveFileId: body.driveFileId || '',
-      userEmail: employee.email,
-      targetSnippet: body.targetSnippet || '',
-      newContent: body.newContent || '',
-      sectionTitleHint: body.sectionTitleHint,
-      insertMode: body.insertMode,
-      cursorAnchorBefore: body.cursorAnchorBefore,
-      cursorAnchorAfter: body.cursorAnchorAfter,
-    });
-    return NextResponse.json(res);
+    return NextResponse.json({ updated: false, reason: 'unverified_selection' }, { status: 400 });
   } catch {
     return NextResponse.json({ updated: false, reason: 'bad_request' }, { status: 400 });
   }
