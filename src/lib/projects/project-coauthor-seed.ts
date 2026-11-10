@@ -192,6 +192,28 @@ export function buildProjectIllustrationDataUrl(opts: {
 
 export const STARTER_COAUTHOR_DOCUMENTS: CoAuthorDocument[] = [
   {
+    id: 'doc-test-copy-xinyi-plan',
+    projectId: '2026-xinyi-sandbox',
+    projectCode: 'XINYI-2026',
+    projectName: '2026 台北市信義路自動駕駛公車實驗計畫',
+    title: '【ACCSYS測試副本】04無人載具科技創新實驗計畫書_AI段落改寫測試',
+    docType: 'word',
+    driveItemId: '17JT4vnjEdcZOrVAqLQi3j56v9H2spGe9f0yGExCxkMM',
+    driveUrl: 'https://docs.google.com/document/d/17JT4vnjEdcZOrVAqLQi3j56v9H2spGe9f0yGExCxkMM/edit',
+    updatedAt: '2026-11-10',
+    wordFormat: DEFAULT_WORD_FORMAT,
+    wordSections: [
+      {
+        id: 'sec-1',
+        code: '肆、七',
+        title: '辦理創新實驗所採用之資訊系統及其安全控管措施',
+        content:
+          '3.應變處理與調查流程\n深入日誌調查：觸發異常告警後，透過 NOC 與 OpenSearch 分析環境調閱集中化安全日誌，回溯比對 Switch、GNSS 及車載系統之稽核紀錄，快速定位入侵途徑與受影響範圍。\n系統修正與復原部署：依據日誌調查結果，於受控安全環境中部署修正後的組態設定或進行軟體更新，重新驗證通訊與自駕功能無虞後恢復正常運作。\n4.後續改善作法\n組態與軟體持續更新：針對已知資安事件分析根因，即時派送系統修補、更新軟體版本並重新調整防火牆與 iptables 過濾規則。\n雲端與車端聯防強化：持續優化 Wiz 雲端威脅偵測指標，並精進車內 CAN/Ethernet 異常行為檢測模型，確保日誌紀錄、分析與監控機制之有效性。',
+        images: [],
+      },
+    ],
+  },
+  {
     id: 'doc-t3-02584k-word',
     projectId: '2026-t3-projects',
     projectCode: 'T3-2026',

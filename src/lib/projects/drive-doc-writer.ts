@@ -186,12 +186,14 @@ export async function getCandidateDriveWriteTokens(
   const clientId = candidateClientPairs[0]?.clientId || '';
   const clientSecret = candidateClientPairs[0]?.clientSecret || '';
 
+  const currentUserOnly = options?.currentUserOnly ?? true;
+
   // 1. Saved OAuth token from user login — FAST PATH (0ms if cached accessToken is still valid)
   const store = readTokenStore();
-  const emailKey = userEmail?.trim().toLowerCase() || (options?.currentUserOnly ? undefined : store.latestEmail);
+  const emailKey = userEmail?.trim().toLowerCase() || (currentUserOnly ? undefined : store.latestEmail);
   const entries = [
     ...(emailKey && store.byEmail[emailKey] ? [store.byEmail[emailKey]] : []),
-    ...(options?.currentUserOnly ? [] : Object.values(store.byEmail)),
+    ...(currentUserOnly ? [] : Object.values(store.byEmail)),
   ];
   for (const entry of entries) {
     const isFresh =
@@ -222,7 +224,7 @@ export async function getCandidateDriveWriteTokens(
     }
   }
 
-  if (options?.currentUserOnly) return tokens;
+  if (currentUserOnly) return tokens;
   // If we already have a valid user OAuth token and slow fallbacks aren't explicitly needed, return immediately in 0ms!
   if (tokens.length > 0 && !options?.includeSlowFallbacks) {
     return tokens;
@@ -705,7 +707,7 @@ export async function ensureDriveDocSharedForViewer(params: {
   const { driveFileId, userEmail } = params;
   if (!driveFileId) return driveFileId;
   const tokens = await getCandidateDriveWriteTokens(userEmail, {
-    includeSlowFallbacks: true,
+    currentUserOnly: true,
   });
   for (const token of tokens) {
     await grantDriveFileEditorAccess(driveFileId, token, userEmail);
@@ -725,7 +727,7 @@ export async function ensureNativeGoogleDocForLiveEditing(params: {
   }
 
   const tokens = await getCandidateDriveWriteTokens(userEmail, {
-    includeSlowFallbacks: true,
+    currentUserOnly: true,
   });
   for (const token of tokens) {
     try {
@@ -918,9 +920,18 @@ function shiftCachedParagraphSpansAfterEdit(
   saveCachedDocParas(docId, updated);
 }
 
+function mapGoogleHttpStatusToReason(
+  status: number
+): 'auth_failed' | 'permission_denied' | 'api_error' {
+  if (status === 401) return 'auth_failed';
+  if (status === 403) return 'permission_denied';
+  return 'api_error';
+}
+
 async function fetchAndCacheGoogleDocParas(
   docId: string,
-  token: string
+  token: string,
+  onStatus?: (status: number) => void
 ): Promise<GdocParaSpan[] | null> {
   const inflight = inFlightDocParasFetch.get(docId);
   if (inflight) return inflight;
@@ -937,7 +948,10 @@ async function fetchAndCacheGoogleDocParas(
           cache: 'no-store',
         }
       );
-      if (!res.ok) return null;
+      if (!res.ok) {
+        onStatus?.(res.status);
+        return null;
+      }
 
       const doc = (await res.json()) as {
       body?: {
@@ -1050,7 +1064,7 @@ export function prewarmGoogleDocParagraphCache(params: {
   void (async () => {
     try {
       const tokens = await getCandidateDriveWriteTokens(userEmail, {
-        includeSlowFallbacks: true,
+        currentUserOnly: true,
       });
       for (const token of tokens) {
         await grantDriveFileEditorAccess(nativeDocId, token, userEmail);
@@ -1380,7 +1394,8 @@ async function findCursorInsertionTargetInGoogleDoc(
   token: string,
   cursorAnchorBefore?: string,
   cursorAnchorAfter?: string,
-  sectionTitleHint?: string
+  sectionTitleHint?: string,
+  onStatus?: (status: number) => void
 ): Promise<{
   mode: 'insert_before' | 'insert_after';
   index: number;
@@ -1398,7 +1413,7 @@ async function findCursorInsertionTargetInGoogleDoc(
   }
 
   const paras = await Promise.race([
-    fetchAndCacheGoogleDocParas(docId, token),
+    fetchAndCacheGoogleDocParas(docId, token, onStatus),
     new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
   ]);
   if (!paras || paras.length === 0) return null;
@@ -1415,7 +1430,8 @@ async function findTargetParagraphRangeInGoogleDoc(
   token: string,
   targetSnippet: string,
   sectionTitleHint?: string,
-  maxWaitMs = 12_000
+  maxWaitMs = 12_000,
+  onStatus?: (status: number) => void
 ): Promise<{ startIndex: number; endIndex: number; plainText: string } | null> {
   // 1. Instant 0ms lookup from in-memory or disk paragraph span cache
   const cachedParas = readCachedDocParas(docId);
@@ -1426,12 +1442,16 @@ async function findTargetParagraphRangeInGoogleDoc(
 
   // 2. Fetch from Google Docs API (with optional bounded wait so live edit never stalls for 11s)
   const paras = await Promise.race([
-    fetchAndCacheGoogleDocParas(docId, token),
+    fetchAndCacheGoogleDocParas(docId, token, onStatus),
     new Promise<null>((resolve) => setTimeout(() => resolve(null), maxWaitMs)),
   ]);
   if (!paras || paras.length === 0) return null;
   return matchTargetParagraphFromSpans(paras, targetSnippet, sectionTitleHint);
 }
+
+type StreamDocOutcome =
+  | { ok: true }
+  | { ok: false; reason: 'auth_failed' | 'permission_denied' | 'target_not_found' | 'api_error' };
 
 /**
  * Streams text progressively (chunk by chunk) directly into an open native Google Doc
@@ -1448,7 +1468,7 @@ async function streamTextIntoGoogleDocLive(params: {
   insertMode?: 'replace' | 'insert_at_cursor' | 'insert_before' | 'insert_after';
   cursorAnchorBefore?: string;
   cursorAnchorAfter?: string;
-}): Promise<boolean> {
+}): Promise<StreamDocOutcome> {
   const {
     docId,
     token,
@@ -1460,328 +1480,281 @@ async function streamTextIntoGoogleDocLive(params: {
     cursorAnchorAfter,
   } = params;
   const cleanText = newContent.replace(/\*\*/g, '').trim();
-  if (!cleanText) return false;
+  if (!cleanText) return { ok: false, reason: 'target_not_found' };
 
-  // Self-heal cover page if an earlier unanchored edit accidentally replaced "哇哇科技股份有限公司" at startIndex ~130
-  const initialCached = readCachedDocParas(docId);
-  const corruptedCoverPara = initialCached?.find(
-    (p, idx) =>
-      idx <= 12 &&
-      p.startIndex >= 115 &&
-      p.startIndex <= 160 &&
-      p.plainText.startsWith('※聯合申請公司：台灣智慧駕駛股份有限公司')
-  );
-  if (corruptedCoverPara) {
-    try {
-      const healRes = await fetch(
-        `https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}:batchUpdate`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            requests: [
-              {
-                deleteContentRange: {
-                  range: {
-                    startIndex: corruptedCoverPara.startIndex,
-                    endIndex: corruptedCoverPara.endIndex,
-                  },
-                },
-              },
-              {
-                insertText: {
-                  location: { index: corruptedCoverPara.startIndex },
-                  text: '哇哇科技股份有限公司',
-                },
-              },
-            ],
-          }),
-          signal: AbortSignal.timeout(8_000),
-        }
-      );
-      if (healRes.ok) {
-        shiftCachedParagraphSpansAfterEdit(
-          docId,
-          corruptedCoverPara.startIndex,
-          corruptedCoverPara.endIndex,
-          '哇哇科技股份有限公司'
-        );
-      }
-      await fetchAndCacheGoogleDocParas(docId, token);
-    } catch {
-      // ignore cover self-heal error
-    }
-  }
+  let lastHttpStatus: number | undefined;
+  const recordStatus = (st: number) => {
+    lastHttpStatus = st;
+  };
 
-  // CURSOR INSERTION MODE: User placed cursor at a position in the document without highlighting text to replace
-  if (
-    insertMode === 'insert_at_cursor' ||
-    insertMode === 'insert_before' ||
-    insertMode === 'insert_after' ||
-    (!targetSnippet.trim() && (cursorAnchorBefore || cursorAnchorAfter))
-  ) {
-    const cursorTarget = await findCursorInsertionTargetInGoogleDoc(
-      docId,
-      token,
-      cursorAnchorBefore,
-      cursorAnchorAfter,
-      sectionTitleHint
+  try {
+    // Self-heal cover page if an earlier unanchored edit accidentally replaced "哇哇科技股份有限公司" at startIndex ~130
+    const initialCached = readCachedDocParas(docId);
+    const corruptedCoverPara = initialCached?.find(
+      (p, idx) =>
+        idx <= 12 &&
+        p.startIndex >= 115 &&
+        p.startIndex <= 160 &&
+        p.plainText.startsWith('※聯合申請公司：台灣智慧駕駛股份有限公司')
     );
-    if (!cursorTarget) {
-      return false;
-    }
-
-    const textToInsert =
-      cursorTarget.mode === 'insert_before'
-        ? `${cleanText}\n\n`
-        : `\n${cleanText}\n`;
-    const chars = Array.from(textToInsert);
-    const totalChars = chars.length;
-    const stepSize = Math.max(64, Math.ceil(totalChars / 3));
-    const chunks: string[] = [];
-    for (let i = 0; i < totalChars; i += stepSize) {
-      chunks.push(chars.slice(i, i + stepSize).join(''));
-    }
-    if (chunks.length === 0) return false;
-
-    let currentInsertIndex = cursorTarget.index;
-    const startInsertIndex = cursorTarget.index;
-
-    for (let idx = 0; idx < chunks.length; idx++) {
-      const chunk = chunks[idx];
-      const stepRequests: Array<Record<string, unknown>> = [
-        {
-          insertText: {
-            location: { index: currentInsertIndex },
-            text: chunk,
-          },
-        },
-      ];
-      // If inserting right before a heading (insert_before), ensure the newly inserted paragraphs use NORMAL_TEXT (12pt)
-      if (cursorTarget.mode === 'insert_before') {
-        stepRequests.push(
+    if (corruptedCoverPara) {
+      try {
+        const healRes = await fetch(
+          `https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}:batchUpdate`,
           {
-            updateParagraphStyle: {
-              range: {
-                startIndex: currentInsertIndex,
-                endIndex: currentInsertIndex + chunk.length,
-              },
-              paragraphStyle: {
-                namedStyleType: 'NORMAL_TEXT',
-              },
-              fields: 'namedStyleType',
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
             },
-          },
-          {
-            updateTextStyle: {
-              range: {
-                startIndex: currentInsertIndex,
-                endIndex: currentInsertIndex + chunk.length,
-              },
-              textStyle: {
-                bold: false,
-                fontSize: { magnitude: 12, unit: 'PT' },
-              },
-              fields: 'bold,fontSize',
-            },
-          }
-        );
-      }
-
-      const stepRes = await fetch(
-        `https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}:batchUpdate`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ requests: stepRequests }),
-          signal: AbortSignal.timeout(10_000),
-        }
-      );
-      if (!stepRes.ok) {
-        if (idx === 0) {
-          // Refresh cache and retry once if cached indices were slightly stale
-          const freshParas = await fetchAndCacheGoogleDocParas(docId, token);
-          const retryTarget = freshParas
-            ? matchCursorInsertionFromSpans(
-                freshParas,
-                cursorAnchorBefore,
-                cursorAnchorAfter,
-                sectionTitleHint
-              )
-            : null;
-          if (!retryTarget) return false;
-          currentInsertIndex = retryTarget.index;
-          const retryRes = await fetch(
-            `https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}:batchUpdate`,
-            {
-              method: 'POST',
-              headers: {
-                Authorization: `Bearer ${token}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                requests: [
-                  {
-                    insertText: {
-                      location: { index: currentInsertIndex },
-                      text: textToInsert,
+            body: JSON.stringify({
+              requests: [
+                {
+                  deleteContentRange: {
+                    range: {
+                      startIndex: corruptedCoverPara.startIndex,
+                      endIndex: corruptedCoverPara.endIndex,
                     },
                   },
-                  ...(retryTarget.mode === 'insert_before'
-                    ? [
-                        {
-                          updateParagraphStyle: {
-                            range: {
-                              startIndex: currentInsertIndex,
-                              endIndex: currentInsertIndex + textToInsert.length,
-                            },
-                            paragraphStyle: { namedStyleType: 'NORMAL_TEXT' },
-                            fields: 'namedStyleType',
-                          },
-                        },
-                        {
-                          updateTextStyle: {
-                            range: {
-                              startIndex: currentInsertIndex,
-                              endIndex: currentInsertIndex + textToInsert.length,
-                            },
-                            textStyle: {
-                              bold: false,
-                              fontSize: { magnitude: 12, unit: 'PT' },
-                            },
-                            fields: 'bold,fontSize',
-                          },
-                        },
-                      ]
-                    : []),
-                ],
-              }),
-              signal: AbortSignal.timeout(10_000),
-            }
+                },
+                {
+                  insertText: {
+                    location: { index: corruptedCoverPara.startIndex },
+                    text: '哇哇科技股份有限公司',
+                  },
+                },
+              ],
+            }),
+            signal: AbortSignal.timeout(8_000),
+          }
+        );
+        if (healRes.ok) {
+          shiftCachedParagraphSpansAfterEdit(
+            docId,
+            corruptedCoverPara.startIndex,
+            corruptedCoverPara.endIndex,
+            '哇哇科技股份有限公司'
           );
-          void fetchAndCacheGoogleDocParas(docId, token).catch(() => null);
-          return retryRes.ok;
         }
-        break;
+        await fetchAndCacheGoogleDocParas(docId, token, recordStatus);
+      } catch {
+        // ignore cover self-heal error
       }
-      currentInsertIndex += chunk.length;
     }
 
-    // Refresh paragraph cache in background after cursor insertion
-    void fetchAndCacheGoogleDocParas(docId, token).catch(() => null);
-    void startInsertIndex;
-    return true;
-  }
+    // CURSOR INSERTION MODE: User placed cursor at a position in the document without highlighting text to replace
+    if (
+      insertMode === 'insert_at_cursor' ||
+      insertMode === 'insert_before' ||
+      insertMode === 'insert_after' ||
+      (!targetSnippet.trim() && (cursorAnchorBefore || cursorAnchorAfter))
+    ) {
+      const cursorTarget = await findCursorInsertionTargetInGoogleDoc(
+        docId,
+        token,
+        cursorAnchorBefore,
+        cursorAnchorAfter,
+        sectionTitleHint,
+        recordStatus
+      );
+      if (!cursorTarget) {
+        return {
+          ok: false,
+          reason: lastHttpStatus ? mapGoogleHttpStatusToReason(lastHttpStatus) : 'target_not_found',
+        };
+      }
 
-  const cleanSnippetBody = targetSnippet
-    .replace(/【框選段落[^】]*】\s*([\s\S]*?)(?:\n\n【後文脈絡】[\s\S]*)?$/u, '$1')
-    .replace(/^【前文脈絡】[\s\S]*?\n\n/u, '')
-    .trim();
-  const candidateReplaceLines = cleanSnippetBody
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length >= 6 && !l.startsWith('【'));
+      const textToInsert =
+        cursorTarget.mode === 'insert_before'
+          ? `${cleanText}\n\n`
+          : `\n${cleanText}\n`;
+      const chars = Array.from(textToInsert);
+      const totalChars = chars.length;
+      const stepSize = Math.max(64, Math.ceil(totalChars / 3));
+      const chunks: string[] = [];
+      for (let i = 0; i < totalChars; i += stepSize) {
+        chunks.push(chars.slice(i, i + stepSize).join(''));
+      }
+      if (chunks.length === 0) return { ok: false, reason: 'target_not_found' };
 
-  // Fast-path: wait at most 300ms for paragraph index lookup if cache is cold and we already have a matchable snippet line
-  const hasDirectReplaceLine = candidateReplaceLines.length > 0;
-  const target = await findTargetParagraphRangeInGoogleDoc(
-    docId,
-    token,
-    targetSnippet,
-    sectionTitleHint,
-    hasDirectReplaceLine ? 300 : 12_000
-  );
+      let currentInsertIndex = cursorTarget.index;
+      const startInsertIndex = cursorTarget.index;
 
-  // Never accidentally overwrite the document cover page (startIndex < 220) with a long multi-paragraph body write
-  if (target && target.startIndex < 220 && cleanText.length > 180 && cleanSnippetBody.length < 40) {
-    return false;
-  }
-
-  if (!target) {
-    const snippetToReplace = candidateReplaceLines[0] || '';
-    if (!snippetToReplace) return false;
-    const batchRes = await fetch(
-      `https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}:batchUpdate`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          requests: [
+      for (let idx = 0; idx < chunks.length; idx++) {
+        const chunk = chunks[idx];
+        const stepRequests: Array<Record<string, unknown>> = [
+          {
+            insertText: {
+              location: { index: currentInsertIndex },
+              text: chunk,
+            },
+          },
+        ];
+        // If inserting right before a heading (insert_before), ensure the newly inserted paragraphs use NORMAL_TEXT (12pt)
+        if (cursorTarget.mode === 'insert_before') {
+          stepRequests.push(
             {
-              replaceAllText: {
-                containsText: { text: snippetToReplace, matchCase: false },
-                replaceText: cleanText,
+              updateParagraphStyle: {
+                range: {
+                  startIndex: currentInsertIndex,
+                  endIndex: currentInsertIndex + chunk.length,
+                },
+                paragraphStyle: {
+                  namedStyleType: 'NORMAL_TEXT',
+                },
+                fields: 'namedStyleType',
               },
             },
-          ],
-        }),
-        signal: AbortSignal.timeout(10_000),
+            {
+              updateTextStyle: {
+                range: {
+                  startIndex: currentInsertIndex,
+                  endIndex: currentInsertIndex + chunk.length,
+                },
+                textStyle: {
+                  bold: false,
+                  fontSize: { magnitude: 12, unit: 'PT' },
+                },
+                fields: 'bold,fontSize',
+              },
+            }
+          );
+        }
+
+        const stepRes = await fetch(
+          `https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}:batchUpdate`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ requests: stepRequests }),
+            signal: AbortSignal.timeout(10_000),
+          }
+        );
+        if (!stepRes.ok) {
+          if (stepRes.status === 401 || stepRes.status === 403) {
+            return { ok: false, reason: mapGoogleHttpStatusToReason(stepRes.status) };
+          }
+          if (idx === 0) {
+            // Refresh cache and retry once if cached indices were slightly stale
+            const freshParas = await fetchAndCacheGoogleDocParas(docId, token, recordStatus);
+            const retryTarget = freshParas
+              ? matchCursorInsertionFromSpans(
+                  freshParas,
+                  cursorAnchorBefore,
+                  cursorAnchorAfter,
+                  sectionTitleHint
+                )
+              : null;
+            if (!retryTarget) {
+              return {
+                ok: false,
+                reason: lastHttpStatus
+                  ? mapGoogleHttpStatusToReason(lastHttpStatus)
+                  : 'target_not_found',
+              };
+            }
+            currentInsertIndex = retryTarget.index;
+            const retryRes = await fetch(
+              `https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}:batchUpdate`,
+              {
+                method: 'POST',
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  requests: [
+                    {
+                      insertText: {
+                        location: { index: currentInsertIndex },
+                        text: textToInsert,
+                      },
+                    },
+                    ...(retryTarget.mode === 'insert_before'
+                      ? [
+                          {
+                            updateParagraphStyle: {
+                              range: {
+                                startIndex: currentInsertIndex,
+                                endIndex: currentInsertIndex + textToInsert.length,
+                              },
+                              paragraphStyle: { namedStyleType: 'NORMAL_TEXT' },
+                              fields: 'namedStyleType',
+                            },
+                          },
+                          {
+                            updateTextStyle: {
+                              range: {
+                                startIndex: currentInsertIndex,
+                                endIndex: currentInsertIndex + textToInsert.length,
+                              },
+                              textStyle: {
+                                bold: false,
+                                fontSize: { magnitude: 12, unit: 'PT' },
+                              },
+                              fields: 'bold,fontSize',
+                            },
+                          },
+                        ]
+                      : []),
+                  ],
+                }),
+                signal: AbortSignal.timeout(10_000),
+              }
+            );
+            void fetchAndCacheGoogleDocParas(docId, token).catch(() => null);
+            return retryRes.ok
+              ? { ok: true }
+              : { ok: false, reason: mapGoogleHttpStatusToReason(retryRes.status) };
+          }
+          return { ok: false, reason: mapGoogleHttpStatusToReason(stepRes.status) };
+        }
+        currentInsertIndex += chunk.length;
       }
-    );
-    // Refresh paragraph cache in background after replaceAllText
-    void fetchAndCacheGoogleDocParas(docId, token).catch(() => null);
-    return batchRes.ok;
-  }
 
-  // Split cleanText into 3-4 larger smooth chunks so the first update appears in < 0.3s
-  // and the entire paragraph finishes streaming in ~1s instead of 14 slow round-trips.
-  const chars = Array.from(cleanText);
-  const totalChars = chars.length;
-  const stepSize = Math.max(48, Math.ceil(totalChars / 3));
-  const chunks: string[] = [];
-  for (let i = 0; i < totalChars; i += stepSize) {
-    chunks.push(chars.slice(i, i + stepSize).join(''));
-  }
-
-  if (chunks.length === 0) return false;
-
-  // Step 1: Replace the existing target paragraph range with the first chunk
-  const firstChunk = chunks[0];
-  const firstRequests: Array<Record<string, unknown>> = [];
-  if (target.endIndex > target.startIndex) {
-    firstRequests.push({
-      deleteContentRange: {
-        range: {
-          startIndex: target.startIndex,
-          endIndex: target.endIndex,
-        },
-      },
-    });
-  }
-  firstRequests.push({
-    insertText: {
-      location: { index: target.startIndex },
-      text: firstChunk,
-    },
-  });
-
-  const firstRes = await fetch(
-    `https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}:batchUpdate`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ requests: firstRequests }),
-      signal: AbortSignal.timeout(10_000),
+      // Refresh paragraph cache in background after cursor insertion
+      void fetchAndCacheGoogleDocParas(docId, token).catch(() => null);
+      void startInsertIndex;
+      return { ok: true };
     }
-  );
 
-  if (!firstRes.ok) {
-    // If cached indices were stale, fall back immediately to replaceAllText and refresh cache
-    const snippetToReplace = candidateReplaceLines[0] || target.plainText.trim();
-    if (snippetToReplace) {
-      const retryRes = await fetch(
+    const cleanSnippetBody = targetSnippet
+      .replace(/【框選段落[^】]*】\s*([\s\S]*?)(?:\n\n【後文脈絡】[\s\S]*)?$/u, '$1')
+      .replace(/^【前文脈絡】[\s\S]*?\n\n/u, '')
+      .trim();
+    const candidateReplaceLines = cleanSnippetBody
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length >= 6 && !l.startsWith('【'));
+
+    // Fast-path: wait at most 300ms for paragraph index lookup if cache is cold and we already have a matchable snippet line
+    const hasDirectReplaceLine = candidateReplaceLines.length > 0;
+    const target = await findTargetParagraphRangeInGoogleDoc(
+      docId,
+      token,
+      targetSnippet,
+      sectionTitleHint,
+      hasDirectReplaceLine ? 300 : 12_000,
+      recordStatus
+    );
+
+    // Never accidentally overwrite the document cover page (startIndex < 220) with a long multi-paragraph body write
+    if (target && target.startIndex < 220 && cleanText.length > 180 && cleanSnippetBody.length < 40) {
+      return { ok: false, reason: 'target_not_found' };
+    }
+
+    if (!target) {
+      const snippetToReplace = candidateReplaceLines[0] || '';
+      if (!snippetToReplace) {
+        return {
+          ok: false,
+          reason: lastHttpStatus ? mapGoogleHttpStatusToReason(lastHttpStatus) : 'target_not_found',
+        };
+      }
+      const batchRes = await fetch(
         `https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}:batchUpdate`,
         {
           method: 'POST',
@@ -1802,20 +1775,46 @@ async function streamTextIntoGoogleDocLive(params: {
           signal: AbortSignal.timeout(10_000),
         }
       );
+      // Refresh paragraph cache in background after replaceAllText
       void fetchAndCacheGoogleDocParas(docId, token).catch(() => null);
-      return retryRes.ok;
+      return batchRes.ok
+        ? { ok: true }
+        : { ok: false, reason: mapGoogleHttpStatusToReason(batchRes.status) };
     }
-    void fetchAndCacheGoogleDocParas(docId, token).catch(() => null);
-    return false;
-  }
 
-  // Google Docs indices are UTF-16 code units (`string.length` in JS)
-  let currentInsertIndex = target.startIndex + firstChunk.length;
+    // Split cleanText into 3-4 larger smooth chunks so the first update appears in < 0.3s
+    // and the entire paragraph finishes streaming in ~1s instead of 14 slow round-trips.
+    const chars = Array.from(cleanText);
+    const totalChars = chars.length;
+    const stepSize = Math.max(48, Math.ceil(totalChars / 3));
+    const chunks: string[] = [];
+    for (let i = 0; i < totalChars; i += stepSize) {
+      chunks.push(chars.slice(i, i + stepSize).join(''));
+    }
 
-  // Step 2..N: Stream subsequent chunks directly at `currentInsertIndex`
-  for (let idx = 1; idx < chunks.length; idx++) {
-    const chunk = chunks[idx];
-    const stepRes = await fetch(
+    if (chunks.length === 0) return { ok: false, reason: 'target_not_found' };
+
+    // Step 1: Replace the existing target paragraph range with the first chunk
+    const firstChunk = chunks[0];
+    const firstRequests: Array<Record<string, unknown>> = [];
+    if (target.endIndex > target.startIndex) {
+      firstRequests.push({
+        deleteContentRange: {
+          range: {
+            startIndex: target.startIndex,
+            endIndex: target.endIndex,
+          },
+        },
+      });
+    }
+    firstRequests.push({
+      insertText: {
+        location: { index: target.startIndex },
+        text: firstChunk,
+      },
+    });
+
+    const firstRes = await fetch(
       `https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}:batchUpdate`,
       {
         method: 'POST',
@@ -1823,32 +1822,93 @@ async function streamTextIntoGoogleDocLive(params: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          requests: [
-            {
-              insertText: {
-                location: { index: currentInsertIndex },
-                text: chunk,
-              },
-            },
-          ],
-        }),
-        signal: AbortSignal.timeout(8_000),
+        body: JSON.stringify({ requests: firstRequests }),
+        signal: AbortSignal.timeout(10_000),
       }
     );
-    if (!stepRes.ok) break;
-    currentInsertIndex += chunk.length;
+
+    if (!firstRes.ok) {
+      if (firstRes.status === 401 || firstRes.status === 403) {
+        return { ok: false, reason: mapGoogleHttpStatusToReason(firstRes.status) };
+      }
+      // If cached indices were stale, fall back immediately to replaceAllText and refresh cache
+      const snippetToReplace = candidateReplaceLines[0] || target.plainText.trim();
+      if (snippetToReplace) {
+        const retryRes = await fetch(
+          `https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}:batchUpdate`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              requests: [
+                {
+                  replaceAllText: {
+                    containsText: { text: snippetToReplace, matchCase: false },
+                    replaceText: cleanText,
+                  },
+                },
+              ],
+            }),
+            signal: AbortSignal.timeout(10_000),
+          }
+        );
+        void fetchAndCacheGoogleDocParas(docId, token).catch(() => null);
+        return retryRes.ok
+          ? { ok: true }
+          : { ok: false, reason: mapGoogleHttpStatusToReason(retryRes.status) };
+      }
+      void fetchAndCacheGoogleDocParas(docId, token).catch(() => null);
+      return { ok: false, reason: mapGoogleHttpStatusToReason(firstRes.status) };
+    }
+
+    // Google Docs indices are UTF-16 code units (`string.length` in JS)
+    let currentInsertIndex = target.startIndex + firstChunk.length;
+
+    // Step 2..N: Stream subsequent chunks directly at `currentInsertIndex`
+    for (let idx = 1; idx < chunks.length; idx++) {
+      const chunk = chunks[idx];
+      const stepRes = await fetch(
+        `https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}:batchUpdate`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            requests: [
+              {
+                insertText: {
+                  location: { index: currentInsertIndex },
+                  text: chunk,
+                },
+              },
+            ],
+          }),
+          signal: AbortSignal.timeout(8_000),
+        }
+      );
+      if (!stepRes.ok) {
+        return { ok: false, reason: mapGoogleHttpStatusToReason(stepRes.status) };
+      }
+      currentInsertIndex += chunk.length;
+    }
+
+    // Immediately update the cached paragraph offsets in 0ms for back-to-back edits
+    shiftCachedParagraphSpansAfterEdit(
+      docId,
+      target.startIndex,
+      target.endIndex,
+      cleanText
+    );
+
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: 'api_error' };
   }
-
-  // Immediately update the cached paragraph offsets in 0ms for back-to-back edits
-  shiftCachedParagraphSpansAfterEdit(
-    docId,
-    target.startIndex,
-    target.endIndex,
-    cleanText
-  );
-
-  return true;
 }
 
 /**
@@ -1987,7 +2047,7 @@ export async function insertImageIntoDriveDocumentInPlace(params: {
     return { inserted: false, reason: 'missing_params' };
   }
 
-  const tokens = await getCandidateDriveWriteTokens(userEmail);
+  const tokens = await getCandidateDriveWriteTokens(userEmail, { currentUserOnly: true });
   if (tokens.length === 0) {
     return { inserted: false, reason: 'no_tokens' };
   }
@@ -1998,7 +2058,7 @@ export async function insertImageIntoDriveDocumentInPlace(params: {
   });
 
   const { buffer: imgBuf, mimeType, ext } = extractImageBinaryFromDataUrl(imageDataUrl);
-  let lastReason = 'no_working_token';
+  let lastReason = 'api_error';
 
   for (const token of tokens) {
     try {
@@ -2028,13 +2088,13 @@ export async function insertImageIntoDriveDocumentInPlace(params: {
       );
 
       if (!upRes.ok) {
-        lastReason = `img_upload_${upRes.status}`;
+        lastReason = mapGoogleHttpStatusToReason(upRes.status);
         continue;
       }
 
       const upData = (await upRes.json()) as { id?: string };
       if (!upData?.id) {
-        lastReason = 'img_no_id';
+        lastReason = 'api_error';
         continue;
       }
 
@@ -2125,9 +2185,9 @@ export async function insertImageIntoDriveDocumentInPlace(params: {
           resolvedNativeDocId: effectiveDocId,
         };
       }
-      lastReason = `doc_insert_img_${batchRes.status}`;
-    } catch (err) {
-      lastReason = err instanceof Error ? err.message : 'exception';
+      lastReason = mapGoogleHttpStatusToReason(batchRes.status);
+    } catch {
+      lastReason = 'api_error';
     }
   }
 
@@ -2167,7 +2227,7 @@ export async function patchDriveDocumentInPlace(params: {
     return { updated: false, reason: 'missing_params' };
   }
 
-  const tokens = await getCandidateDriveWriteTokens(userEmail);
+  const tokens = await getCandidateDriveWriteTokens(userEmail, { currentUserOnly: true });
   if (tokens.length === 0) {
     return { updated: false, reason: 'no_tokens' };
   }
@@ -2185,8 +2245,9 @@ export async function patchDriveDocumentInPlace(params: {
   // ULTRA-FAST PATH: If already known to be a native Google Doc, skip the Drive metadata round-trip
   // and verify the live stream into the open Google Doc!
   if (isKnownNativeDoc || Boolean(nativeMap[effectiveDocId])) {
+    let lastStreamReason: string = 'target_not_found';
     for (const token of tokens) {
-      const ok = await streamTextIntoGoogleDocLive({
+      const outcome = await streamTextIntoGoogleDocLive({
         docId: effectiveDocId,
         token,
         targetSnippet,
@@ -2195,25 +2256,26 @@ export async function patchDriveDocumentInPlace(params: {
         insertMode,
         cursorAnchorBefore,
         cursorAnchorAfter,
-      }).catch(() => false);
+      }).catch(() => ({ ok: false as const, reason: 'api_error' as const }));
 
-      if (ok) {
+      if (outcome.ok) {
         return {
           updated: true,
           liveStreaming: true,
           resolvedNativeDocId: effectiveDocId,
         };
       }
+      lastStreamReason = outcome.reason;
     }
     return {
       updated: false,
       liveStreaming: false,
       resolvedNativeDocId: effectiveDocId,
-      reason: 'target_not_found',
+      reason: lastStreamReason,
     };
   }
 
-  let lastReason = 'no_working_token';
+  let lastReason = 'api_error';
 
   for (const token of tokens) {
     try {
@@ -2230,7 +2292,7 @@ export async function patchDriveDocumentInPlace(params: {
       );
 
       if (!metaRes.ok) {
-        lastReason = `meta_${metaRes.status}`;
+        lastReason = mapGoogleHttpStatusToReason(metaRes.status);
         continue;
       }
 
@@ -2244,7 +2306,7 @@ export async function patchDriveDocumentInPlace(params: {
       // Streams chunks live via Google Docs API `batchUpdate` so the open editor window
       // shows characters being typed one-by-one without ever reloading the iframe!
       if (meta.mimeType === 'application/vnd.google-apps.document') {
-        const ok = await streamTextIntoGoogleDocLive({
+        const outcome = await streamTextIntoGoogleDocLive({
           docId: meta.id,
           token,
           targetSnippet,
@@ -2253,15 +2315,15 @@ export async function patchDriveDocumentInPlace(params: {
           insertMode,
           cursorAnchorBefore,
           cursorAnchorAfter,
-        }).catch(() => false);
-        if (ok) {
+        }).catch(() => ({ ok: false as const, reason: 'api_error' as const }));
+        if (outcome.ok) {
           return {
             updated: true,
             liveStreaming: true,
             resolvedNativeDocId: meta.id,
           };
         }
-        lastReason = 'target_not_found';
+        lastReason = outcome.reason;
         continue;
       }
 
@@ -2281,7 +2343,7 @@ export async function patchDriveDocumentInPlace(params: {
           }
         );
         if (!dlRes.ok) {
-          lastReason = `dl_${dlRes.status}`;
+          lastReason = mapGoogleHttpStatusToReason(dlRes.status);
           continue;
         }
 
@@ -2294,7 +2356,7 @@ export async function patchDriveDocumentInPlace(params: {
         );
 
         if (!replaced) {
-          lastReason = 'xml_target_not_found';
+          lastReason = 'target_not_found';
           continue;
         }
 
@@ -2318,10 +2380,10 @@ export async function patchDriveDocumentInPlace(params: {
         if (uploadRes.ok) {
           return { updated: true, liveStreaming: false };
         }
-        lastReason = `upload_${uploadRes.status}`;
+        lastReason = mapGoogleHttpStatusToReason(uploadRes.status);
       }
-    } catch (err) {
-      lastReason = err instanceof Error ? err.message : 'exception';
+    } catch {
+      lastReason = 'api_error';
     }
   }
 
@@ -2739,7 +2801,7 @@ export async function ensureGoogleDocSectionHeadings(params: {
     };
   }
 
-  const tokens = await getCandidateDriveWriteTokens(userEmail);
+  const tokens = await getCandidateDriveWriteTokens(userEmail, { currentUserOnly: true });
   const token = tokens[0];
   if (!token) {
     return {
@@ -3761,7 +3823,7 @@ export async function resolveOrUploadDroppedDocument(params: {
   }
 
   const tokens = await getCandidateDriveWriteTokens(userEmail, {
-    includeSlowFallbacks: true,
+    currentUserOnly: true,
   });
 
   // 1. If we don't have a resolved Drive ID yet, search Google Drive by exact filename first

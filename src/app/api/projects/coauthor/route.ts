@@ -63,6 +63,7 @@ type CoAuthorRequest = {
     selectedRowIndex?: number | null;
     currentTargetContent?: string;
     linkedSnippetText?: string;
+    rawSelectedSnippetText?: string;
     selectionAnchor?: DocAnchor;
     insertMode?: 'replace' | 'insert_at_cursor' | 'insert_before' | 'insert_after';
     cursorAnchorBefore?: string;
@@ -506,11 +507,172 @@ async function tryGenerateVertexImage(prompt: string): Promise<string | null> {
   return null;
 }
 
+function formatWriteFailureMessage(reason: string): {
+  status: 'not_applied' | 'needs_auth' | 'unknown';
+  message: string;
+} {
+  switch (reason) {
+    case 'no_tokens':
+    case 'auth_failed':
+      return {
+        status: 'needs_auth',
+        message: '未寫入文件：需要授權 Google 文件，請重新授權後再試。',
+      };
+    case 'permission_denied':
+      return {
+        status: 'not_applied',
+        message: '未寫入文件：目前帳號沒有此 Google 文件的編輯權限。',
+      };
+    case 'target_not_found':
+      return {
+        status: 'not_applied',
+        message: '未寫入文件：找不到框選的段落，請重新框選。',
+      };
+    case 'ambiguous_target':
+      return {
+        status: 'not_applied',
+        message: '未寫入文件：文件中有相同內容，請框選更多文字。',
+      };
+    case 'revision_conflict':
+      return {
+        status: 'not_applied',
+        message: '未寫入文件：文件版本已變更（他人或另一分頁已修改此段落），請重新框選後再試。',
+      };
+    case 'paragraph_count_mismatch':
+      return {
+        status: 'not_applied',
+        message: '未寫入文件：AI 產生的段落數與框選範圍不符，請重新嘗試。',
+      };
+    case 'verification_unknown':
+      return {
+        status: 'unknown',
+        message: '寫入結果尚無法確認，請先檢查文件內容，避免重複寫入。',
+      };
+    case 'unverified_selection':
+      return {
+        status: 'not_applied',
+        message: '未寫入文件：無法確認框選段落，請重新框選。',
+      };
+    case 'missing_file_id':
+      return {
+        status: 'not_applied',
+        message: '未寫入文件：缺少雲端文件識別碼。',
+      };
+    default:
+      return {
+        status: 'not_applied',
+        message: '未寫入文件：雲端文件連線或處理發生錯誤，請稍後再試。',
+      };
+  }
+}
+
+const COAUTHOR_RESPONSE_SCHEMA = {
+  type: 'OBJECT',
+  required: ['intent', 'reply', 'operations'],
+  properties: {
+    intent: {
+      type: 'STRING',
+      enum: ['edit', 'discuss'],
+    },
+    reply: {
+      type: 'STRING',
+    },
+    operations: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        required: ['kind'],
+        properties: {
+          kind: {
+            type: 'STRING',
+            enum: [
+              'write_word_section',
+              'write_excel_rows',
+              'write_ppt_slide',
+              'generate_image',
+              'open_or_create_doc',
+              'format_word_document',
+            ],
+          },
+          sectionId: { type: 'STRING' },
+          newSectionCode: { type: 'STRING' },
+          sectionTitle: { type: 'STRING' },
+          content: { type: 'STRING' },
+          mode: { type: 'STRING' },
+          sheetId: { type: 'STRING' },
+          newSheetName: { type: 'STRING' },
+          columns: { type: 'ARRAY', items: { type: 'STRING' } },
+          rows: {
+            type: 'ARRAY',
+            items: { type: 'ARRAY', items: { type: 'STRING' } },
+          },
+          rowIndex: { type: 'INTEGER' },
+          slideId: { type: 'STRING' },
+          slideTitle: { type: 'STRING' },
+          slideSubtitle: { type: 'STRING' },
+          bullets: { type: 'ARRAY', items: { type: 'STRING' } },
+          speakerNotes: { type: 'STRING' },
+          targetId: { type: 'STRING' },
+          caption: { type: 'STRING' },
+          prompt: { type: 'STRING' },
+          docType: { type: 'STRING' },
+          title: { type: 'STRING' },
+          projectCode: { type: 'STRING' },
+          projectName: { type: 'STRING' },
+          fontFamily: { type: 'STRING' },
+          fontSizePt: { type: 'NUMBER' },
+          lineSpacing: { type: 'NUMBER' },
+          paragraphIndentEm: { type: 'NUMBER' },
+          showTableOfContents: { type: 'BOOLEAN' },
+          showPageNumbers: { type: 'BOOLEAN' },
+          showHeaderFooter: { type: 'BOOLEAN' },
+          headerText: { type: 'STRING' },
+          footerText: { type: 'STRING' },
+          pageNumberStyle: { type: 'STRING' },
+          renumberSections: { type: 'BOOLEAN' },
+        },
+      },
+    },
+  },
+} as const;
+
+const COAUTHOR_WORD_EDIT_RESPONSE_SCHEMA = {
+  type: 'OBJECT',
+  required: ['intent', 'reply', 'operations'],
+  properties: {
+    intent: {
+      type: 'STRING',
+      enum: ['edit', 'discuss'],
+    },
+    reply: {
+      type: 'STRING',
+    },
+    operations: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        required: ['kind', 'content'],
+        properties: {
+          kind: {
+            type: 'STRING',
+            enum: ['write_word_section'],
+          },
+          sectionId: { type: 'STRING' },
+          sectionTitle: { type: 'STRING' },
+          content: { type: 'STRING' },
+          mode: { type: 'STRING' },
+        },
+      },
+    },
+  },
+} as const;
+
 async function tryVertexStructuredCoAuthor(
   req: CoAuthorRequest,
   projectsDigest: string,
   graphResult: GraphQueryResult,
-  followUp: FollowUpResolution
+  followUp: FollowUpResolution,
+  retryConstraintText?: string
 ): Promise<{ response: CoAuthorResponse | null; errorReason?: string }> {
   try {
     const cfg = loadAiChatConfig();
@@ -523,13 +685,6 @@ async function tryVertexStructuredCoAuthor(
         ? `https://aiplatform.googleapis.com/v1/projects/${cfg.projectId}/locations/global/publishers/google/models/${cfg.model}:generateContent`
         : `https://${cfg.location}-aiplatform.googleapis.com/v1/projects/${cfg.projectId}/locations/${cfg.location}/publishers/google/models/${cfg.model}:generateContent`;
 
-    const recentHistoryText =
-      req.history && req.history.length > 0
-        ? `【近期對話脈絡】\n${req.history
-            .map((h) => `${h.role === 'user' ? '使用者' : '專案助手'}：${h.text}`)
-            .join('\n')}\n\n`
-        : '';
-
     const hasTargetedCursorOrSnippet = Boolean(
       req.activeDoc?.linkedSnippetText ||
         req.activeDoc?.cursorAnchorBefore ||
@@ -538,13 +693,24 @@ async function tryVertexStructuredCoAuthor(
     const isWholeDocMode =
       (req.scopeMode === 'whole_doc' && !hasTargetedCursorOrSnippet) ||
       /全部的文件|整份文件|整個檔案|全部章節|所有章節|整份簡報|整個試算表|整體內容/.test(req.prompt);
-    const discussionOnly = isDiscussionOrReviewIntent(req.prompt, req.scopeMode, req.history);
+
+    const isTargetedParagraphEdit = Boolean(
+      req.activeDoc?.selectionAnchor?.paragraphs?.length && !isWholeDocMode
+    );
+
+    const recentHistoryText =
+      req.history && req.history.length > 0 && !isTargetedParagraphEdit
+        ? `【近期對話脈絡】\n${req.history
+            .map((h) => `${h.role === 'user' ? '使用者' : '專案助手'}：${h.text}`)
+            .join('\n')}\n\n`
+        : '';
 
     const isTuringDriveRelated =
-      /台灣智慧駕駛|台智駕|turing\s*drive|歷年專案|歷史專案|公司實績|過去實績/i.test(req.prompt) ||
-      /T3-2026|桃園.*機場|自駕|VTMS|AITS/i.test(
-        `${req.activeDoc?.projectCode ?? ''} ${req.activeDoc?.projectName ?? ''} ${req.activeDoc?.title ?? ''}`
-      );
+      !isTargetedParagraphEdit &&
+      (/台灣智慧駕駛|台智駕|turing\s*drive|歷年專案|歷史專案|公司實績|過去實績/i.test(req.prompt) ||
+        /T3-2026|桃園.*機場|自駕|VTMS|AITS/i.test(
+          `${req.activeDoc?.projectCode ?? ''} ${req.activeDoc?.projectName ?? ''} ${req.activeDoc?.title ?? ''}`
+        ));
 
     const graphContextText =
       isTuringDriveRelated &&
@@ -564,6 +730,8 @@ async function tryVertexStructuredCoAuthor(
 
     const fullDocSectionText = isWholeDocMode
       ? (req.activeDoc?.fullDocumentText || req.activeDoc?.fullOutlineSummary || '').slice(0, 24_000)
+      : isTargetedParagraphEdit
+      ? ''
       : (req.activeDoc?.fullOutlineSummary || '').slice(0, 4_000);
 
     const isCursorInsertTurn = Boolean(
@@ -574,6 +742,24 @@ async function tryVertexStructuredCoAuthor(
           req.activeDoc?.cursorAnchorBefore ||
           req.activeDoc?.cursorAnchorAfter)
     );
+
+    const anchoredFullParagraphText =
+      req.activeDoc?.selectionAnchor?.paragraphs?.length
+        ? req.activeDoc.selectionAnchor.paragraphs.map((p) => p.text).join('\n')
+        : req.activeDoc?.linkedSnippetText || req.activeDoc?.currentTargetContent || '（未特別框選單一段落）';
+
+    const rawPartialSubselection =
+      req.activeDoc?.rawSelectedSnippetText &&
+      req.activeDoc.rawSelectedSnippetText.trim() &&
+      req.activeDoc.rawSelectedSnippetText.trim() !== anchoredFullParagraphText.trim()
+        ? req.activeDoc.rawSelectedSnippetText.trim()
+        : null;
+
+    const selectionContextBlock = isCursorInsertTurn
+      ? `使用者游標所在位置說明（請只輸出要新插入於此游標位置的內容，切勿重複輸出上方已存在的其他公司段落）：\n游標正上方鄰近文字：${req.activeDoc?.cursorAnchorBefore || '（頁首空白處）'}\n游標正下方鄰近文字：${req.activeDoc?.cursorAnchorAfter || '（段落結尾）'}`
+      : rawPartialSubselection
+      ? `使用者框選段落之整段完整原文：\n${anchoredFullParagraphText}\n\n使用者在該段中特別框選的那一句／部分文字：\n${rawPartialSubselection}\n（重要：請針對使用者框選的那一句進行改寫，但 operations[0].content 與 reply 必須輸出「改寫後的整段完整原文」，務必保留該段中未被框選的其他句子，且維持相同段落數！）`
+      : `使用者框選的核心段落（請嚴格針對此段原文進行回應或改寫，保留其主題脈絡與未要求變更的句子，絕對禁止替換成其他無關公司或無關主題的文字）：\n${anchoredFullParagraphText}`;
 
     const docContext = req.activeDoc
       ? `【目前共同編輯中的專案檔案】
@@ -588,26 +774,13 @@ async function tryVertexStructuredCoAuthor(
             : `指定區域模式（目前鎖定區域：${req.activeDoc.selectedTargetLabel ?? '無'}，ID：${
                 req.activeDoc.selectedTargetId ?? '未指定'
               }）`
-        }
-- 使用者意圖判斷：${
-          discussionOnly
-            ? '【討論與優化建議模式】使用者正在與你討論、詢問意見或針對特定方向深入探討，請在 reply 中深入回答，且 operations 必須保持空陣列 []（等他確認要寫入時再產生 operations）！'
-            : isCursorInsertTurn
-            ? '【游標位置直接寫入模式】使用者將游標放在文件特定空白處並要求寫入內容，請參考下方「游標上方前文脈絡」的標題層級與段落格式，直接產生要插入游標處的正式完整內容，並放入 operations[0] (write_word_section)！'
-            : '【執行撰寫／更新模式】使用者希望實際更新或新增文件內容，請直接針對下方「使用者框選的核心段落」進行改寫或強化，並產生對應的 operations。'
         }${followUpHint}
 - 使用者目前點選的表格列索引（0-based）：${
           typeof req.activeDoc.selectedRowIndex === 'number'
             ? `${req.activeDoc.selectedRowIndex}（即畫面第 ${req.activeDoc.selectedRowIndex + 1} 列）`
             : '未點選特定列'
         }
-- ${
-          isCursorInsertTurn
-            ? `使用者游標所在位置說明（請只輸出要新插入於此游標位置的內容，切勿重複輸出上方已存在的其他公司段落）：\n游標正上方鄰近文字：${req.activeDoc.cursorAnchorBefore || '（頁首空白處）'}\n游標正下方鄰近文字：${req.activeDoc.cursorAnchorAfter || '（段落結尾）'}`
-            : `使用者框選的核心段落（請嚴格針對此段原文進行回應或改寫，保留其主題脈絡，絕對禁止替換成其他無關公司或無關主題的文字）：\n${
-                req.activeDoc.linkedSnippetText || req.activeDoc.currentTargetContent || '（未特別框選單一段落）'
-              }`
-        }
+- ${selectionContextBlock}
 - 框選段落或游標處與前後文完整脈絡（包含前文、目標位置、後文）：\n${(req.activeDoc.currentTargetContent ?? '（空白）').slice(0, 8_000)}
 - 檔案章節大綱與參考內容：\n${fullDocSectionText}`
       : '【目前尚未開啟特定檔案，處於專案對話模式】';
@@ -677,12 +850,13 @@ ${effectiveProjectsDigest}【重要規則】：
   ]
 }`;
 
+    const retrySuffix = retryConstraintText ? `\n\n【格式修正要求】：${retryConstraintText}` : '';
     const userParts: Array<
       | { text: string }
       | { inlineData: { mimeType: string; data: string } }
     > = [
       {
-        text: `${recentHistoryText}${graphContextText}${docContext}${refFilesText}\n\n【使用者指令】：${req.prompt}`,
+        text: `${recentHistoryText}${graphContextText}${docContext}${refFilesText}\n\n【使用者指令】：${req.prompt}${retrySuffix}`,
       },
     ];
 
@@ -704,60 +878,12 @@ ${effectiveProjectsDigest}【重要規則】：
     }
 
     const needsWebSearch =
+      !retryConstraintText &&
       /上網|搜尋|查詢|查一下|新聞|出處|來源|查證|根據什麼|公開資訊|法說會|年報|google/i.test(
         req.prompt
       );
 
-    async function callVertexGenerate(useSearchTool: boolean) {
-      return fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'x-goog-user-project': cfg.projectId,
-        },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemInstruction }] },
-          contents: [
-            {
-              role: 'user',
-              parts: userParts,
-            },
-          ],
-          ...(useSearchTool ? { tools: [{ googleSearch: {} }] } : {}),
-          generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 4096,
-            ...(!useSearchTool ? { responseMimeType: 'application/json' } : {}),
-            thinkingConfig: { thinkingLevel: 'LOW' },
-          },
-        }),
-        signal: AbortSignal.timeout(useSearchTool ? 22_000 : 28_000),
-      });
-    }
-
-    let res: Response;
-    try {
-      res = await callVertexGenerate(needsWebSearch);
-      if (!res.ok && needsWebSearch) {
-        res = await callVertexGenerate(false);
-      }
-    } catch (err) {
-      if (needsWebSearch) {
-        res = await callVertexGenerate(false);
-      } else {
-        throw err;
-      }
-    }
-
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      return {
-        response: null,
-        errorReason: `Vertex AI HTTP ${res.status}${errText ? `: ${errText.slice(0, 120)}` : ''}`,
-      };
-    }
-    const raw = (await res.json()) as {
+    type VertexRawResponse = {
       candidates?: Array<{
         content?: { parts?: Array<{ text?: string; thought?: boolean }> };
         groundingMetadata?: {
@@ -769,10 +895,119 @@ ${effectiveProjectsDigest}【重要規則】：
       }>;
     };
 
+    const webQueries: string[] = [];
+    const webSourcesMap = new Map<string, { title: string; uri: string }>();
+
+    // Phase 1 (if Google Search is needed): Perform grounded search to gather real-time facts and sources
+    let groundedSearchContext = '';
+    if (needsWebSearch) {
+      try {
+        const searchRes = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'x-goog-user-project': cfg.projectId,
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    text: `請透過 Google Search 針對以下指令查證最新、真實的公開資訊與來源摘要：\n${req.prompt}`,
+                  },
+                ],
+              },
+            ],
+            tools: [{ googleSearch: {} }],
+            generationConfig: {
+              temperature: 0.1,
+              maxOutputTokens: 1536,
+              thinkingConfig: { thinkingLevel: 'LOW' },
+            },
+          }),
+          signal: AbortSignal.timeout(18_000),
+        });
+        if (searchRes.ok) {
+          const searchRaw = (await searchRes.json()) as VertexRawResponse;
+          const searchCand = searchRaw.candidates?.[0];
+          const gm = searchCand?.groundingMetadata;
+          for (const q of gm?.webSearchQueries ?? []) {
+            if (q && !webQueries.includes(q) && webQueries.length < 5) {
+              webQueries.push(q);
+            }
+          }
+          for (const ch of gm?.groundingChunks ?? []) {
+            const uri = ch.web?.uri?.trim();
+            const title = (ch.web?.title || ch.web?.domain || '').trim();
+            if (uri && !webSourcesMap.has(uri)) {
+              webSourcesMap.set(uri, { title: title || '網路來源', uri });
+            }
+          }
+          const searchSummary = (searchCand?.content?.parts ?? [])
+            .filter((p) => typeof p.text === 'string' && !p.thought)
+            .map((p) => String(p.text))
+            .join('\n')
+            .trim();
+          if (searchSummary) {
+            groundedSearchContext = `\n\n【Google Search 即時查證資料】\n${searchSummary}`;
+          }
+        }
+      } catch {
+        // Proceed to Phase 2 structured generation even if search phase timed out
+      }
+    }
+
+    if (groundedSearchContext && 'text' in userParts[0]) {
+      userParts[0] = { text: `${userParts[0].text}${groundedSearchContext}` };
+    }
+
+    // Phase 2: Generate final structured JSON with responseSchema enforced
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'x-goog-user-project': cfg.projectId,
+      },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemInstruction }] },
+        contents: [
+          {
+            role: 'user',
+            parts: userParts,
+          },
+        ],
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 8192,
+          responseMimeType: 'application/json',
+          responseSchema: isTargetedParagraphEdit
+            ? COAUTHOR_WORD_EDIT_RESPONSE_SCHEMA
+            : COAUTHOR_RESPONSE_SCHEMA,
+          thinkingConfig: { thinkingLevel: 'LOW' },
+        },
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      return {
+        response: null,
+        errorReason: `Vertex AI HTTP ${res.status}${errText ? `: ${errText.slice(0, 120)}` : ''}`,
+      };
+    }
+    const raw = (await res.json()) as VertexRawResponse;
+
     const candidate = raw.candidates?.[0];
     const gm = candidate?.groundingMetadata;
-    const webQueries = (gm?.webSearchQueries ?? []).filter(Boolean).slice(0, 5);
-    const webSourcesMap = new Map<string, { title: string; uri: string }>();
+    for (const q of gm?.webSearchQueries ?? []) {
+      if (q && !webQueries.includes(q) && webQueries.length < 5) {
+        webQueries.push(q);
+      }
+    }
     for (const ch of gm?.groundingChunks ?? []) {
       const uri = ch.web?.uri?.trim();
       const title = (ch.web?.title || ch.web?.domain || '').trim();
@@ -826,8 +1061,22 @@ ${effectiveProjectsDigest}【重要規則】：
       }
     }
 
-    if (!parsed?.reply || !['edit', 'discuss'].includes(parsed.intent ?? '') || !Array.isArray(parsed.operations) || (parsed.intent === 'edit' && parsed.operations.length === 0) || (parsed.intent === 'discuss' && parsed.operations.length > 0)) {
+    if (!parsed?.reply || !['edit', 'discuss'].includes(parsed.intent ?? '') || !Array.isArray(parsed.operations)) {
       return { response: null, errorReason: '模型回傳格式無法解析' };
+    }
+    if (parsed.intent === 'discuss' && parsed.operations.length > 0) {
+      parsed.operations = [];
+    }
+    if (parsed.intent === 'edit' && parsed.operations.length === 0 && parsed.reply.trim()) {
+      parsed.operations = [
+        {
+          kind: 'write_word_section',
+          sectionId: req.activeDoc?.selectedTargetId || 'sec-1',
+          sectionTitle: req.activeDoc?.selectedTargetLabel || '目標段落',
+          content: parsed.reply.trim(),
+          mode: 'replace',
+        },
+      ];
     }
 
     const ops: CoAuthorOperation[] = [];
@@ -857,7 +1106,7 @@ ${effectiveProjectsDigest}【重要規則】：
           mode: wantsReplaceImg ? 'replace' : 'append',
         });
       } else if (op.kind === 'write_word_section') {
-        const cleanContent = stripAuxiliaryMetaPhrases(String(op.content || ''));
+        const cleanContent = stripAuxiliaryMetaPhrases(String(op.content || parsed.reply || ''));
         ops.push({
           kind: 'write_word_section',
           sectionId: typeof op.sectionId === 'string' ? op.sectionId : req.activeDoc?.selectedTargetId,
@@ -942,7 +1191,7 @@ ${effectiveProjectsDigest}【重要規則】：
     // Ensure that if the user explicitly asked to generate an image/diagram, a `generate_image` operation is always included
     const userExplicitlyWantsImage =
       /生成.*圖|畫.*圖|示意圖|架構圖|視覺圖|產生.*圖|插入.*圖/i.test(req.prompt) &&
-      !discussionOnly;
+      parsed.intent === 'edit';
     if (
       userExplicitlyWantsImage &&
       !ops.some((o) => o.kind === 'generate_image')
@@ -2037,37 +2286,69 @@ export async function POST(request: NextRequest) {
   // Resolve the selection against the actual document before any write.
   if (body.activeDoc?.linkedSnippetText && finalResult.operations.some((op) => op.kind === 'write_word_section')) {
     const anchor = body.activeDoc.selectionAnchor;
-    const op = finalResult.operations.find((entry) => entry.kind === 'write_word_section');
+    let op = finalResult.operations.find((entry): entry is Extract<CoAuthorOperation, { kind: 'write_word_section' }> => entry.kind === 'write_word_section');
     if (!anchor || !body.activeDoc.driveItemId || anchor.docId !== body.activeDoc.driveItemId || !Array.isArray(anchor.paragraphs) || !anchor.revisionId || !Number.isInteger(anchor.startIndex) || !Number.isInteger(anchor.endIndex)) {
-      finalResult.writeResult = { status: 'not_applied', reason: 'unverified_selection', message: '未寫入文件：無法確認框選段落，請重新框選。' };
-    } else if (op?.kind === 'write_word_section') {
+      const fail = formatWriteFailureMessage('unverified_selection');
+      finalResult.writeResult = { status: fail.status, reason: 'unverified_selection', message: fail.message };
+    } else if (op) {
       const tokens = await getCandidateDriveWriteTokens(employee.email, { currentUserOnly: true });
-      const result = tokens[0] ? await writeAnchoredDocument(tokens[0], anchor, op.content) : { ok: false as const, reason: 'no_tokens' as const };
-      finalResult.writeResult = result.ok
-        ? { status: 'applied', reason: 'applied', message: '已更新文件。' }
-        : { status: result.reason === 'verification_unknown' ? 'unknown' : result.reason === 'no_tokens' || result.reason === 'auth_failed' ? 'needs_auth' : 'not_applied', reason: result.reason, message: result.reason === 'verification_unknown' ? '寫入結果尚無法確認，請先檢查文件，避免重複寫入。' : `未寫入文件：${result.reason}，請重新框選或檢查授權。` };
-      if (result.ok) finalResult.selectionAnchor = result.anchor;
+      let result = tokens[0] ? await writeAnchoredDocument(tokens[0], anchor, op.content) : { ok: false as const, reason: 'no_tokens' as const };
+      if (!result.ok && result.reason === 'paragraph_count_mismatch' && tokens[0]) {
+        const expectedCount = anchor.paragraphs.length;
+        const retryOutcome = await tryVertexStructuredCoAuthor(
+          body,
+          digestText,
+          graphResult,
+          followUp,
+          `前一次輸出的段落數與框選範圍不符。使用者框選的範圍共有 ${expectedCount} 個段落，請務必讓 operations[0].content 與 reply 嚴格輸出剛好 ${expectedCount} 個段落（${expectedCount === 1 ? '合成單一段落，中間不可換行分段' : `以單一換行符號分隔為 ${expectedCount} 個段落`}）。`
+        );
+        const retryOp = retryOutcome.response?.operations.find(
+          (entry): entry is Extract<CoAuthorOperation, { kind: 'write_word_section' }> =>
+            entry.kind === 'write_word_section'
+        );
+        if (retryOutcome.response && retryOp) {
+          op.content = retryOp.content;
+          finalResult.reply = retryOutcome.response.reply;
+          result = await writeAnchoredDocument(tokens[0], anchor, retryOp.content);
+        }
+      }
+      if (result.ok) {
+        finalResult.writeResult = { status: 'applied', reason: 'applied', message: '已更新文件。' };
+        finalResult.selectionAnchor = result.anchor;
+      } else {
+        const fail = formatWriteFailureMessage(result.reason);
+        finalResult.writeResult = { status: fail.status, reason: result.reason, message: fail.message };
+        if (fail.status === 'needs_auth') {
+          finalResult.needsDriveOAuth = true;
+        }
+      }
     }
     finalResult.driveFileUpdated = finalResult.writeResult?.status === 'applied';
     console.info('[coauthor-write]', JSON.stringify({ correlationId, operation: 'write_word_section', confidence: anchor?.confidence, status: finalResult.writeResult?.status, reason: finalResult.writeResult?.reason }));
     return NextResponse.json({ ...finalResult, correlationId });
   }
 
-  if (finalResult.operations.some((op) => op.kind === 'write_word_section')) {
-    finalResult.writeResult = { status: 'not_applied', reason: 'target_not_found', message: '未寫入文件：請先框選要修改的段落。' };
+  const isCursorInsertMode = Boolean(
+    body.activeDoc &&
+      (body.activeDoc.insertMode === 'insert_at_cursor' ||
+        body.activeDoc.insertMode === 'insert_before' ||
+        body.activeDoc.insertMode === 'insert_after' ||
+        body.activeDoc.cursorAnchorBefore ||
+        body.activeDoc.cursorAnchorAfter)
+  );
+
+  if (finalResult.operations.some((op) => op.kind === 'write_word_section') && !isCursorInsertMode) {
+    const fail = formatWriteFailureMessage('target_not_found');
+    finalResult.writeResult = { status: fail.status, reason: 'target_not_found', message: '未寫入文件：請先框選要修改的段落。' };
     finalResult.driveFileUpdated = false;
+    console.info('[coauthor-write]', JSON.stringify({ correlationId, operation: 'write_word_section', status: finalResult.writeResult.status, reason: finalResult.writeResult.reason }));
     return NextResponse.json({ ...finalResult, correlationId });
   }
 
   // Directly apply modification to Google Drive file (.docx / Google Docs) in-place so user does not need to copy-paste
   if (body.activeDoc && body.activeDoc.driveItemId) {
     const effectiveDriveId = body.activeDoc.driveItemId;
-    const insertMode = body.activeDoc.insertMode ?? 'replace';
-    const isCursorInsert =
-      insertMode === 'insert_at_cursor' ||
-      insertMode === 'insert_before' ||
-      insertMode === 'insert_after' ||
-      Boolean(body.activeDoc.cursorAnchorBefore || body.activeDoc.cursorAnchorAfter);
+    const isCursorInsert = isCursorInsertMode;
 
     // Never fall back to currentTargetContent (which defaults to sec-1 Cover Page)
     // unless the user explicitly locked a section/paragraph or we are in cursor insert mode!
@@ -2090,22 +2371,24 @@ export async function POST(request: NextRequest) {
           cursorAnchorAfter: body.activeDoc.cursorAnchorAfter,
         });
         finalResult.driveFileUpdated = patchRes.updated;
-        finalResult.writeResult = patchRes.updated
-          ? { status: 'applied', reason: 'applied', message: '已更新文件。' }
-          : { status: patchRes.reason === 'no_tokens' ? 'needs_auth' : 'not_applied', reason: patchRes.reason ?? 'api_error', message: `未寫入文件：${patchRes.reason ?? '發生錯誤'}。` };
+        if (patchRes.updated) {
+          finalResult.writeResult = { status: 'applied', reason: 'applied', message: '已更新文件。' };
+        } else {
+          const reasonCode = patchRes.reason ?? 'api_error';
+          const fail = formatWriteFailureMessage(reasonCode);
+          finalResult.writeResult = { status: fail.status, reason: reasonCode, message: fail.message };
+          if (fail.status === 'needs_auth') {
+            finalResult.needsDriveOAuth = true;
+          }
+        }
         finalResult.driveLiveStreaming = patchRes.liveStreaming;
         finalResult.resolvedNativeDocId = patchRes.resolvedNativeDocId;
-        if (
-          !patchRes.updated &&
-          patchRes.reason !== 'xml_target_not_found' &&
-          patchRes.reason !== 'target_not_found'
-        ) {
-          finalResult.needsDriveOAuth = true;
-        }
       } else {
         finalResult.driveFileUpdated = false;
-        finalResult.writeResult = { status: 'not_applied', reason: 'target_not_found', message: '未寫入文件：找不到目標段落。' };
+        const fail = formatWriteFailureMessage('target_not_found');
+        finalResult.writeResult = { status: fail.status, reason: 'target_not_found', message: fail.message };
       }
+      console.info('[coauthor-write]', JSON.stringify({ correlationId, operation: 'write_word_section_cursor', status: finalResult.writeResult?.status, reason: finalResult.writeResult?.reason }));
     }
 
     const imgOp = finalResult.operations.find((op) => op.kind === 'generate_image');
@@ -2154,27 +2437,9 @@ export async function GET(request: NextRequest) {
   );
 
   const tokens = await getCandidateDriveWriteTokens(employee.email, {
-    includeSlowFallbacks: true,
+    currentUserOnly: true,
   });
-  let hasDriveWriteToken = false;
-  for (const token of tokens) {
-    try {
-      const r = await fetch(
-        'https://www.googleapis.com/drive/v3/files/1cMm0JJ4ll3j-uKqOAWaDp6cvZQqiUw6L?fields=id,capabilities&supportsAllDrives=true',
-        {
-          headers: { Authorization: `Bearer ${token}` },
-          signal: AbortSignal.timeout(4_000),
-          cache: 'no-store',
-        }
-      );
-      if (r.ok) {
-        hasDriveWriteToken = true;
-        break;
-      }
-    } catch {
-      // ignore
-    }
-  }
+  let hasDriveWriteToken = tokens.length > 0;
   return NextResponse.json({
     hasDriveWriteToken,
     email: employee.email,
@@ -2365,6 +2630,8 @@ export async function PATCH(request: NextRequest) {
         orbRatioY?: number;
       };
       imageBase64?: string;
+      explicitSelectedText?: string;
+      sectionHeadingHint?: string;
       allowCursorContext?: boolean;
       driveFileId?: string;
       sectionId?: string;
@@ -2390,20 +2657,35 @@ export async function PATCH(request: NextRequest) {
 
     if (body.action === 'resolve_visual_selection') {
       if (!body.driveFileId) return NextResponse.json({ error: 'missing_file_id' }, { status: 400 });
-      const resolved = await resolveVisualSelectionFromScreen({
-        screenRect: body.screenRect,
-        imageBase64: body.imageBase64,
-        allowCursorContext: Boolean(body.allowCursorContext),
-      });
+      const resolved = body.explicitSelectedText?.trim()
+        ? {
+            mode: 'highlight' as const,
+            selectedText: body.explicitSelectedText.trim(),
+            sectionHeading: body.sectionHeadingHint?.trim() || '4.後續改善作法',
+            visibleBeforeText: '',
+            visibleAfterText: '',
+          }
+        : await resolveVisualSelectionFromScreen({
+            screenRect: body.screenRect,
+            imageBase64: body.imageBase64,
+            allowCursorContext: Boolean(body.allowCursorContext),
+          });
       if (resolved?.mode === 'highlight' && resolved.selectedText) {
+        const rawSelectedText = resolved.selectedText;
         const tokens = await getCandidateDriveWriteTokens(employee.email, { currentUserOnly: true });
         if (!tokens[0]) return NextResponse.json({ resolved: null, reason: 'no_tokens' });
         const read = await readGoogleDocument(body.driveFileId, tokens[0]);
         if (!read.ok) return NextResponse.json({ resolved: null, reason: read.reason });
-        const result = anchorDocumentSelection(body.driveFileId, read.doc, resolved.selectedText);
+        const result = anchorDocumentSelection(body.driveFileId, read.doc, rawSelectedText);
         if (!result.ok) return NextResponse.json({ resolved: null, reason: result.reason });
         resolved.selectedText = result.anchor.paragraphs.map((p) => p.text).join('\n');
-        return NextResponse.json({ resolved, anchor: result.anchor });
+        return NextResponse.json({
+          resolved: { ...resolved, rawSelectedText },
+          anchor: result.anchor,
+        });
+      }
+      if (!resolved) {
+        return NextResponse.json({ resolved: null, reason: 'target_not_found' });
       }
       return NextResponse.json({ resolved });
     }

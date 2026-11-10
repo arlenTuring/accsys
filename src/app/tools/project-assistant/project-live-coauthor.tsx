@@ -66,6 +66,8 @@ type ChatMessage = {
     label: string;
     text: string;
   };
+  writeResult?: CoAuthorResponse['writeResult'];
+  needsDriveAuthButton?: boolean;
   modifiedCopyText?: string;
   generatedImages?: Array<{
     caption: string;
@@ -85,6 +87,7 @@ type QueuedPromptItem = {
     sectionId?: string;
     label: string;
     snippetText: string;
+    rawSelectedSnippetText?: string;
     contextBefore?: string;
     contextAfter?: string;
     fullContextText?: string;
@@ -729,6 +732,7 @@ export function ProjectLiveCoAuthor({
     sectionId?: string;
     label: string;
     snippetText: string;
+    rawSelectedSnippetText?: string;
     contextBefore?: string;
     contextAfter?: string;
     fullContextText?: string;
@@ -746,9 +750,11 @@ export function ProjectLiveCoAuthor({
     startedAt: number;
     promise: Promise<{
       anchor?: import('@/lib/projects/doc-selection').DocAnchor;
+      reason?: string;
       sectionId?: string;
       sectionLabel: string;
       snippetText: string;
+      rawSelectedSnippetText?: string;
       contextBefore: string;
       contextAfter: string;
       fullContextText: string;
@@ -2167,9 +2173,11 @@ export function ProjectLiveCoAuthor({
     allowCursorContext = false
   ): Promise<{
     anchor?: import('@/lib/projects/doc-selection').DocAnchor;
+    reason?: string;
     sectionId?: string;
     sectionLabel: string;
     snippetText: string;
+    rawSelectedSnippetText?: string;
     contextBefore: string;
     contextAfter: string;
     fullContextText: string;
@@ -2195,10 +2203,13 @@ export function ProjectLiveCoAuthor({
       let visualBeforeFallback: string | undefined;
       let visualAfterFallback: string | undefined;
       let visualAnchor: import('@/lib/projects/doc-selection').DocAnchor | undefined;
+      let visualReason: string | undefined;
+      let visualRawSelectedText: string | undefined;
 
-      // 1. Check DOM selection in parent window first
+      // 1. Check DOM selection in parent window first (for local non-Drive docs)
       const domSelected = window.getSelection()?.toString().trim();
       if (
+        !activeDoc?.driveItemId &&
         domSelected &&
         domSelected.length >= 4 &&
         matchTextInActiveDocumentWithContext(domSelected)
@@ -2225,6 +2236,11 @@ export function ProjectLiveCoAuthor({
             height: paperHeight,
             orbRatioY: Math.max(0.05, Math.min(0.95, orbInPaperY / Math.max(1, paperHeight))),
           };
+          const testExplicitText =
+            typeof window !== 'undefined'
+              ? (window as unknown as { __ACCSYS_TEST_EXPLICIT_SELECTION__?: string })
+                  .__ACCSYS_TEST_EXPLICIT_SELECTION__
+              : undefined;
           const res = await fetch('/api/projects/coauthor', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
@@ -2232,15 +2248,19 @@ export function ProjectLiveCoAuthor({
               action: 'resolve_visual_selection',
               driveFileId: activeDoc?.driveItemId,
               screenRect,
+              explicitSelectedText: testExplicitText,
               allowCursorContext,
             }),
           });
           if (res.ok) {
             const data = (await res.json()) as {
               anchor?: import('@/lib/projects/doc-selection').DocAnchor;
+              reason?: string;
+              rawSelectedText?: string;
               resolved?: {
                 mode?: 'highlight' | 'cursor';
                 selectedText?: string;
+                rawSelectedText?: string;
                 sectionHeading?: string;
                 visibleBeforeText?: string;
                 visibleAfterText?: string;
@@ -2248,6 +2268,11 @@ export function ProjectLiveCoAuthor({
             };
             visualMode = data.resolved?.mode;
             visualAnchor = data.anchor;
+            visualReason = data.reason;
+            visualRawSelectedText =
+              data.resolved?.rawSelectedText?.trim() ||
+              data.rawSelectedText?.trim() ||
+              data.resolved?.selectedText?.trim();
             visualHeadingHint = data.resolved?.sectionHeading?.trim();
             visualBeforeFallback = data.resolved?.visibleBeforeText?.trim();
             visualAfterFallback = data.resolved?.visibleAfterText?.trim();
@@ -2260,8 +2285,8 @@ export function ProjectLiveCoAuthor({
         }
       }
 
-      // 3. Fallback: Check clipboard ONLY when not in cursor-only mode and clipboard text exists inside `activeDoc`
-      if (!verifiedExplicitText && visualMode !== 'cursor') {
+      // 3. Fallback: Check clipboard ONLY for local non-Drive docs when not in cursor-only mode
+      if (!activeDoc?.driveItemId && !verifiedExplicitText && visualMode !== 'cursor') {
         try {
           const clip = (await navigator.clipboard.readText()).trim();
           if (
@@ -2279,22 +2304,40 @@ export function ProjectLiveCoAuthor({
         }
       }
 
-      if (verifiedExplicitText) {
+      if (verifiedExplicitText || visualReason) {
         if (visualAnchor) {
+          const fullAnchorText = visualAnchor.paragraphs.map((p) => p.text).join('\n');
           return {
             anchor: visualAnchor,
             sectionId: undefined,
             sectionLabel: visualHeadingHint || '框選段落',
-            snippetText: visualAnchor.paragraphs.map((p) => p.text).join('\n'),
-            contextBefore: visualBeforeFallback || '', contextAfter: visualAfterFallback || '',
-            fullContextText: visualAnchor.paragraphs.map((p) => p.text).join('\n'),
-            blockIndex: undefined, insertMode: 'replace' as const,
+            snippetText: fullAnchorText,
+            rawSelectedSnippetText: visualRawSelectedText,
+            contextBefore: visualBeforeFallback || '',
+            contextAfter: visualAfterFallback || '',
+            fullContextText: fullAnchorText,
+            blockIndex: undefined,
+            insertMode: 'replace' as const,
           };
         }
-        const matchedFromDoc = matchTextInActiveDocumentWithContext(
-          verifiedExplicitText,
-          visualHeadingHint
-        );
+
+        // For Google Drive documents, never create an unanchored link or fall back to raw screenshot text
+        if (activeDoc?.driveItemId) {
+          return {
+            reason: visualReason || 'target_not_found',
+            sectionId: undefined,
+            sectionLabel: visualHeadingHint || '框選段落',
+            snippetText: '',
+            contextBefore: '',
+            contextAfter: '',
+            fullContextText: '',
+            blockIndex: undefined,
+          };
+        }
+
+        const matchedFromDoc = verifiedExplicitText
+          ? matchTextInActiveDocumentWithContext(verifiedExplicitText, visualHeadingHint)
+          : null;
         if (matchedFromDoc) {
           return {
             ...matchedFromDoc,
@@ -2303,20 +2346,14 @@ export function ProjectLiveCoAuthor({
         }
 
         return {
+          reason: 'target_not_found',
           sectionId: undefined,
           sectionLabel: visualHeadingHint || '框選段落',
-          snippetText: verifiedExplicitText,
-          contextBefore: visualBeforeFallback || '',
-          contextAfter: visualAfterFallback || '',
-          fullContextText: [
-            visualBeforeFallback ? `【前文脈絡】\n${visualBeforeFallback}` : '',
-            `【框選段落】\n${verifiedExplicitText}`,
-            visualAfterFallback ? `【後文脈絡】\n${visualAfterFallback}` : '',
-          ]
-            .filter(Boolean)
-            .join('\n\n'),
+          snippetText: '',
+          contextBefore: '',
+          contextAfter: '',
+          fullContextText: '',
           blockIndex: undefined,
-          insertMode: 'replace' as const,
         };
       }
 
@@ -2344,10 +2381,49 @@ export function ProjectLiveCoAuthor({
     return promise;
   }
 
+  function formatVisualSelectionFailureMessage(reason?: string): {
+    text: string;
+    needsAuthButton: boolean;
+  } {
+    switch (reason) {
+      case 'no_tokens':
+      case 'auth_failed':
+        return {
+          text: '需要授權 Google 文件',
+          needsAuthButton: true,
+        };
+      case 'permission_denied':
+        return {
+          text: '目前帳號沒有這份 Google 文件的權限，請確認檔案共用設定。',
+          needsAuthButton: false,
+        };
+      case 'target_not_found':
+        return {
+          text: '找不到框選的段落，請重新框選',
+          needsAuthButton: false,
+        };
+      case 'ambiguous_target':
+        return {
+          text: '文件中有相同內容，請框選更多文字',
+          needsAuthButton: false,
+        };
+      case 'api_error':
+        return {
+          text: '讀取 Google 文件時發生錯誤，請稍後再試一次。',
+          needsAuthButton: false,
+        };
+      default:
+        return {
+          text: '找不到框選的段落，請重新框選',
+          needsAuthButton: false,
+        };
+    }
+  }
+
   async function handleLinkSelectionOrbToSprite() {
     const domSelected = window.getSelection()?.toString().trim();
     const domMatched =
-      domSelected && domSelected.length >= 4
+      !activeDoc?.driveItemId && domSelected && domSelected.length >= 4
         ? matchTextInActiveDocumentWithContext(domSelected)
         : null;
 
@@ -2400,10 +2476,14 @@ export function ProjectLiveCoAuthor({
             visualResolved.insertMode === 'insert_after') &&
           (visualResolved.cursorAnchorBefore || visualResolved.cursorAnchorAfter)
       );
-      if (
+      const hasValidSelection = Boolean(
         visualResolved &&
-        (visualResolved.snippetText.trim().length >= 2 || isCursorTarget)
-      ) {
+          !visualResolved.reason &&
+          (activeDoc?.driveItemId
+            ? Boolean(visualResolved.anchor) || isCursorTarget
+            : visualResolved.snippetText.trim().length >= 2 || isCursorTarget)
+      );
+      if (visualResolved && hasValidSelection) {
         if (visualResolved.sectionId && activeDoc?.docType === 'word') {
           setSelectedSectionId(visualResolved.sectionId);
         }
@@ -2424,6 +2504,7 @@ export function ProjectLiveCoAuthor({
           sectionId: visualResolved.sectionId,
           label: visualResolved.sectionLabel,
           snippetText: visualResolved.snippetText,
+          rawSelectedSnippetText: visualResolved.rawSelectedSnippetText,
           contextBefore: visualResolved.contextBefore,
           contextAfter: visualResolved.contextAfter,
           fullContextText: visualResolved.fullContextText,
@@ -2444,12 +2525,14 @@ export function ProjectLiveCoAuthor({
         latestLinkedSelectionRef.current = null;
         setLinkedSelection(null);
         setSelectionOrb((prev) => ({ ...prev, linked: false }));
+        const failure = formatVisualSelectionFailureMessage(visualResolved?.reason);
         setMessages((prev) => [
           ...prev,
           {
             id: `orb-no-selection-${Date.now()}`,
             role: 'assistant',
-            text: '⚠️ 未能辨識到您在文件中反白框選的文字或游標位置（系統不會自動套用預設資料）。請確認已在文件畫面中將文字反白框選或將游標停留在段落間後再試一次。',
+            text: failure.text,
+            needsDriveAuthButton: failure.needsAuthButton,
             timestamp: '剛剛',
           },
         ]);
@@ -3246,17 +3329,26 @@ export function ProjectLiveCoAuthor({
           startVisualSelectionResolution(selectionOrb.topPx || 240, true),
           new Promise<null>((r) => setTimeout(() => r(null), 4800)),
         ]);
-        if (
+        const isAutoCursorTarget = Boolean(
           autoResolved &&
-          (autoResolved.snippetText.trim().length >= 2 ||
-            autoResolved.cursorAnchorBefore ||
-            autoResolved.cursorAnchorAfter)
-        ) {
+            (autoResolved.insertMode === 'insert_before' ||
+              autoResolved.insertMode === 'insert_after') &&
+            (autoResolved.cursorAnchorBefore || autoResolved.cursorAnchorAfter)
+        );
+        const isValidAutoResolved = Boolean(
+          autoResolved &&
+            !autoResolved.reason &&
+            (activeDoc?.driveItemId
+              ? Boolean(autoResolved.anchor) || isAutoCursorTarget
+              : autoResolved.snippetText.trim().length >= 2 || isAutoCursorTarget)
+        );
+        if (autoResolved && isValidAutoResolved) {
           const nextAutoLinked = {
             anchor: autoResolved.anchor,
             sectionId: autoResolved.sectionId,
             label: autoResolved.sectionLabel,
             snippetText: autoResolved.snippetText,
+            rawSelectedSnippetText: autoResolved.rawSelectedSnippetText,
             contextBefore: autoResolved.contextBefore,
             contextAfter: autoResolved.contextAfter,
             fullContextText: autoResolved.fullContextText,
@@ -3353,6 +3445,7 @@ export function ProjectLiveCoAuthor({
                 selectedRowIndex: item.selectedRowIndexSnapshot ?? selectedCell?.row ?? null,
                 currentTargetContent: effectiveTargetContent,
                 linkedSnippetText: effectiveLinked?.snippetText,
+                rawSelectedSnippetText: effectiveLinked?.rawSelectedSnippetText,
                 selectionAnchor: effectiveLinked?.anchor,
                 userExplicitlyLockedTarget: Boolean(
                   effectiveLinked || userLockedSectionInSidebarRef.current
@@ -3443,6 +3536,11 @@ export function ProjectLiveCoAuthor({
         text: displayReply,
         timestamp: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }),
         refusedCompanyAdmin: data.refusedCompanyAdmin,
+        writeResult: data.writeResult,
+        needsDriveAuthButton:
+          Boolean(data.needsDriveOAuth) ||
+          data.writeResult?.reason === 'no_tokens' ||
+          data.writeResult?.reason === 'auth_failed',
         webSearch: data.webSearch,
         graphRetrieval: data.graphRetrieval,
         generatedImages: generatedImgs.length > 0 ? generatedImgs : undefined,
@@ -5909,12 +6007,24 @@ export function ProjectLiveCoAuthor({
                       : 'text-slate-700'
                   }`}
                 >
-                  <div className="mb-1.5 flex items-center justify-between text-xs text-slate-400">
-                    <span className="font-semibold text-slate-500">
-                      {m.role === 'user' ? '您' : '協作助手'}
-                    </span>
-                    <span>{m.timestamp}</span>
-                  </div>
+                    <div className="mb-1.5 flex items-center justify-between text-xs text-slate-400">
+                      <span className="font-semibold text-slate-500">
+                        {m.role === 'user' ? '您' : '協作助手'}
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        {m.role === 'assistant' && m.writeResult?.status === 'applied' && (
+                          <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[11px] font-bold text-emerald-700">
+                            已更新文件
+                          </span>
+                        )}
+                        {m.role === 'assistant' && m.writeResult && m.writeResult.status !== 'applied' && (
+                          <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[11px] font-bold text-rose-700">
+                            未寫入文件
+                          </span>
+                        )}
+                        <span>{m.timestamp}</span>
+                      </div>
+                    </div>
                   {m.linkedSnippet && (
                     <div className="mb-2.5 rounded-lg border border-slate-200/80 bg-white p-2.5 text-sm text-slate-700">
                       <div className="mb-1 flex items-center gap-1 font-semibold text-slate-700">
@@ -5986,6 +6096,17 @@ export function ProjectLiveCoAuthor({
                     </div>
                   )}
                   <div className="whitespace-pre-wrap">{m.text.replace(/\*\*/g, '')}</div>
+                  {m.role === 'assistant' && m.needsDriveAuthButton && (
+                    <div className="mt-2.5">
+                      <button
+                        type="button"
+                        onClick={() => openDriveWriteAuthPopup()}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-td-blue px-3 py-1.5 text-xs font-bold text-white shadow-xs transition hover:bg-td-blue-dark"
+                      >
+                        <span>授權 Google 文件</span>
+                      </button>
+                    </div>
+                  )}
                   {m.generatedImages && m.generatedImages.length > 0 && (
                     <div className="mt-2.5 space-y-2">
                       {m.generatedImages.map((img, iIdx) => (

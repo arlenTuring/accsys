@@ -40,12 +40,28 @@ export function matchDocumentSelection(paragraphs: DocParagraph[], selected: str
   | { ok: false; reason: 'target_not_found' | 'ambiguous_target' } {
   const selection = bigrams(selected);
   if (selection.size < 8) return { ok: false, reason: 'target_not_found' };
-  const hits = paragraphs.map((paragraph, index) => {
+  const candidates = paragraphs.map((paragraph, index) => {
     const grams = bigrams(paragraph.text);
+    if (paragraph.heading || grams.size < 6) {
+      return { paragraph, index, score: 0, selectionCoverage: 0, eligible: false };
+    }
     const overlap = [...grams].filter((g) => selection.has(g)).length;
-    return { paragraph, index, score: grams.size ? overlap / grams.size : 0 };
-  }).filter((x) => !x.paragraph.heading && x.score >= 0.72);
-  if (!hits.length) return { ok: false, reason: 'target_not_found' };
+    return {
+      paragraph,
+      index,
+      score: overlap / grams.size,
+      selectionCoverage: overlap / selection.size,
+      eligible: true,
+    };
+  });
+  const hits = candidates.filter((x) => x.eligible && x.score >= 0.72);
+  if (!hits.length) {
+    const partialHits = candidates.filter((x) => x.eligible && x.selectionCoverage >= 0.8);
+    if (!partialHits.length) return { ok: false, reason: 'target_not_found' };
+    if (partialHits.length > 1) return { ok: false, reason: 'ambiguous_target' };
+    const hit = partialHits[0];
+    return { ok: true, match: { paragraphs: [hit.paragraph], confidence: hit.selectionCoverage } };
+  }
   const groups: typeof hits[] = [];
   for (const hit of hits) {
     const group = groups[groups.length - 1];
