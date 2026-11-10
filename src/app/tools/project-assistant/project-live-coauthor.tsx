@@ -33,6 +33,9 @@ import {
 } from '@/lib/projects/clipboard-selection';
 import { countVisibleChars, diffSentences } from '@/lib/projects/sentence-diff';
 
+// Background refresh of the open Google Doc's paragraphs used by the orb's clipboard match.
+const DOC_PARAGRAPHS_REFRESH_MS = 20_000;
+
 const PROJECT_QUICK_PROMPTS = [
   {
     id: 'review-doc',
@@ -964,14 +967,28 @@ export function ProjectLiveCoAuthor({
     return /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent) ? '⌘C' : 'Ctrl+C';
   }, []);
 
-  async function loadDocParagraphs(
-    driveFileId: string,
-    maxAgeMs: number
-  ): Promise<{ ok: true; paragraphs: DocParagraph[]; revisionId: string } | { ok: false; reason: string }> {
+  type DocParagraphsLoad =
+    | { ok: true; paragraphs: DocParagraph[]; revisionId: string }
+    | { ok: false; reason: string };
+  // One in-flight read per document, so an orb click during a background refresh waits
+  // for that read instead of starting a second multi-second documents.get.
+  const docParagraphsInflightRef = useRef<{ driveFileId: string; promise: Promise<DocParagraphsLoad> } | null>(null);
+
+  function loadDocParagraphs(driveFileId: string, maxAgeMs: number): Promise<DocParagraphsLoad> {
     const cached = docParagraphsRef.current;
     if (cached && cached.driveFileId === driveFileId && Date.now() - cached.fetchedAt <= maxAgeMs) {
-      return { ok: true, paragraphs: cached.paragraphs, revisionId: cached.revisionId };
+      return Promise.resolve({ ok: true, paragraphs: cached.paragraphs, revisionId: cached.revisionId });
     }
+    const inflight = docParagraphsInflightRef.current;
+    if (inflight && inflight.driveFileId === driveFileId) return inflight.promise;
+    const promise = fetchDocParagraphs(driveFileId).finally(() => {
+      if (docParagraphsInflightRef.current?.promise === promise) docParagraphsInflightRef.current = null;
+    });
+    docParagraphsInflightRef.current = { driveFileId, promise };
+    return promise;
+  }
+
+  async function fetchDocParagraphs(driveFileId: string): Promise<DocParagraphsLoad> {
     try {
       const res = await fetch(
         `/api/projects/coauthor/paragraphs?driveFileId=${encodeURIComponent(driveFileId)}`,
@@ -1002,6 +1019,12 @@ export function ProjectLiveCoAuthor({
     const driveFileId = activeDoc?.driveItemId;
     if (!driveFileId || activeDoc?.docType !== 'word') return;
     void loadDocParagraphs(driveFileId, 0);
+    // Keep the cache warm while the document is open so the orb can match instantly;
+    // edits made in the Docs iframe show up within one refresh interval.
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void loadDocParagraphs(driveFileId, DOC_PARAGRAPHS_REFRESH_MS);
+    }, DOC_PARAGRAPHS_REFRESH_MS);
+    return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDoc?.driveItemId, activeDoc?.docType]);
 
@@ -2535,6 +2558,9 @@ export function ProjectLiveCoAuthor({
       pushAssistantNotice(clipboardClassificationMessage('unsupported', copyKeyLabel));
       return;
     }
+    // Any cached copy is fine for matching: the server re-anchors by exact text when the
+    // revision moved. Only a miss forces a fresh read below.
+    const paragraphsPromise = loadDocParagraphs(driveFileId, Number.POSITIVE_INFINITY);
     try {
       clip = await navigator.clipboard.readText();
     } catch {
@@ -2544,7 +2570,7 @@ export function ProjectLiveCoAuthor({
 
     setIsResolvingVisualSelection(true);
     try {
-      let loaded = await loadDocParagraphs(driveFileId, 5_000);
+      let loaded = await paragraphsPromise;
       if (!loaded.ok) {
         const failure = formatVisualSelectionFailureMessage(loaded.reason);
         pushAssistantNotice(
@@ -2554,8 +2580,10 @@ export function ProjectLiveCoAuthor({
         return;
       }
       let result = classifyClipboardSelection(clip, loaded.paragraphs, lastLinkedRangeRef.current);
-      if (result.kind === 'not_in_doc' || result.kind === 'ambiguous') {
+      const cacheAgeMs = Date.now() - (docParagraphsRef.current?.fetchedAt ?? 0);
+      if ((result.kind === 'not_in_doc' || result.kind === 'ambiguous') && cacheAgeMs > 3_000) {
         // The document may have been edited after the cached read; retry once with a fresh copy.
+        docParagraphsRef.current = null;
         const fresh = await loadDocParagraphs(driveFileId, 0);
         if (fresh.ok) {
           loaded = fresh;
@@ -2651,6 +2679,7 @@ export function ProjectLiveCoAuthor({
       }
       patchEdit({ reverting: false, reverted: true });
       docParagraphsRef.current = null;
+      void loadDocParagraphs(activeDoc.driveItemId, 0);
       const restoredText = data.anchor.paragraphs.map((p) => p.text).join('\n');
       const current = latestLinkedSelectionRef.current;
       if (current?.anchor && current.anchor.startIndex === edit.anchor.startIndex) {

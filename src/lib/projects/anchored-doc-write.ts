@@ -19,9 +19,15 @@ function reasonForStatus(status: number): FailureReason {
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+// Only what paragraphsFromDocument and revision checks need. A full documents.get of a long
+// proposal (tables, styles, lists) takes seconds; this mask cuts the payload to the text runs.
+const PARAGRAPH_FIELDS =
+  'revisionId,body.content(startIndex,endIndex,paragraph(elements(textRun(content)),paragraphStyle(namedStyleType)))';
+
 export async function readGoogleDocument(docId: string, token: string): Promise<ReadResult> {
   try {
-    const res = await fetch(`https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}`, {
+    const url = `https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}?fields=${encodeURIComponent(PARAGRAPH_FIELDS)}`;
+    const res = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` }, cache: 'no-store', signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) return { ok: false, reason: reasonForStatus(res.status) };
