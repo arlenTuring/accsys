@@ -24,6 +24,14 @@ import type {
   CoAuthorResponse,
 } from '@/app/api/projects/coauthor/route';
 import { ChatComposer } from '../ai-chat/chat-composer';
+import type { DocAnchor, DocParagraph } from '@/lib/projects/doc-selection';
+import {
+  classifyClipboardSelection,
+  clipboardClassificationMessage,
+  previewSnippet,
+  type LinkedParagraphRange,
+} from '@/lib/projects/clipboard-selection';
+import { countVisibleChars, diffSentences } from '@/lib/projects/sentence-diff';
 
 const PROJECT_QUICK_PROMPTS = [
   {
@@ -67,6 +75,21 @@ type ChatMessage = {
     text: string;
   };
   writeResult?: CoAuthorResponse['writeResult'];
+  /** Applied paragraph edit: summary + diff + undo instead of repeating the full text. */
+  editResult?: {
+    label: string;
+    before: string;
+    after: string;
+    anchor: DocAnchor;
+    reverted?: boolean;
+    reverting?: boolean;
+    revertError?: string;
+  };
+  /** Clipboard still holds the previously linked paragraph: ask whether to keep it. */
+  selectionConfirm?: {
+    range: LinkedParagraphRange;
+    resolved?: 'kept' | 'recopy';
+  };
   needsDriveAuthButton?: boolean;
   modifiedCopyText?: string;
   generatedImages?: Array<{
@@ -95,6 +118,10 @@ type QueuedPromptItem = {
     insertMode?: 'replace' | 'insert_at_cursor' | 'insert_before' | 'insert_after';
     cursorAnchorBefore?: string;
     cursorAnchorAfter?: string;
+    /** 1-based paragraph ordinal inside its section (clipboard-linked Drive docs). */
+    ordinalInSection?: number;
+    /** Copied text covered only part of the paragraph; the whole paragraph is rewritten. */
+    partial?: boolean;
   } | null;
   selectedRowIndexSnapshot?: number | null;
   targetIdSnapshot?: string;
@@ -740,8 +767,13 @@ export function ProjectLiveCoAuthor({
     insertMode?: 'replace' | 'insert_at_cursor' | 'insert_before' | 'insert_after';
     cursorAnchorBefore?: string;
     cursorAnchorAfter?: string;
+    /** 1-based paragraph ordinal inside its section (clipboard-linked Drive docs). */
+    ordinalInSection?: number;
+    /** Copied text covered only part of the paragraph; the whole paragraph is rewritten. */
+    partial?: boolean;
   } | null>(null);
   const [isResolvingVisualSelection, setIsResolvingVisualSelection] = useState(false);
+  const [linkedChipExpanded, setLinkedChipExpanded] = useState(false);
   const [spriteSignalFlash, setSpriteSignalFlash] = useState(false);
 
   const inFlightVisualSelectionRef = useRef<{
@@ -915,6 +947,63 @@ export function ProjectLiveCoAuthor({
     () => documents.find((d) => d.id === activeDocId) ?? null,
     [documents, activeDocId]
   );
+
+  // Google Docs paragraphs (text + indices) of the open Drive document. The orb flow
+  // ("select → copy → click orb") matches clipboard text against these in the browser,
+  // so clipboard content that is not part of the document is never sent anywhere.
+  const docParagraphsRef = useRef<{
+    driveFileId: string;
+    revisionId: string;
+    paragraphs: DocParagraph[];
+    fetchedAt: number;
+  } | null>(null);
+  // Paragraph range linked most recently, to detect "selected a new paragraph but forgot to copy".
+  const lastLinkedRangeRef = useRef<{ startIndex: number; text: string } | null>(null);
+  const copyKeyLabel = useMemo(() => {
+    if (typeof navigator === 'undefined') return '⌘C';
+    return /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent) ? '⌘C' : 'Ctrl+C';
+  }, []);
+
+  async function loadDocParagraphs(
+    driveFileId: string,
+    maxAgeMs: number
+  ): Promise<{ ok: true; paragraphs: DocParagraph[]; revisionId: string } | { ok: false; reason: string }> {
+    const cached = docParagraphsRef.current;
+    if (cached && cached.driveFileId === driveFileId && Date.now() - cached.fetchedAt <= maxAgeMs) {
+      return { ok: true, paragraphs: cached.paragraphs, revisionId: cached.revisionId };
+    }
+    try {
+      const res = await fetch(
+        `/api/projects/coauthor/paragraphs?driveFileId=${encodeURIComponent(driveFileId)}`,
+        { cache: 'no-store' }
+      );
+      const data = (await res.json()) as {
+        revisionId?: string;
+        paragraphs?: DocParagraph[];
+        reason?: string;
+      };
+      if (!res.ok || !data.revisionId || !Array.isArray(data.paragraphs)) {
+        return { ok: false, reason: data.reason || 'api_error' };
+      }
+      docParagraphsRef.current = {
+        driveFileId,
+        revisionId: data.revisionId,
+        paragraphs: data.paragraphs,
+        fetchedAt: Date.now(),
+      };
+      return { ok: true, paragraphs: data.paragraphs, revisionId: data.revisionId };
+    } catch {
+      return { ok: false, reason: 'api_error' };
+    }
+  }
+
+  useEffect(() => {
+    lastLinkedRangeRef.current = null;
+    const driveFileId = activeDoc?.driveItemId;
+    if (!driveFileId || activeDoc?.docType !== 'word') return;
+    void loadDocParagraphs(driveFileId, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDoc?.driveItemId, activeDoc?.docType]);
 
   const resolvedDocIdsRef = useRef<Set<string>>(new Set());
   const droppedFilesByDocIdRef = useRef<Map<string, File>>(new Map());
@@ -2185,6 +2274,10 @@ export function ProjectLiveCoAuthor({
     insertMode?: 'replace' | 'insert_at_cursor' | 'insert_before' | 'insert_after';
     cursorAnchorBefore?: string;
     cursorAnchorAfter?: string;
+    /** 1-based paragraph ordinal inside its section (clipboard-linked Drive docs). */
+    ordinalInSection?: number;
+    /** Copied text covered only part of the paragraph; the whole paragraph is rewritten. */
+    partial?: boolean;
   } | null> {
     const existing = inFlightVisualSelectionRef.current;
     if (
@@ -2216,73 +2309,6 @@ export function ProjectLiveCoAuthor({
       ) {
         verifiedExplicitText = domSelected;
         visualMode = 'highlight';
-      }
-
-      // 2. Capture live visual selection (or cursor position when allowCursorContext is true)
-      //    from the editor viewport on screen so cross-origin Google Docs highlights & cursor positions are extracted accurately
-      if (!verifiedExplicitText && editorViewportRef.current) {
-        try {
-          const vp = editorViewportRef.current;
-          const rect = vp.getBoundingClientRect();
-          const chromeTop = Math.max(0, window.outerHeight - window.innerHeight);
-          const chromeLeft = Math.max(0, Math.round((window.outerWidth - window.innerWidth) / 2));
-          const topToolbarOffset = 92;
-          const paperHeight = Math.max(160, Math.round(rect.height - topToolbarOffset - 24));
-          const orbInPaperY = Math.max(10, orbTopPx - topToolbarOffset);
-          const screenRect = {
-            x: Math.max(0, Math.round(window.screenX + chromeLeft + rect.left + rect.width * 0.08)),
-            y: Math.max(0, Math.round(window.screenY + chromeTop + rect.top + topToolbarOffset)),
-            width: Math.max(240, Math.round(rect.width * 0.78)),
-            height: paperHeight,
-            orbRatioY: Math.max(0.05, Math.min(0.95, orbInPaperY / Math.max(1, paperHeight))),
-          };
-          const testExplicitText =
-            typeof window !== 'undefined'
-              ? (window as unknown as { __ACCSYS_TEST_EXPLICIT_SELECTION__?: string })
-                  .__ACCSYS_TEST_EXPLICIT_SELECTION__
-              : undefined;
-          const res = await fetch('/api/projects/coauthor', {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'resolve_visual_selection',
-              driveFileId: activeDoc?.driveItemId,
-              screenRect,
-              explicitSelectedText: testExplicitText,
-              allowCursorContext,
-            }),
-          });
-          if (res.ok) {
-            const data = (await res.json()) as {
-              anchor?: import('@/lib/projects/doc-selection').DocAnchor;
-              reason?: string;
-              rawSelectedText?: string;
-              resolved?: {
-                mode?: 'highlight' | 'cursor';
-                selectedText?: string;
-                rawSelectedText?: string;
-                sectionHeading?: string;
-                visibleBeforeText?: string;
-                visibleAfterText?: string;
-              } | null;
-            };
-            visualMode = data.resolved?.mode;
-            visualAnchor = data.anchor;
-            visualReason = data.reason;
-            visualRawSelectedText =
-              data.resolved?.rawSelectedText?.trim() ||
-              data.rawSelectedText?.trim() ||
-              data.resolved?.selectedText?.trim();
-            visualHeadingHint = data.resolved?.sectionHeading?.trim();
-            visualBeforeFallback = data.resolved?.visibleBeforeText?.trim();
-            visualAfterFallback = data.resolved?.visibleAfterText?.trim();
-            if (data.resolved?.selectedText && data.resolved.selectedText.trim().length >= 4) {
-              verifiedExplicitText = data.resolved.selectedText.trim();
-            }
-          }
-        } catch {
-          // Ignore network/capture failure and continue to fallback
-        }
       }
 
       // 3. Fallback: Check clipboard ONLY for local non-Drive docs when not in cursor-only mode
@@ -2420,7 +2446,229 @@ export function ProjectLiveCoAuthor({
     }
   }
 
+  function pushAssistantNotice(text: string, extra?: Partial<ChatMessage>) {
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `orb-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        role: 'assistant',
+        text,
+        timestamp: '剛剛',
+        ...extra,
+      },
+    ]);
+  }
+
+  function clearLinkedSelection() {
+    latestLinkedSelectionRef.current = null;
+    setLinkedSelection(null);
+    setScopeMode('whole_doc');
+    setSelectionOrb((prev) => ({ ...prev, linked: false }));
+  }
+
+  function applyLinkedRange(
+    range: LinkedParagraphRange,
+    revisionId: string,
+    driveFileId: string,
+    copiedText?: string
+  ) {
+    const text = range.paragraphs.map((p) => p.text).join('\n');
+    const all = docParagraphsRef.current?.paragraphs ?? [];
+    const firstIdx = all.findIndex((p) => p.startIndex === range.startIndex);
+    const lastIdx = all.findIndex((p) => p.endIndex - 1 === range.endIndex);
+    const contextBefore = firstIdx > 0 ? all[firstIdx - 1].text : '';
+    const contextAfter = lastIdx >= 0 && lastIdx + 1 < all.length ? all[lastIdx + 1].text : '';
+    const anchor: DocAnchor = {
+      paragraphs: range.paragraphs,
+      confidence: range.confidence,
+      docId: driveFileId,
+      revisionId,
+      startIndex: range.startIndex,
+      endIndex: range.endIndex,
+    };
+    const next = {
+      anchor,
+      sectionId: undefined,
+      label: range.sectionLabel,
+      snippetText: text,
+      rawSelectedSnippetText: range.partial ? copiedText?.trim() : undefined,
+      contextBefore,
+      contextAfter,
+      fullContextText: [
+        contextBefore ? `【前文脈絡】\n${contextBefore}` : '',
+        `【框選段落】\n${text}`,
+        contextAfter ? `【後文脈絡】\n${contextAfter}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+      blockIndex: undefined,
+      insertMode: 'replace' as const,
+      ordinalInSection: range.ordinalInSection,
+      partial: range.partial,
+    };
+    latestLinkedSelectionRef.current = next;
+    setLinkedSelection(next);
+    lastLinkedRangeRef.current = { startIndex: range.startIndex, text };
+    setScopeMode('target_region');
+    setSelectionOrb((prev) => ({ ...prev, linked: true, sectionLabel: range.sectionLabel, snippetText: text }));
+    setSpriteMinimized(false);
+    setSpriteSignalFlash(true);
+    setTimeout(() => setSpriteSignalFlash(false), 2600);
+    pushAssistantNotice(
+      `已關注「${range.sectionLabel}」第 ${range.ordinalInSection} 段「${previewSnippet(text)}」${
+        range.partial ? '（你選取了其中一部分，將改寫整段並保留未選取的句子）' : ''
+      }，請輸入修改需求。\n不是這段？重新選取並按 ${copyKeyLabel} 後再按小球。`
+    );
+    requestAnimationFrame(() => composerTextareaRef.current?.focus());
+  }
+
+  /**
+   * Orb flow for Google Docs: the user selects text in the (cross-origin) Docs iframe,
+   * copies it, then clicks the orb. The clipboard is read here and matched against the
+   * document paragraphs in the browser; anything not found in the document is discarded.
+   */
+  async function linkSelectionFromClipboard() {
+    const driveFileId = activeDoc?.driveItemId;
+    if (!driveFileId) return;
+    let clip = '';
+    if (typeof navigator === 'undefined' || !navigator.clipboard?.readText) {
+      pushAssistantNotice(clipboardClassificationMessage('unsupported', copyKeyLabel));
+      return;
+    }
+    try {
+      clip = await navigator.clipboard.readText();
+    } catch {
+      pushAssistantNotice(clipboardClassificationMessage('denied', copyKeyLabel));
+      return;
+    }
+
+    setIsResolvingVisualSelection(true);
+    try {
+      let loaded = await loadDocParagraphs(driveFileId, 5_000);
+      if (!loaded.ok) {
+        const failure = formatVisualSelectionFailureMessage(loaded.reason);
+        pushAssistantNotice(
+          loaded.reason === 'api_error' ? clipboardClassificationMessage('load_failed', copyKeyLabel) : failure.text,
+          { needsDriveAuthButton: failure.needsAuthButton }
+        );
+        return;
+      }
+      let result = classifyClipboardSelection(clip, loaded.paragraphs, lastLinkedRangeRef.current);
+      if (result.kind === 'not_in_doc' || result.kind === 'ambiguous') {
+        // The document may have been edited after the cached read; retry once with a fresh copy.
+        const fresh = await loadDocParagraphs(driveFileId, 0);
+        if (fresh.ok) {
+          loaded = fresh;
+          result = classifyClipboardSelection(clip, fresh.paragraphs, lastLinkedRangeRef.current);
+        }
+      }
+      if (result.kind === 'ok') {
+        applyLinkedRange(result.range, loaded.revisionId, driveFileId, clip);
+        return;
+      }
+      if (result.kind === 'same_as_last') {
+        pushAssistantNotice(
+          `仍是「${result.range.sectionLabel}」第 ${result.range.ordinalInSection} 段「${previewSnippet(
+            result.range.paragraphs.map((p) => p.text).join(' ')
+          )}」。要沿用嗎？`,
+          { selectionConfirm: { range: result.range } }
+        );
+        return;
+      }
+      clearLinkedSelection();
+      pushAssistantNotice(clipboardClassificationMessage(result.kind, copyKeyLabel));
+    } finally {
+      setIsResolvingVisualSelection(false);
+    }
+  }
+
+  function resolveSelectionConfirm(messageId: string, choice: 'kept' | 'recopy') {
+    const msg = messages.find((m) => m.id === messageId);
+    const driveFileId = activeDoc?.driveItemId;
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId && m.selectionConfirm
+          ? { ...m, selectionConfirm: { ...m.selectionConfirm, resolved: choice } }
+          : m
+      )
+    );
+    if (!msg?.selectionConfirm || !driveFileId) return;
+    if (choice === 'kept') {
+      const revisionId =
+        docParagraphsRef.current?.driveFileId === driveFileId ? docParagraphsRef.current.revisionId : '';
+      if (revisionId) applyLinkedRange(msg.selectionConfirm.range, revisionId, driveFileId);
+      return;
+    }
+    clearLinkedSelection();
+    pushAssistantNotice(clipboardClassificationMessage('empty', copyKeyLabel));
+  }
+
+  // Paste into the composer: if the pasted text is part of the open Google Doc, link it
+  // instead of inserting it. Decided synchronously against cached paragraphs.
+  const composerPasteHandlerRef = useRef<(e: ClipboardEvent) => void>(() => undefined);
+  composerPasteHandlerRef.current = (e: ClipboardEvent) => {
+    const driveFileId = activeDoc?.driveItemId;
+    const cached = docParagraphsRef.current;
+    if (!driveFileId || !cached || cached.driveFileId !== driveFileId) return;
+    const pasted = e.clipboardData?.getData('text/plain') ?? '';
+    const result = classifyClipboardSelection(pasted, cached.paragraphs, null);
+    if (result.kind !== 'ok') return;
+    e.preventDefault();
+    applyLinkedRange(result.range, cached.revisionId, driveFileId, pasted);
+  };
+  useEffect(() => {
+    const el = composerTextareaRef.current;
+    if (!el) return;
+    const listener = (e: ClipboardEvent) => composerPasteHandlerRef.current(e);
+    el.addEventListener('paste', listener);
+    return () => el.removeEventListener('paste', listener);
+  });
+
+  async function revertEdit(messageId: string) {
+    const msg = messages.find((m) => m.id === messageId);
+    const edit = msg?.editResult;
+    if (!edit || edit.reverted || edit.reverting || !activeDoc?.driveItemId) return;
+    const patchEdit = (patch: Partial<NonNullable<ChatMessage['editResult']>>) =>
+      setMessages((prev) =>
+        prev.map((m) => (m.id === messageId && m.editResult ? { ...m, editResult: { ...m.editResult, ...patch } } : m))
+      );
+    patchEdit({ reverting: true, revertError: undefined });
+    try {
+      const res = await fetch('/api/projects/coauthor', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          action: 'revert_anchored_write',
+          driveFileId: activeDoc.driveItemId,
+          anchor: edit.anchor,
+          originalText: edit.before,
+        }),
+      });
+      const data = (await res.json()) as { ok?: boolean; anchor?: DocAnchor; message?: string };
+      if (!data.ok || !data.anchor) {
+        patchEdit({ reverting: false, revertError: data.message || '未能復原，請重新整理文件後再試。' });
+        return;
+      }
+      patchEdit({ reverting: false, reverted: true });
+      docParagraphsRef.current = null;
+      const restoredText = data.anchor.paragraphs.map((p) => p.text).join('\n');
+      const current = latestLinkedSelectionRef.current;
+      if (current?.anchor && current.anchor.startIndex === edit.anchor.startIndex) {
+        const next = { ...current, anchor: data.anchor, snippetText: restoredText };
+        latestLinkedSelectionRef.current = next;
+        setLinkedSelection(next);
+        lastLinkedRangeRef.current = { startIndex: data.anchor.startIndex, text: restoredText };
+      }
+    } catch {
+      patchEdit({ reverting: false, revertError: '未能復原：連線失敗，請稍後再試。' });
+    }
+  }
+
   async function handleLinkSelectionOrbToSprite() {
+    if (activeDoc?.driveItemId && activeDoc.docType === 'word') {
+      await linkSelectionFromClipboard();
+      return;
+    }
     const domSelected = window.getSelection()?.toString().trim();
     const domMatched =
       !activeDoc?.driveItemId && domSelected && domSelected.length >= 4
@@ -3301,72 +3549,16 @@ export function ProjectLiveCoAuthor({
       ]);
     }
 
-    let currentLinked = latestLinkedSelectionRef.current ?? linkedSelection;
+    const currentLinked = latestLinkedSelectionRef.current ?? linkedSelection;
     // If the queued item targeted the same paragraph that is still active (e.g. refined by the previous prompt),
     // use the latest `linkedSelection` so the newly updated snippet is used; otherwise respect the snapshot.
-    let effectiveLinked =
+    const effectiveLinked =
       item.linkedSelectionSnapshot &&
       currentLinked &&
       (item.linkedSelectionSnapshot.label === currentLinked.label ||
         item.linkedSelectionSnapshot.sectionId === currentLinked.sectionId)
         ? currentLinked
         : item.linkedSelectionSnapshot ?? currentLinked;
-
-    // If the user simply placed their cursor in the Word document (without clicking the orb first)
-    // and typed a prompt asking to write/insert/modify in this area, automatically detect the live cursor position!
-    const hasPositionalWriteIntent =
-      activeDoc?.docType === 'word' &&
-      !effectiveLinked &&
-      !userLockedSectionInSidebarRef.current &&
-      /這個區域|這塊區域|這個位置|這段|這裡|此處|游標|寫進|寫入|加入|新增|插入|補上|如上方|如下方|上方.*格式/i.test(
-        text
-      );
-
-    if (hasPositionalWriteIntent) {
-      setIsResolvingVisualSelection(true);
-      try {
-        const autoResolved = await Promise.race([
-          startVisualSelectionResolution(selectionOrb.topPx || 240, true),
-          new Promise<null>((r) => setTimeout(() => r(null), 4800)),
-        ]);
-        const isAutoCursorTarget = Boolean(
-          autoResolved &&
-            (autoResolved.insertMode === 'insert_before' ||
-              autoResolved.insertMode === 'insert_after') &&
-            (autoResolved.cursorAnchorBefore || autoResolved.cursorAnchorAfter)
-        );
-        const isValidAutoResolved = Boolean(
-          autoResolved &&
-            !autoResolved.reason &&
-            (activeDoc?.driveItemId
-              ? Boolean(autoResolved.anchor) || isAutoCursorTarget
-              : autoResolved.snippetText.trim().length >= 2 || isAutoCursorTarget)
-        );
-        if (autoResolved && isValidAutoResolved) {
-          const nextAutoLinked = {
-            anchor: autoResolved.anchor,
-            sectionId: autoResolved.sectionId,
-            label: autoResolved.sectionLabel,
-            snippetText: autoResolved.snippetText,
-            rawSelectedSnippetText: autoResolved.rawSelectedSnippetText,
-            contextBefore: autoResolved.contextBefore,
-            contextAfter: autoResolved.contextAfter,
-            fullContextText: autoResolved.fullContextText,
-            blockIndex: autoResolved.blockIndex,
-            insertMode: autoResolved.insertMode,
-            cursorAnchorBefore: autoResolved.cursorAnchorBefore,
-            cursorAnchorAfter: autoResolved.cursorAnchorAfter,
-          };
-          latestLinkedSelectionRef.current = nextAutoLinked;
-          setLinkedSelection(nextAutoLinked);
-          setScopeMode('target_region');
-          currentLinked = nextAutoLinked;
-          effectiveLinked = nextAutoLinked;
-        }
-      } finally {
-        setIsResolvingVisualSelection(false);
-      }
-    }
 
     const effectiveScopeMode = effectiveLinked ? 'target_region' : item.scopeMode;
 
@@ -3478,14 +3670,35 @@ export function ProjectLiveCoAuthor({
         }
       }
 
+      let appliedEdit: ChatMessage['editResult'];
       if (modifiedParagraphText && data.writeResult?.status === 'applied') {
-        if (linkedSelection) {
-          setLinkedSelection((prev) =>
-            prev ? { ...prev, snippetText: modifiedParagraphText, anchor: data.selectionAnchor } : null
-          );
+        const newAnchor = data.selectionAnchor;
+        const afterText = newAnchor
+          ? newAnchor.paragraphs.map((p) => p.text).join('\n')
+          : modifiedParagraphText;
+        const beforeText = effectiveLinked?.anchor
+          ? effectiveLinked.anchor.paragraphs.map((p) => p.text).join('\n')
+          : effectiveLinked?.snippetText ?? '';
+        if (newAnchor && beforeText) {
+          appliedEdit = {
+            label: effectiveLinked?.label ?? '框選段落',
+            before: beforeText,
+            after: afterText,
+            anchor: newAnchor,
+          };
         }
+        // Keep the link on the same (now rewritten) paragraph so follow-up instructions target it.
+        const current = latestLinkedSelectionRef.current;
+        if (current && newAnchor) {
+          const next = { ...current, snippetText: afterText, anchor: newAnchor, partial: false, rawSelectedSnippetText: undefined };
+          latestLinkedSelectionRef.current = next;
+          setLinkedSelection(next);
+          lastLinkedRangeRef.current = { startIndex: newAnchor.startIndex, text: afterText };
+        }
+        docParagraphsRef.current = null;
+        if (activeDoc?.driveItemId) void loadDocParagraphs(activeDoc.driveItemId, 0);
         setSelectionOrb((prev) =>
-          prev.visible ? { ...prev, snippetText: modifiedParagraphText } : prev
+          prev.visible ? { ...prev, snippetText: afterText } : prev
         );
       }
 
@@ -3517,8 +3730,9 @@ export function ProjectLiveCoAuthor({
 
       const displayReply = data.writeResult && data.writeResult.status !== 'applied'
         ? `${data.writeResult.message}\n\n建議內容：\n${modifiedParagraphText ?? ''}`
-        :
-        modifiedParagraphText && attachedRefs.length === 0
+        : appliedEdit
+        ? data.changeSummary?.trim() || `已修改「${appliedEdit.label}」。`
+        : modifiedParagraphText && attachedRefs.length === 0
           ? modifiedParagraphText
           : stripClientAuxiliaryPhrases(data.reply || '已完成。');
 
@@ -3544,6 +3758,7 @@ export function ProjectLiveCoAuthor({
         webSearch: data.webSearch,
         graphRetrieval: data.graphRetrieval,
         generatedImages: generatedImgs.length > 0 ? generatedImgs : undefined,
+        editResult: appliedEdit,
       };
       setMessages((prev) => [...prev, assistantMsg]);
 
@@ -5550,17 +5765,22 @@ export function ProjectLiveCoAuthor({
                   <button
                     type="button"
                     onMouseEnter={() => {
-                      // Start resolving the highlighted text the moment the cursor touches the orb
-                      if (!selectionOrb.linked) {
+                      // Local (non-Drive) documents: resolve the DOM selection early.
+                      if (!selectionOrb.linked && !activeDoc?.driveItemId) {
                         void startVisualSelectionResolution(selectionOrb.topPx);
                       }
                     }}
                     onMouseDown={(e) => {
-                      // Prevent focus shift away from the Google Docs iframe so its highlighted selection stays active
-                      e.preventDefault();
+                      // Local documents keep their DOM selection. Google Docs needs the page to take focus
+                      // so the clipboard can be read after the user copied inside the Docs iframe.
+                      if (!activeDoc?.driveItemId) e.preventDefault();
                     }}
                     onClick={() => void handleLinkSelectionOrbToSprite()}
-                    title="連結協作助手修改此段落（包含前後文脈絡）"
+                    title={
+                      activeDoc?.driveItemId
+                        ? `先在文件中選取文字並按 ${copyKeyLabel}，再點我`
+                        : '連結協作助手修改此段落（包含前後文脈絡）'
+                    }
                     style={{
                       top: `${selectionOrb.topPx}px`,
                       left: `${selectionOrb.leftPercent}%`,
@@ -5587,7 +5807,54 @@ export function ProjectLiveCoAuthor({
           {/* CENTER COLUMN BOTTOM COMPOSER: Codex-style floating composer card on unified canvas background (#f9fbfd) */}
           <div className="bg-[#f9fbfd] px-4 pb-2.5 pt-1.5">
             <div className="mx-auto max-w-3xl">
-              {linkedSelection && (
+              {linkedSelection?.anchor && (
+                <div className="mb-2 rounded-xl border border-slate-200/90 bg-white px-3 py-2 text-xs shadow-2xs">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-800 px-2.5 py-0.5 text-[11px] font-semibold text-white">
+                      <span>📎</span>
+                      <span>已連結</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setLinkedChipExpanded((v) => !v)}
+                      title={linkedChipExpanded ? '收合原文' : '展開查看連結的原文'}
+                      className="flex min-w-0 flex-1 items-center gap-1 text-left text-slate-700 hover:text-slate-900"
+                    >
+                      <span className="shrink-0 font-semibold">{linkedSelection.label}</span>
+                      {linkedSelection.ordinalInSection ? (
+                        <span className="shrink-0 text-slate-500">・第 {linkedSelection.ordinalInSection} 段</span>
+                      ) : null}
+                      <span className="truncate text-slate-500">
+                        ・「{previewSnippet(linkedSelection.snippetText)}」（{countVisibleChars(linkedSelection.snippetText)} 字）
+                      </span>
+                      <span className="shrink-0 text-slate-400">{linkedChipExpanded ? '▴' : '▾'}</span>
+                    </button>
+                    {isResolvingVisualSelection && (
+                      <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-500" />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        clearLinkedSelection();
+                        setSelectionOrb((prev) => ({ ...prev, visible: false }));
+                      }}
+                      className="shrink-0 rounded-lg px-2 py-0.5 text-[11px] font-medium text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                      title="解除段落連結"
+                    >
+                      取消連結 ×
+                    </button>
+                  </div>
+                  {linkedSelection.partial && (
+                    <p className="mt-1 text-[11px] text-slate-500">已選取部分文字，將改寫整段並保留未選取部分。</p>
+                  )}
+                  {linkedChipExpanded && (
+                    <p className="mt-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg bg-slate-50 px-2.5 py-2 text-sm leading-relaxed text-slate-700">
+                      {linkedSelection.snippetText}
+                    </p>
+                  )}
+                </div>
+              )}
+              {linkedSelection && !linkedSelection.anchor && (
                 <div className="mb-2 flex flex-col gap-1.5 rounded-xl border border-slate-200/90 bg-white px-3 py-2 text-xs shadow-2xs">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -5963,36 +6230,6 @@ export function ProjectLiveCoAuthor({
               </span>
             </div>
 
-            {/* Active Sprite Visual Signal Banner when user clicks the floating orb */}
-            {linkedSelection && (
-              <div className="border-b border-slate-100 bg-slate-50/90 px-4 py-2.5 text-sm text-slate-800">
-                <div className="flex items-center justify-between gap-2 font-semibold text-slate-700">
-                  <span className="flex shrink-0 items-center gap-1">
-                    <span>✨</span>
-                    <span>已鎖定框選段落與前後文</span>
-                  </span>
-                  <span className="truncate font-mono text-xs text-slate-500">
-                    {linkedSelection.label}
-                  </span>
-                </div>
-                {linkedSelection.contextBefore && (
-                  <p className="mt-1.5 line-clamp-2 text-xs text-slate-500">
-                    <span className="font-semibold text-slate-600">前文：</span>
-                    {linkedSelection.contextBefore.replace(/\s+/g, ' ')}
-                  </p>
-                )}
-                <p className="mt-1.5 line-clamp-5 rounded-lg bg-white/90 px-2.5 py-2 text-sm font-medium leading-relaxed text-slate-800 ring-1 ring-slate-200/80">
-                  「{linkedSelection.snippetText}」
-                </p>
-                {linkedSelection.contextAfter && (
-                  <p className="mt-1.5 line-clamp-2 text-xs text-slate-500">
-                    <span className="font-semibold text-slate-600">後文：</span>
-                    {linkedSelection.contextAfter.replace(/\s+/g, ' ')}
-                  </p>
-                )}
-              </div>
-            )}
-
             <div className="flex-1 space-y-3 overflow-y-auto p-4 text-base">
               {messages.slice(-10).map((m) => (
                 <div
@@ -6026,14 +6263,13 @@ export function ProjectLiveCoAuthor({
                       </div>
                     </div>
                   {m.linkedSnippet && (
-                    <div className="mb-2.5 rounded-lg border border-slate-200/80 bg-white p-2.5 text-sm text-slate-700">
-                      <div className="mb-1 flex items-center gap-1 font-semibold text-slate-700">
-                        <span>✨</span>
-                        <span>已連結框選段落：{m.linkedSnippet.label}</span>
-                      </div>
-                      <p className="line-clamp-4 text-sm italic leading-relaxed text-slate-600">
-                        「{m.linkedSnippet.text}」
-                      </p>
+                    <div
+                      className="mb-1.5 flex min-w-0 items-center gap-1 text-xs text-slate-500"
+                      title={m.linkedSnippet.text}
+                    >
+                      <span className="shrink-0">📎</span>
+                      <span className="shrink-0 font-semibold text-slate-600">{m.linkedSnippet.label}</span>
+                      <span className="truncate">「{previewSnippet(m.linkedSnippet.text, 24)}」</span>
                     </div>
                   )}
                   {m.attachments && m.attachments.length > 0 && (
@@ -6096,6 +6332,38 @@ export function ProjectLiveCoAuthor({
                     </div>
                   )}
                   <div className="whitespace-pre-wrap">{m.text.replace(/\*\*/g, '')}</div>
+                  {m.role === 'assistant' && m.editResult && (
+                    <EditResultPanel
+                      edit={m.editResult}
+                      onRevert={() => void revertEdit(m.id)}
+                    />
+                  )}
+                  {m.role === 'assistant' && m.selectionConfirm && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {m.selectionConfirm.resolved ? (
+                        <span className="text-xs text-slate-400">
+                          {m.selectionConfirm.resolved === 'kept' ? '已沿用這段' : '請重新複製'}
+                        </span>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => resolveSelectionConfirm(m.id, 'kept')}
+                            className="rounded-lg bg-slate-800 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-700"
+                          >
+                            沿用
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => resolveSelectionConfirm(m.id, 'recopy')}
+                            className="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                          >
+                            我重新複製
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
                   {m.role === 'assistant' && m.needsDriveAuthButton && (
                     <div className="mt-2.5">
                       <button
@@ -6185,6 +6453,67 @@ export function ProjectLiveCoAuthor({
           </aside>
         )}
       </div>
+    </div>
+  );
+}
+
+function EditResultPanel({
+  edit,
+  onRevert,
+}: {
+  edit: NonNullable<ChatMessage['editResult']>;
+  onRevert: () => void;
+}) {
+  const [showDiff, setShowDiff] = useState(false);
+  const beforeCount = countVisibleChars(edit.before);
+  const afterCount = countVisibleChars(edit.after);
+  const delta = afterCount - beforeCount;
+  const parts = useMemo(
+    () => (showDiff ? diffSentences(edit.before, edit.after) : []),
+    [showDiff, edit.before, edit.after]
+  );
+  return (
+    <div className="mt-2 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-600">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="font-semibold text-slate-700">{edit.label}</span>
+        <span>
+          {beforeCount} → {afterCount} 字（{delta >= 0 ? `+${delta}` : delta}）
+        </span>
+        <span className="flex-1" />
+        <button
+          type="button"
+          onClick={() => setShowDiff((v) => !v)}
+          className="rounded-md border border-slate-200 px-2 py-0.5 font-medium text-slate-700 hover:bg-slate-100"
+        >
+          {showDiff ? '收合差異' : '查看差異'}
+        </button>
+        <button
+          type="button"
+          disabled={edit.reverted || edit.reverting}
+          onClick={onRevert}
+          className="rounded-md border border-slate-200 px-2 py-0.5 font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-default disabled:opacity-50"
+        >
+          {edit.reverted ? '已復原' : edit.reverting ? '復原中…' : '復原'}
+        </button>
+      </div>
+      {edit.revertError && <p className="mt-1.5 text-rose-600">{edit.revertError}</p>}
+      {showDiff && (
+        <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
+          {parts.map((part, i) =>
+            part.type === 'same' ? (
+              <span key={i}>{part.text}</span>
+            ) : part.type === 'added' ? (
+              <ins key={i} className="rounded-sm bg-emerald-100 text-emerald-900 no-underline">
+                {part.text}
+              </ins>
+            ) : (
+              <del key={i} className="rounded-sm bg-rose-100 text-rose-800">
+                {part.text}
+              </del>
+            )
+          )}
+        </p>
+      )}
     </div>
   );
 }

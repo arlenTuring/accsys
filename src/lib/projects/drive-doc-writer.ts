@@ -1488,60 +1488,6 @@ async function streamTextIntoGoogleDocLive(params: {
   };
 
   try {
-    // Self-heal cover page if an earlier unanchored edit accidentally replaced "哇哇科技股份有限公司" at startIndex ~130
-    const initialCached = readCachedDocParas(docId);
-    const corruptedCoverPara = initialCached?.find(
-      (p, idx) =>
-        idx <= 12 &&
-        p.startIndex >= 115 &&
-        p.startIndex <= 160 &&
-        p.plainText.startsWith('※聯合申請公司：台灣智慧駕駛股份有限公司')
-    );
-    if (corruptedCoverPara) {
-      try {
-        const healRes = await fetch(
-          `https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}:batchUpdate`,
-          {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              requests: [
-                {
-                  deleteContentRange: {
-                    range: {
-                      startIndex: corruptedCoverPara.startIndex,
-                      endIndex: corruptedCoverPara.endIndex,
-                    },
-                  },
-                },
-                {
-                  insertText: {
-                    location: { index: corruptedCoverPara.startIndex },
-                    text: '哇哇科技股份有限公司',
-                  },
-                },
-              ],
-            }),
-            signal: AbortSignal.timeout(8_000),
-          }
-        );
-        if (healRes.ok) {
-          shiftCachedParagraphSpansAfterEdit(
-            docId,
-            corruptedCoverPara.startIndex,
-            corruptedCoverPara.endIndex,
-            '哇哇科技股份有限公司'
-          );
-        }
-        await fetchAndCacheGoogleDocParas(docId, token, recordStatus);
-      } catch {
-        // ignore cover self-heal error
-      }
-    }
-
     // CURSOR INSERTION MODE: User placed cursor at a position in the document without highlighting text to replace
     if (
       insertMode === 'insert_at_cursor' ||

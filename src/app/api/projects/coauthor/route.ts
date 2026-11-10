@@ -1,13 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, unlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getVertexAccessToken } from '@/lib/ai-chat/auth';
-import { anchorDocumentSelection } from '@/lib/projects/doc-selection';
 import type { DocAnchor } from '@/lib/projects/doc-selection';
-import { readGoogleDocument, writeAnchoredDocument } from '@/lib/projects/anchored-doc-write';
+import { writeAnchoredDocument } from '@/lib/projects/anchored-doc-write';
 import { loadAiChatConfig } from '@/lib/ai-chat/config';
 import {
   filterYearGroupsForViewer,
@@ -133,6 +128,8 @@ export type CoAuthorOperation =
 
 export type CoAuthorResponse = {
   intent?: 'edit' | 'discuss';
+  /** One-line description of an applied paragraph edit, shown instead of repeating the full text. */
+  changeSummary?: string;
   selectionAnchor?: DocAnchor;
   writeResult?: { status: 'applied' | 'not_applied' | 'needs_auth' | 'unknown'; reason: string; message: string };
   refusedCompanyAdmin?: boolean;
@@ -526,17 +523,17 @@ function formatWriteFailureMessage(reason: string): {
     case 'target_not_found':
       return {
         status: 'not_applied',
-        message: '未寫入文件：找不到框選的段落，請重新框選。',
+        message: '未寫入文件：找不到選取的段落，請重新選取段落、複製後再按小球。',
       };
     case 'ambiguous_target':
       return {
         status: 'not_applied',
-        message: '未寫入文件：文件中有相同內容，請框選更多文字。',
+        message: '未寫入文件：文件中有相同內容，請多選一些前後文再複製。',
       };
     case 'revision_conflict':
       return {
         status: 'not_applied',
-        message: '未寫入文件：文件版本已變更（他人或另一分頁已修改此段落），請重新框選後再試。',
+        message: '未寫入文件：這段內容已被他人或另一分頁修改，請重新選取段落、複製後再按小球。',
       };
     case 'paragraph_count_mismatch':
       return {
@@ -551,7 +548,7 @@ function formatWriteFailureMessage(reason: string): {
     case 'unverified_selection':
       return {
         status: 'not_applied',
-        message: '未寫入文件：無法確認框選段落，請重新框選。',
+        message: '未寫入文件：尚未連結段落。請在文件中選取段落並複製，再按小球。',
       };
     case 'missing_file_id':
       return {
@@ -646,6 +643,10 @@ const COAUTHOR_WORD_EDIT_RESPONSE_SCHEMA = {
     },
     reply: {
       type: 'STRING',
+    },
+    changeSummary: {
+      type: 'STRING',
+      description: '一句話（40 字內）說明這次對框選段落做了哪些修改，例如「新增 2050 淨零路徑與數位韌性政策依據」。intent 為 discuss 時留空。',
     },
     operations: {
       type: 'ARRAY',
@@ -841,6 +842,7 @@ ${effectiveProjectsDigest}【重要規則】：
 {
   "intent": "edit" | "discuss",
   "reply": "直接輸出修改後的正式內文，或針對使用者提問的完整查證回覆（嚴禁加上『已為您強化…段落。』等輔助詞）",
+  "changeSummary": "intent 為 edit 時，用一句話（40 字內）說明這次修改了什麼，例如「新增 2050 淨零路徑與數位韌性政策依據」；discuss 時留空字串",
   "operations": [
     { "kind": "write_word_section", "sectionId": "目標sectionId", "sectionTitle": "章節標題", "content": "正式文件段落內文", "mode": "replace" | "append" | "add_section", "newSectionCode": "5.0" },
     { "kind": "format_word_document", "fontFamily": "Noto Serif TC" | "Noto Sans TC" | "Times New Roman" | "Calibri", "fontSizePt": 12, "lineSpacing": 1.75, "paragraphIndentEm": 2, "showTableOfContents": true, "showPageNumbers": true, "showHeaderFooter": true, "headerText": "頁首文字", "footerText": "頁尾文字", "pageNumberStyle": "page_x_of_y" | "numeric" | "roman", "renumberSections": true },
@@ -1040,6 +1042,7 @@ ${effectiveProjectsDigest}【重要規則】：
     let parsed: {
       intent?: 'edit' | 'discuss';
       reply?: string;
+      changeSummary?: string;
       operations?: Array<Record<string, unknown>>;
     } | null = null;
 
@@ -1227,6 +1230,10 @@ ${effectiveProjectsDigest}【重要規則】：
       response: {
         intent: parsed.intent,
         reply: cleanReply,
+        changeSummary:
+          parsed.intent === 'edit' && typeof parsed.changeSummary === 'string'
+            ? stripMarkdownAsterisks(parsed.changeSummary).trim().slice(0, 120) || undefined
+            : undefined,
         operations: ops,
         webSearch: webSearchMeta,
       },
@@ -2292,7 +2299,8 @@ export async function POST(request: NextRequest) {
       finalResult.writeResult = { status: fail.status, reason: 'unverified_selection', message: fail.message };
     } else if (op) {
       const tokens = await getCandidateDriveWriteTokens(employee.email, { currentUserOnly: true });
-      let result = tokens[0] ? await writeAnchoredDocument(tokens[0], anchor, op.content) : { ok: false as const, reason: 'no_tokens' as const };
+      const streamOptions = { stream: true, maxChunks: 12, chunkDelayMs: 250 };
+      let result = tokens[0] ? await writeAnchoredDocument(tokens[0], anchor, op.content, streamOptions) : { ok: false as const, reason: 'no_tokens' as const };
       if (!result.ok && result.reason === 'paragraph_count_mismatch' && tokens[0]) {
         const expectedCount = anchor.paragraphs.length;
         const retryOutcome = await tryVertexStructuredCoAuthor(
@@ -2309,7 +2317,8 @@ export async function POST(request: NextRequest) {
         if (retryOutcome.response && retryOp) {
           op.content = retryOp.content;
           finalResult.reply = retryOutcome.response.reply;
-          result = await writeAnchoredDocument(tokens[0], anchor, retryOp.content);
+          finalResult.changeSummary = retryOutcome.response.changeSummary;
+          result = await writeAnchoredDocument(tokens[0], anchor, retryOp.content, streamOptions);
         }
       }
       if (result.ok) {
@@ -2317,13 +2326,16 @@ export async function POST(request: NextRequest) {
         finalResult.selectionAnchor = result.anchor;
       } else {
         const fail = formatWriteFailureMessage(result.reason);
-        finalResult.writeResult = { status: fail.status, reason: result.reason, message: fail.message };
+        const restoredNote = 'restored' in result && result.restored ? '（寫入中斷，已還原為原本內容）' : '';
+        finalResult.writeResult = { status: fail.status, reason: result.reason, message: `${fail.message}${restoredNote}` };
         if (fail.status === 'needs_auth') {
           finalResult.needsDriveOAuth = true;
         }
       }
     }
     finalResult.driveFileUpdated = finalResult.writeResult?.status === 'applied';
+    // The embedded Docs editor shows API edits live; reloading it would jump back to page 1.
+    finalResult.driveLiveStreaming = finalResult.driveFileUpdated;
     console.info('[coauthor-write]', JSON.stringify({ correlationId, operation: 'write_word_section', confidence: anchor?.confidence, status: finalResult.writeResult?.status, reason: finalResult.writeResult?.reason }));
     return NextResponse.json({ ...finalResult, correlationId });
   }
@@ -2339,7 +2351,7 @@ export async function POST(request: NextRequest) {
 
   if (finalResult.operations.some((op) => op.kind === 'write_word_section') && !isCursorInsertMode) {
     const fail = formatWriteFailureMessage('target_not_found');
-    finalResult.writeResult = { status: fail.status, reason: 'target_not_found', message: '未寫入文件：請先框選要修改的段落。' };
+    finalResult.writeResult = { status: fail.status, reason: 'target_not_found', message: '未寫入文件：請先在文件中選取要修改的段落並複製，再按小球連結。' };
     finalResult.driveFileUpdated = false;
     console.info('[coauthor-write]', JSON.stringify({ correlationId, operation: 'write_word_section', status: finalResult.writeResult.status, reason: finalResult.writeResult.reason }));
     return NextResponse.json({ ...finalResult, correlationId });
@@ -2447,173 +2459,6 @@ export async function GET(request: NextRequest) {
   });
 }
 
-async function resolveVisualSelectionFromScreen(params: {
-  screenRect?: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    orbRatioY?: number;
-  };
-  imageBase64?: string;
-  allowCursorContext?: boolean;
-}): Promise<{
-  mode: 'highlight' | 'cursor';
-  selectedText: string;
-  sectionHeading: string;
-  visibleBeforeText: string;
-  visibleAfterText: string;
-} | null> {
-  try {
-    let base64Img = params.imageBase64 || '';
-    let mimeType = 'image/png';
-    if (!base64Img && process.platform === 'darwin' && params.screenRect) {
-      const x = Math.max(0, Math.round(params.screenRect.x));
-      const y = Math.max(0, Math.round(params.screenRect.y));
-      const w = Math.max(200, Math.min(3840, Math.round(params.screenRect.width)));
-      const h = Math.max(160, Math.min(2400, Math.round(params.screenRect.height)));
-      const tmpPath = join(tmpdir(), `accsys_coauthor_sel_${process.pid}_${Date.now()}.jpg`);
-      try {
-        execFileSync('screencapture', ['-x', '-t', 'jpg', '-R', `${x},${y},${w},${h}`, tmpPath], {
-          timeout: 2500,
-          stdio: 'ignore',
-        });
-        if (existsSync(tmpPath)) {
-          base64Img = readFileSync(tmpPath).toString('base64');
-          mimeType = 'image/jpeg';
-        }
-      } finally {
-        try {
-          if (existsSync(tmpPath)) unlinkSync(tmpPath);
-        } catch {
-          // ignore cleanup error
-        }
-      }
-    }
-
-    if (!base64Img) return null;
-
-    const cfg = loadAiChatConfig();
-    if (!cfg.projectId) return null;
-    const { token } = await getVertexAccessToken(cfg);
-    const endpoint =
-      cfg.location === 'global'
-        ? `https://aiplatform.googleapis.com/v1/projects/${cfg.projectId}/locations/global/publishers/google/models/${cfg.model}:generateContent`
-        : `https://${cfg.location}-aiplatform.googleapis.com/v1/projects/${cfg.projectId}/locations/${cfg.location}/publishers/google/models/${cfg.model}:generateContent`;
-
-    const orbPct = Math.round((params.screenRect?.orbRatioY ?? 0.35) * 100);
-    const prompt = params.allowCursorContext
-      ? `這是一張 Google Docs 中間文件紙張區域的畫面截圖。使用者正在文件紙張中進行協作編輯（可能反白框選了一段文字，或者單純將黑色直線游標「|」放在某個空白區域或段落位置，參考垂直高度約在紙張由上往下 ${orbPct}% 附近）。
-請嚴格遵守以下規則並回傳 JSON：
-1. 若畫面上有「被灰色或淺藍色底色反白框選的文字區塊」：
-   - "mode": 設為 "highlight"
-   - "selectedText": 一字不漏照抄被灰色或淺藍色反白框選的文字完整原文（跨多段以 \\n 分隔，不要抄入未反白的標題或其他段落）
-   - "sectionHeading": 被框選段落上方緊鄰的小標題
-   - "visibleBeforeText": 被框選段落上方的緊鄰前文
-   - "visibleAfterText": 被框選段落下方的緊鄰後文
-2. 若畫面上「沒有」任何被灰色或淺藍色反白框選的文字，但畫面紙張上有黑色垂直游標「|」、空白插入區或文字段落（特別留意紙張垂直高度約 ${orbPct}% 處或空白行位置）：
-   - "mode": 設為 "cursor"
-   - "selectedText": 設為 ""
-   - "sectionHeading": 畫面上最靠近游標或空白行的大標題／小標題（例如「貳、計畫內容與實施方法」或「一、目標市場需求」）
-   - "visibleBeforeText": 游標「|」或空白區正上方緊鄰的正文段落（注意：請忽略紙張最頂端綠色橫線或頁首線條上方的頁首文字，如「移動代步服務生態系創新優化計畫」；若游標上方除了頁首外沒有其他正文，請填 ""）
-   - "visibleAfterText": 游標「|」或空白區正下方緊鄰的標題與前 2~3 行正文完整原文（一字不漏照抄，多行以 \\n 分隔，例如「貳、計畫內容與實施方法\\n一、目標市場需求\\n(一)市場規模需求評估\\n1.計畫緣起：本計畫源自於實現銀髮族(65歲以上)生活中...」）
-3. 若紙張完全空白且無任何文字，請回傳 {"mode":"cursor","selectedText":"","sectionHeading":"","visibleBeforeText":"","visibleAfterText":""}。
-請只輸出純 JSON 格式：{"mode":"highlight"|"cursor","selectedText":"...","sectionHeading":"...","visibleBeforeText":"...","visibleAfterText":"..."}`
-      : `這是一張 Google Docs 中間文件紙張區域的畫面截圖。使用者剛剛在文件紙張中用滑鼠反白框選了一段文字（在 Google Docs 中被框選的文字會有明顯的灰色或淺藍色反白底色區塊，且區塊下方常有 Google Docs 的「新增註解 / 新增表情符號回應」浮動小膠囊圖示，右側約垂直高度 ${orbPct}% 處則對應協作小圓球的位置）。
-請嚴格遵守以下規則並回傳 JSON：
-1. 若畫面中的紙張是空白的，或畫面上「沒有任何明顯被灰色或淺藍色底色反白框選的文字區塊」，請務必回傳 {"mode":"highlight","selectedText":"","sectionHeading":"","visibleBeforeText":"","visibleAfterText":""}，絕對禁止自行猜測或擷取未反白的段落！
-2. "selectedText": 請只擷取紙張上「被灰色或淺藍色底色反白框選」的那一段或多段文字完整原文（一字不漏照抄被反白框選的文字本身，若跨多個段落請以 \\n 換行分隔；絕對不要抄到上方或下方沒有被反白的其他段落，也不要把上方未被反白的小標題抄進 selectedText）。
-3. "sectionHeading": 該被框選段落正上方緊鄰的小標題（例如「(二)使用者需求說明」或「1.銷售模式」）。
-4. "visibleBeforeText": 紙張上位於該被框選段落上方的緊鄰前文內容。
-5. "visibleAfterText": 紙張上位於該被框選段落下方緊鄰的後文內容。
-請只輸出純 JSON 格式：{"mode":"highlight","selectedText":"...","sectionHeading":"...","visibleBeforeText":"...","visibleAfterText":"..."}`;
-
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'x-goog-user-project': cfg.projectId,
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              { text: prompt },
-              {
-                inlineData: {
-                  mimeType,
-                  data: base64Img,
-                },
-              },
-            ],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.0,
-          maxOutputTokens: 768,
-          responseMimeType: 'application/json',
-          thinkingConfig: { thinkingLevel: 'LOW' },
-        },
-      }),
-      signal: AbortSignal.timeout(6_500),
-    });
-
-    if (!res.ok) return null;
-    const raw = (await res.json()) as {
-      candidates?: Array<{
-        content?: { parts?: Array<{ text?: string; thought?: boolean }> };
-      }>;
-    };
-    const rawText = (raw.candidates?.[0]?.content?.parts ?? [])
-      .filter((p) => typeof p.text === 'string' && !p.thought)
-      .map((p) => String(p.text))
-      .join('\n')
-      .trim()
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```$/i, '')
-      .trim();
-
-    if (!rawText) return null;
-    const parsed = JSON.parse(rawText) as {
-      mode?: 'highlight' | 'cursor';
-      selectedText?: string;
-      sectionHeading?: string;
-      visibleBeforeText?: string;
-      visibleAfterText?: string;
-    };
-    const sel = (parsed.selectedText || '').trim();
-    const before = (parsed.visibleBeforeText || '').trim();
-    const after = (parsed.visibleAfterText || '').trim();
-    const heading = (parsed.sectionHeading || '').trim();
-
-    if (sel.length >= 2) {
-      return {
-        mode: 'highlight',
-        selectedText: sel,
-        sectionHeading: heading,
-        visibleBeforeText: before,
-        visibleAfterText: after,
-      };
-    }
-
-    if (params.allowCursorContext && (before.length >= 3 || after.length >= 3 || heading.length >= 3)) {
-      return {
-        mode: 'cursor',
-        selectedText: '',
-        sectionHeading: heading,
-        visibleBeforeText: before,
-        visibleAfterText: after,
-      };
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 export async function PATCH(request: NextRequest) {
   const employee = await getCurrentEmployee();
   if (!employee) {
@@ -2622,17 +2467,8 @@ export async function PATCH(request: NextRequest) {
   try {
     const body = (await request.json()) as {
       action?: string;
-      screenRect?: {
-        x: number;
-        y: number;
-        width: number;
-        height: number;
-        orbRatioY?: number;
-      };
-      imageBase64?: string;
-      explicitSelectedText?: string;
-      sectionHeadingHint?: string;
-      allowCursorContext?: boolean;
+      anchor?: DocAnchor;
+      originalText?: string;
       driveFileId?: string;
       sectionId?: string;
       sectionTitle?: string;
@@ -2655,39 +2491,31 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json(headingInfo);
     }
 
-    if (body.action === 'resolve_visual_selection') {
-      if (!body.driveFileId) return NextResponse.json({ error: 'missing_file_id' }, { status: 400 });
-      const resolved = body.explicitSelectedText?.trim()
-        ? {
-            mode: 'highlight' as const,
-            selectedText: body.explicitSelectedText.trim(),
-            sectionHeading: body.sectionHeadingHint?.trim() || '4.後續改善作法',
-            visibleBeforeText: '',
-            visibleAfterText: '',
-          }
-        : await resolveVisualSelectionFromScreen({
-            screenRect: body.screenRect,
-            imageBase64: body.imageBase64,
-            allowCursorContext: Boolean(body.allowCursorContext),
-          });
-      if (resolved?.mode === 'highlight' && resolved.selectedText) {
-        const rawSelectedText = resolved.selectedText;
-        const tokens = await getCandidateDriveWriteTokens(employee.email, { currentUserOnly: true });
-        if (!tokens[0]) return NextResponse.json({ resolved: null, reason: 'no_tokens' });
-        const read = await readGoogleDocument(body.driveFileId, tokens[0]);
-        if (!read.ok) return NextResponse.json({ resolved: null, reason: read.reason });
-        const result = anchorDocumentSelection(body.driveFileId, read.doc, rawSelectedText);
-        if (!result.ok) return NextResponse.json({ resolved: null, reason: result.reason });
-        resolved.selectedText = result.anchor.paragraphs.map((p) => p.text).join('\n');
-        return NextResponse.json({
-          resolved: { ...resolved, rawSelectedText },
-          anchor: result.anchor,
-        });
+    if (body.action === 'revert_anchored_write') {
+      // Undo of a co-author edit: write the pre-edit text back over the edited range.
+      // Uses only the caller's own Drive token and the same revision/relocation checks as the edit.
+      const correlationId = crypto.randomUUID();
+      const anchor = body.anchor;
+      const originalText = typeof body.originalText === 'string' ? body.originalText : '';
+      if (
+        !body.driveFileId ||
+        !anchor ||
+        anchor.docId !== body.driveFileId ||
+        !Array.isArray(anchor.paragraphs) ||
+        !anchor.revisionId ||
+        !originalText.trim() ||
+        originalText.length > 20_000
+      ) {
+        return NextResponse.json({ ok: false, reason: 'unverified_selection' }, { status: 400 });
       }
-      if (!resolved) {
-        return NextResponse.json({ resolved: null, reason: 'target_not_found' });
-      }
-      return NextResponse.json({ resolved });
+      const tokens = await getCandidateDriveWriteTokens(employee.email, { currentUserOnly: true });
+      const result = tokens[0]
+        ? await writeAnchoredDocument(tokens[0], anchor, originalText)
+        : ({ ok: false, reason: 'no_tokens' } as const);
+      console.info('[coauthor-write]', JSON.stringify({ correlationId, operation: 'revert', status: result.ok ? 'applied' : 'not_applied', reason: result.ok ? 'applied' : result.reason }));
+      if (result.ok) return NextResponse.json({ ok: true, anchor: result.anchor });
+      const fail = formatWriteFailureMessage(result.reason);
+      return NextResponse.json({ ok: false, reason: result.reason, message: fail.message.replace('未寫入文件', '未能復原') });
     }
 
     return NextResponse.json({ updated: false, reason: 'unverified_selection' }, { status: 400 });

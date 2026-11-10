@@ -136,14 +136,17 @@ describe('POST /api/projects/coauthor anchored write branch', () => {
           ],
         })
       )
-      // 2. Docs GET pre-check
-      .mockResolvedValueOnce(new Response(JSON.stringify(makeDoc('rev-1')), { status: 200 }))
-      // 3. Docs batchUpdate
-      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }))
-      // 4. Docs GET post-verify
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify(makeDoc('rev-2', rewrittenText)), { status: 200 })
-      );
+      // 2+. Docs API: GET pre-check, clearing write, typed chunks, GET post-verify
+      .mockImplementation(async (url: string) => {
+        if (String(url).endsWith(':batchUpdate')) {
+          return new Response(JSON.stringify({ writeControl: { requiredRevisionId: 'rev-x' } }), { status: 200 });
+        }
+        const writes = fetchMock.mock.calls.filter((c) => String(c[0]).endsWith(':batchUpdate')).length;
+        return new Response(
+          JSON.stringify(writes === 0 ? makeDoc('rev-1') : makeDoc('rev-2', rewrittenText)),
+          { status: 200 }
+        );
+      });
 
     vi.stubGlobal('fetch', fetchMock);
 
@@ -156,7 +159,20 @@ describe('POST /api/projects/coauthor anchored write branch', () => {
       message: '已更新文件。',
     });
     expect(data.driveFileUpdated).toBe(true);
+    // Live Docs editor shows the typed text; the client must not reload (jump to page 1).
+    expect(data.driveLiveStreaming).toBe(true);
     expect(data.selectionAnchor?.revisionId).toBe('rev-2');
+    const writes = fetchMock.mock.calls
+      .filter((c) => String(c[0]).endsWith(':batchUpdate'))
+      .map((c) => JSON.parse((c[1] as RequestInit).body as string));
+    expect(writes[0].writeControl).toEqual({ requiredRevisionId: 'rev-1' });
+    expect(writes.length).toBeGreaterThan(2);
+    expect(
+      writes
+        .slice(1)
+        .map((w) => w.requests[0].insertText.text)
+        .join('')
+    ).toBe(rewrittenText);
   });
 
   it('returns reason="revision_conflict" when document paragraph has been modified in another tab before write', async () => {
@@ -194,7 +210,7 @@ describe('POST /api/projects/coauthor anchored write branch', () => {
 
     expect(data.writeResult?.status).toBe('not_applied');
     expect(data.writeResult?.reason).toBe('revision_conflict');
-    expect(data.writeResult?.message).toContain('文件版本已變更');
+    expect(data.writeResult?.message).toContain('已被他人或另一分頁修改');
     expect(data.driveFileUpdated).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
