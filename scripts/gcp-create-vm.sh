@@ -113,6 +113,7 @@ if ! gcloud compute instances describe "$NAME" --zone="$ZONE" --project="$PROJEC
     --boot-disk-type=pd-balanced \
     --disk="name=${DATA_DISK},device-name=accsys-data,mode=rw,boot=no" \
     --address="$ADDRESS" \
+    --scopes="https://www.googleapis.com/auth/cloud-platform" \
     --tags=accsys-web,accsys-ssh \
     --metadata=startup-script='#!/bin/bash
 set -euo pipefail

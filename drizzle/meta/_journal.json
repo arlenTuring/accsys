@@ -316,6 +316,13 @@
       "when": 1794900000000,
       "tag": "0044_common_form_features",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1795000000000,
+      "tag": "0045_system_email_settings",
+      "breakpoints": true
     }
   ]
 }

@@ -23,6 +23,14 @@ const LOCAL_CONFIG_FALLBACK_PATH = join(
   'deploy/secrets/email-system-config.json'
 );
 
+function getStorageSecretsDir(): string | null {
+  const storagePath = process.env.STORAGE_LOCAL_PATH?.trim();
+  if (!storagePath) return null;
+  return storagePath.startsWith('/')
+    ? join(storagePath, '.email-secrets')
+    : join(process.cwd(), storagePath, '.email-secrets');
+}
+
 export type ServiceAccountKeyInfo = {
   type: string;
   project_id: string;
@@ -154,16 +162,24 @@ function loadDefaultServiceAccountJsonFromEnvOrDisk(): string | null {
       : join(process.cwd(), envPath)
     : DEFAULT_SA_KEY_PATH;
 
-  try {
-    if (existsSync(candidatePath)) {
-      const content = readFileSync(candidatePath, 'utf8');
-      if (parseServiceAccountKey(content)) {
-        cachedDefaultSaJson = content;
-        return content;
+  const storageDir = getStorageSecretsDir();
+  const candidatePaths = [
+    candidatePath,
+    ...(storageDir ? [join(storageDir, 'gmail-service-account.json')] : []),
+  ];
+
+  for (const p of candidatePaths) {
+    try {
+      if (existsSync(p)) {
+        const content = readFileSync(p, 'utf8');
+        if (parseServiceAccountKey(content)) {
+          cachedDefaultSaJson = content;
+          return content;
+        }
       }
+    } catch {
+      // ignore
     }
-  } catch {
-    // ignore
   }
   cachedDefaultSaJson = null;
   return null;
@@ -314,21 +330,28 @@ export async function getEmailSystemConfig(): Promise<EmailSystemConfig> {
     // Fallback to local file
   }
 
-  try {
-    if (existsSync(LOCAL_CONFIG_FALLBACK_PATH)) {
-      const saved = JSON.parse(
-        readFileSync(LOCAL_CONFIG_FALLBACK_PATH, 'utf8')
-      ) as Partial<EmailSystemConfig>;
-      return {
-        ...defaults,
-        ...saved,
-        serviceAccountJson:
-          saved.serviceAccountJson || defaults.serviceAccountJson,
-        templates: mergeTemplatesWithDefaults(saved.templates),
-      };
+  const storageDir = getStorageSecretsDir();
+  const fallbackConfigPaths = [
+    LOCAL_CONFIG_FALLBACK_PATH,
+    ...(storageDir ? [join(storageDir, 'email-system-config.json')] : []),
+  ];
+  for (const cfgPath of fallbackConfigPaths) {
+    try {
+      if (existsSync(cfgPath)) {
+        const saved = JSON.parse(
+          readFileSync(cfgPath, 'utf8')
+        ) as Partial<EmailSystemConfig>;
+        return {
+          ...defaults,
+          ...saved,
+          serviceAccountJson:
+            saved.serviceAccountJson || defaults.serviceAccountJson,
+          templates: mergeTemplatesWithDefaults(saved.templates),
+        };
+      }
+    } catch {
+      // ignore
     }
-  } catch {
-    // ignore
   }
 
   return defaults;
@@ -337,36 +360,41 @@ export async function getEmailSystemConfig(): Promise<EmailSystemConfig> {
 export async function saveEmailSystemConfig(
   nextConfig: EmailSystemConfig
 ): Promise<void> {
-  // Always persist serviceAccountJson to deploy/secrets/gmail-service-account.json as well if valid
+  const storageDir = getStorageSecretsDir();
+  // Always persist serviceAccountJson to deploy/secrets/gmail-service-account.json and writable storage dir if valid
   if (
     nextConfig.serviceAccountJson &&
     parseServiceAccountKey(nextConfig.serviceAccountJson)
   ) {
-    try {
-      mkdirSync(dirname(DEFAULT_SA_KEY_PATH), { recursive: true });
-      writeFileSync(
-        DEFAULT_SA_KEY_PATH,
-        JSON.stringify(
-          JSON.parse(nextConfig.serviceAccountJson),
-          null,
-          2
-        ),
-        'utf8'
-      );
-    } catch {
-      // ignore read-only fs errors
+    cachedDefaultSaJson = nextConfig.serviceAccountJson;
+    const formattedSa = JSON.stringify(
+      JSON.parse(nextConfig.serviceAccountJson),
+      null,
+      2
+    );
+    for (const saPath of [
+      DEFAULT_SA_KEY_PATH,
+      ...(storageDir ? [join(storageDir, 'gmail-service-account.json')] : []),
+    ]) {
+      try {
+        mkdirSync(dirname(saPath), { recursive: true });
+        writeFileSync(saPath, formattedSa, 'utf8');
+      } catch {
+        // ignore read-only fs errors
+      }
     }
   }
 
-  try {
-    mkdirSync(dirname(LOCAL_CONFIG_FALLBACK_PATH), { recursive: true });
-    writeFileSync(
-      LOCAL_CONFIG_FALLBACK_PATH,
-      JSON.stringify(nextConfig, null, 2),
-      'utf8'
-    );
-  } catch {
-    // ignore
+  for (const cfgPath of [
+    LOCAL_CONFIG_FALLBACK_PATH,
+    ...(storageDir ? [join(storageDir, 'email-system-config.json')] : []),
+  ]) {
+    try {
+      mkdirSync(dirname(cfgPath), { recursive: true });
+      writeFileSync(cfgPath, JSON.stringify(nextConfig, null, 2), 'utf8');
+    } catch {
+      // ignore
+    }
   }
 
   try {

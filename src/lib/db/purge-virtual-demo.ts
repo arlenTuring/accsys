@@ -84,6 +84,19 @@ export async function ensureVirtualAndDemoDataPurged(): Promise<void> {
 
         await db.execute(
           sql.raw(`
+            UPDATE ai_application_drafts
+            SET submission_id = NULL
+            WHERE submission_id IN (
+              SELECT id FROM form_submissions
+              WHERE procurement_case_id IN (SELECT id FROM procurement_cases WHERE ${VIRTUAL_CASE_WHERE})
+                 OR applicant_employee_id::text LIKE '10000000-%'
+                 OR applicant_employee_id::text LIKE '20000000-%'
+            )
+          `)
+        );
+
+        await db.execute(
+          sql.raw(`
             DELETE FROM form_submissions
             WHERE procurement_case_id IN (SELECT id FROM procurement_cases WHERE ${VIRTUAL_CASE_WHERE})
                OR applicant_employee_id::text LIKE '10000000-%'
@@ -142,11 +155,27 @@ export async function ensureVirtualAndDemoDataPurged(): Promise<void> {
 
         // 3. 清除虛擬／範例財產
         await db.execute(sql`
+          DELETE FROM form_submission_asset_lines
+          WHERE asset_id IN (
+            SELECT id FROM assets
+            WHERE id::text LIKE '00000000-%'
+               OR id::text LIKE '10000000-%'
+               OR tag LIKE 'TD-%'
+               OR tag IN ('10003','10004','10005','10006','10007','10008')
+          )
+        `);
+
+        await db.execute(sql`
           DELETE FROM assets
-          WHERE id::text LIKE '00000000-%'
-             OR id::text LIKE '10000000-%'
-             OR tag LIKE 'TD-%'
-             OR tag IN ('10003','10004','10005','10006','10007','10008')
+          WHERE (
+               id::text LIKE '00000000-%'
+            OR id::text LIKE '10000000-%'
+            OR tag LIKE 'TD-%'
+            OR tag IN ('10003','10004','10005','10006','10007','10008')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM form_submission_asset_lines l WHERE l.asset_id = assets.id
+          )
         `);
 
         // 4. 清除虛擬／範例預算代碼、虛擬專案與虛擬供應商
