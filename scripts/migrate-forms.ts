@@ -15,6 +15,7 @@
  *       a database that is not on this machine (needs an active admin account)
  */
 import { config } from 'dotenv';
+import { loadSecretFiles } from '../src/lib/secret-files';
 config({ path: '.env.local' });
 config();
 
@@ -28,6 +29,7 @@ function arg(name: string): string | undefined {
 const flag = (name: string) => process.argv.includes(`--${name}`);
 
 async function main() {
+  loadSecretFiles();
   const batch = Number(arg('batch'));
   const { MIGRATION_BATCHES } = await import('@/lib/custom-forms/migrated');
   const plan = MIGRATION_BATCHES[batch];

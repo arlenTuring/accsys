@@ -79,6 +79,16 @@ services:
       DATABASE_URL_FILE: /run/secrets/app_database_url
       SESSION_SECRET_FILE: /run/secrets/session_secret
       GOOGLE_CLIENT_SECRET_FILE: /run/secrets/google_client_secret
+      AI_CHAT_ENABLED: ${AI_CHAT_ENABLED:-true}
+      AI_CHAT_PROJECT_ID: ${AI_CHAT_PROJECT_ID:-integral-cell-498905-s0}
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-integral-cell-498905-s0}
+      AI_CHAT_LOCATION: ${AI_CHAT_LOCATION:-global}
+      AI_CHAT_MODEL: ${AI_CHAT_MODEL:-gemini-3.8-flash}
+      AI_CHAT_IMPERSONATE_SA: ${AI_CHAT_IMPERSONATE_SA:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_FROM: ${SMTP_FROM:-}
     secrets: [app_database_url, session_secret, google_client_secret]
     volumes:
       - type: bind

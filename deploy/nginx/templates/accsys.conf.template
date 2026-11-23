@@ -20,11 +20,10 @@ upstream accsys_app {
     keepalive 16;
 }
 
-# IP scans and unknown Host / SNI names get no answer.
+# Unknown Host on HTTP only — SSL default is the real site so clients
+# without SNI still complete the handshake.
 server {
     listen 8080 default_server;
-    listen 8443 ssl default_server;
-    ssl_reject_handshake on;
     access_log /dev/stdout accsys;
     return 444;
 }
@@ -37,7 +36,7 @@ server {
 }
 
 server {
-    listen 8443 ssl;
+    listen 8443 ssl default_server;
     http2 on;
     server_name ${ACCSYS_FQDN};
     access_log /dev/stdout accsys;
@@ -67,7 +66,7 @@ server {
     proxy_set_header X-Forwarded-Proto https;
     proxy_set_header X-Forwarded-Host ${ACCSYS_FQDN}${ACCSYS_HTTPS_SUFFIX};
     proxy_set_header Forwarded "";
-    proxy_read_timeout 60s;
+    proxy_read_timeout 180s;
     # Downloads stream from the app with back-pressure instead of spilling to /tmp.
     proxy_max_temp_file_size 0;
 
