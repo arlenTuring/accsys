@@ -4,22 +4,46 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useState,
   useTransition,
   type ReactNode,
 } from 'react';
 import { useRouter } from 'next/navigation';
-import { setLocaleCookieAction } from './actions';
 import {
   DEFAULT_LOCALE,
   getMessages,
   LOCALE_COOKIE_NAME,
   LOCALE_LABELS,
+  normalizeLocale,
   SUPPORTED_LOCALES,
   translatePhrase,
   type Locale,
   type TranslationShape,
 } from './messages';
+
+type WindowWithAccsysLocale = Window & {
+  __ACCSYS_LOCALE__?: Locale;
+};
+
+export function getClientActiveLocale(fallback: Locale = DEFAULT_LOCALE): Locale {
+  if (typeof window === 'undefined') return fallback;
+  const w = window as WindowWithAccsysLocale;
+  if (w.__ACCSYS_LOCALE__ === 'zh-Hant' || w.__ACCSYS_LOCALE__ === 'en' || w.__ACCSYS_LOCALE__ === 'ja') {
+    return w.__ACCSYS_LOCALE__;
+  }
+  const htmlLang = document?.documentElement?.lang;
+  if (htmlLang === 'zh-Hant' || htmlLang === 'en' || htmlLang === 'ja') {
+    return htmlLang;
+  }
+  try {
+    const m = document.cookie.match(new RegExp(`(?:^|;\\s*)${LOCALE_COOKIE_NAME}=([^;]+)`));
+    if (m?.[1]) return normalizeLocale(decodeURIComponent(m[1]));
+  } catch {
+    /* ignore */
+  }
+  return fallback;
+}
 
 type I18nContextValue = {
   locale: Locale;
@@ -48,18 +72,28 @@ export function I18nProvider({
   const [locale, setLocaleState] = useState<Locale>(initialLocale);
   const [isSwitching, startTransition] = useTransition();
 
+  useEffect(() => {
+    try {
+      (window as WindowWithAccsysLocale).__ACCSYS_LOCALE__ = locale;
+      document.documentElement.lang = locale;
+      document.cookie = `${LOCALE_COOKIE_NAME}=${encodeURIComponent(locale)}; path=/; max-age=31536000; SameSite=Lax`;
+    } catch {
+      /* ignore */
+    }
+  }, [locale]);
+
   const setLocale = useCallback(
     (next: Locale) => {
       if (next === locale) return;
       setLocaleState(next);
       try {
+        (window as WindowWithAccsysLocale).__ACCSYS_LOCALE__ = next;
         document.cookie = `${LOCALE_COOKIE_NAME}=${encodeURIComponent(next)}; path=/; max-age=31536000; SameSite=Lax`;
         document.documentElement.lang = next;
       } catch {
         /* ignore */
       }
-      startTransition(async () => {
-        await setLocaleCookieAction(next);
+      startTransition(() => {
         router.refresh();
       });
     },
@@ -84,7 +118,7 @@ export function useI18n(): I18nContextValue {
  * Compact language switcher pill (繁體中文 / English / 日本語)
  */
 export function LanguageSwitcher({ variant = 'row' }: { variant?: 'row' | 'rail' }) {
-  const { locale, setLocale, isSwitching } = useI18n();
+  const { locale, setLocale } = useI18n();
 
   if (variant === 'rail') {
     const nextOrder: Record<Locale, Locale> = {
@@ -96,10 +130,9 @@ export function LanguageSwitcher({ variant = 'row' }: { variant?: 'row' | 'rail'
     return (
       <button
         type="button"
-        disabled={isSwitching}
         onClick={() => setLocale(nextOrder[locale])}
         title={`切換語言 / Language / 言語 (${meta.native})`}
-        className="flex h-9 w-9 flex-col items-center justify-center rounded-xl border border-slate-200/90 bg-white text-[10px] font-bold text-slate-700 shadow-2xs transition hover:scale-105 hover:border-td-blue/60 hover:text-td-blue disabled:opacity-60"
+        className="flex h-9 w-9 flex-col items-center justify-center rounded-xl border border-slate-200/90 bg-white text-[10px] font-bold text-slate-700 shadow-2xs transition hover:scale-105 hover:border-td-blue/60 hover:text-td-blue"
       >
         <span className="leading-none">{meta.short}</span>
       </button>
@@ -115,7 +148,6 @@ export function LanguageSwitcher({ variant = 'row' }: { variant?: 'row' | 'rail'
           <button
             key={loc}
             type="button"
-            disabled={isSwitching}
             onClick={() => setLocale(loc)}
             className={`rounded-md px-2 py-1 text-[11px] font-semibold transition ${
               active

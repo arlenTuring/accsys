@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" fill="none">
+  <rect width="960" height="540" rx="16" fill="#F8FAFC"/>
+  <rect width="64" height="540" fill="#0F172A"/>
+  <rect x="10" y="130" width="44" height="44" rx="12" fill="#2563EB"/>
+  <text x="32" y="157" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="12" font-weight="bold">待辦</text>
+  <rect x="64" y="0" width="190" height="540" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="84" y="42" fill="#0F172A" font-family="sans-serif" font-size="15" font-weight="bold">我的待辦</text>
+  <rect x="76" y="110" width="166" height="38" rx="8" fill="#EFF6FF"/>
+  <text x="90" y="134" fill="#1D4ED8" font-family="sans-serif" font-size="13" font-weight="bold">我的資產管理</text>
+  <text x="284" y="46" fill="#0F172A" font-family="sans-serif" font-size="20" font-weight="bold">我的資產管理 · 收到財產清點單（第一階段：保管人確認）</text>
+  <rect x="284" y="72" width="644" height="436" rx="14" fill="#FFFFFF" stroke="#F59E0B" stroke-width="2"/>
+  <rect x="284" y="72" width="644" height="56" rx="14" fill="#FFFBEB"/>
+  <text x="308" y="106" fill="#92400E" font-family="sans-serif" font-size="15" font-weight="bold">待您確認之財產清點單（請逐條核對現況並點選確認）</text>
+  <rect x="308" y="148" width="596" height="132" rx="10" fill="#F8FAFC" stroke="#CBD5E1"/>
+  <text x="328" y="176" fill="#0F172A" font-family="sans-serif" font-size="15" font-weight="bold">財產編號 #10101｜MacBook Pro 16 吋研發筆電（數量：1 台）</text>
+  <text x="328" y="202" fill="#475569" font-family="sans-serif" font-size="13">帳載存放位置：台北辦公室 3F 自動駕駛系統部｜帳載狀態：保管使用中</text>
+  <rect x="328" y="222" width="170" height="40" rx="8" fill="#059669"/>
+  <text x="413" y="247" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="13" font-weight="bold">現況相符・點選確認</text>
+  <rect x="512" y="222" width="190" height="40" rx="8" fill="#FFFFFF" stroke="#2563EB" stroke-width="2"/>
+  <text x="607" y="247" text-anchor="middle" fill="#1D4ED8" font-family="sans-serif" font-size="13" font-weight="bold">修改位置／申請轉移</text>
+  <rect x="308" y="298" width="596" height="110" rx="10" fill="#ECFDF5" stroke="#A7F3D0"/>
+  <text x="328" y="328" fill="#065F46" font-family="sans-serif" font-size="15" font-weight="bold">已完成保管人確認 — 等待財會／總務清點人進行第二階複核結案</text>
+  <text x="328" y="356" fill="#047857" font-family="sans-serif" font-size="13">全部條目皆點選確認後，此清點單即自動封存並歸檔至「財產清單紀錄」。</text>
+  <circle cx="90" cy="110" r="16" fill="#DC2626" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="90" y="115" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="bold">1</text>
+  <circle cx="328" cy="222" r="16" fill="#DC2626" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="328" y="227" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="bold">2</text>
+  <circle cx="512" cy="222" r="16" fill="#DC2626" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="512" y="227" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="bold">3</text>
+</svg>

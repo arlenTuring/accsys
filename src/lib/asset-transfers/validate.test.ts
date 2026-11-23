@@ -142,8 +142,14 @@ describe('generateAssetTransferChain', () => {
     otherManagerEmployeeId: null,
   };
 
-  it('orders custodians before their managers', () => {
+  it('orders custodians and managers according to transfer type (custodian_change vs disposal)', () => {
     expect(generateAssetTransferChain(parties).map((s) => s.approverRole)).toEqual([
+      'original_custodian',
+      'original_custodian_manager',
+      'new_custodian',
+      'new_custodian_manager',
+    ]);
+    expect(generateAssetTransferChain({ ...parties, transferTypes: ['scrap'] }).map((s) => s.approverRole)).toEqual([
       'original_custodian',
       'new_custodian',
       'original_custodian_manager',

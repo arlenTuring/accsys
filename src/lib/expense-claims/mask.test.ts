@@ -3,7 +3,7 @@ import { canSeeRemittance, maskRemittance } from './mask';
 
 describe('maskRemittance', () => {
   it('hides all digits but the last four, keeping the bank and account name', () => {
-    expect(maskRemittance('台灣銀行(004) 林小明 0123-4567-8901')).toBe('台灣銀行(＊＊＊) 林小明 ＊＊＊＊-＊＊＊＊-8901');
+    expect(maskRemittance('台灣銀行(004) 阮振瑋 0123-4567-8901')).toBe('台灣銀行(＊＊＊) 阮振瑋 ＊＊＊＊-＊＊＊＊-8901');
   });
 
   it('masks full-width and mixed-width digits the same way', () => {

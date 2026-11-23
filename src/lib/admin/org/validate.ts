@@ -149,3 +149,37 @@ export function subtreeOf(id: string, departments: { id: string; parentId: strin
   }
   return out;
 }
+
+export type FilingAgentInput = {
+  agentEmployeeId: string;
+  targetType: 'employee' | 'department';
+  targetEmployeeId: string | null;
+  targetDepartmentId: string | null;
+  note: string;
+};
+
+export function parseFilingAgent(raw: unknown): Parsed<FilingAgentInput> {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  if (!isUuid(r.agentEmployeeId)) return { ok: false, error: '請選擇經辦人' };
+  const targetType = r.targetType === 'department' ? 'department' : r.targetType === 'employee' ? 'employee' : null;
+  if (!targetType) return { ok: false, error: '請選擇經辦對象類型（指定人員或指定部門）' };
+  if (targetType === 'employee') {
+    if (!isUuid(r.targetEmployeeId)) return { ok: false, error: '請選擇被代辦人員' };
+    if (r.targetEmployeeId === r.agentEmployeeId) return { ok: false, error: '經辦人不能設定為自己本人' };
+  } else {
+    if (!isUuid(r.targetDepartmentId)) return { ok: false, error: '請選擇被代辦部門' };
+  }
+  const note = text(r.note, '備註', 200, false);
+  if (!note.ok) return note;
+  return {
+    ok: true,
+    value: {
+      agentEmployeeId: r.agentEmployeeId,
+      targetType,
+      targetEmployeeId: targetType === 'employee' ? (r.targetEmployeeId as string) : null,
+      targetDepartmentId: targetType === 'department' ? (r.targetDepartmentId as string) : null,
+      note: note.value,
+    },
+  };
+}
+

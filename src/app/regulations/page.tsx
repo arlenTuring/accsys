@@ -162,9 +162,6 @@ export default async function RegulationsPage({
                     <div className="space-y-2.5">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-xs font-semibold text-slate-700">
-                            {reg.code}
-                          </span>
                           {reg.pinned && (
                             <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
                               {t.regulationsPage.coreRequiredBadge}

@@ -119,7 +119,7 @@ export const TRAVEL_EXPENSE_FORM: MigratedForm = {
               { id: 'fromStation', label: '起站', type: 'text', required: false, maxLength: 100 },
               { id: 'toStation', label: '迄站', type: 'text', required: false, maxLength: 100 },
               { id: 'mileage', label: '里程', type: 'number', required: false, decimals: 1, min: 0 },
-              { id: 'summary', label: '摘要', type: 'text', required: true, maxLength: 500 },
+              { id: 'summary', label: '備註說明(起-迄點、油資補助公里數等)', type: 'text', required: true, maxLength: 500 },
               {
                 id: 'currency',
                 label: '幣別',

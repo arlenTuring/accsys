@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { confirmDialog } from '@/app/components/dialog';
 import { STATUS_BADGE, STATUS_LABELS } from '@/app/components/form-labels';
 import { QuickPrintButton } from '@/app/components/print-button';
 import type {
@@ -13,7 +14,9 @@ import type {
 import {
   quickApproveFormAction,
   quickReturnFormAction,
+  quickWithdrawFormAction,
 } from '@/lib/applications/quick-actions';
+import { deleteFormDraftAction } from '@/lib/form-drafts/actions';
 import { useI18n } from '@/lib/i18n/context';
 import { sealAmountLabel } from '@/lib/seal-requests/constants';
 
@@ -470,13 +473,50 @@ export function QuickPendingApprovalRow({ item }: { item: PendingApprovalRichIte
 }
 
 export function CompactMyApplicationRow({ item }: { item: MyApplicationItem }) {
+  const router = useRouter();
   const { t, tr } = useI18n();
+  const [deletingDraft, setDeletingDraft] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(false);
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
   const rawStatusLabel = STATUS_LABELS[item.status] ?? item.status;
+
+  async function handleDeleteDraft() {
+    if (!item.draftId || deletingDraft) return;
+    setDeletingDraft(true);
+    await deleteFormDraftAction(item.draftId);
+    router.refresh();
+  }
+
+  async function handleWithdraw() {
+    if (withdrawing) return;
+    const confirmed = await confirmDialog({
+      title: '作廢這張表單？',
+      message:
+        '作廢後，此單據與單號將完整保留於系統供日後查閱（不會刪除單據），您也可隨時點擊「複製舊單」重新建立申請。',
+      confirmLabel: '確認作廢',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+
+    setWithdrawing(true);
+    setWithdrawError(null);
+    const res = await quickWithdrawFormAction(item.formType, item.id);
+    setWithdrawing(false);
+    if (!res.ok) {
+      setWithdrawError(res.error);
+      return;
+    }
+    router.refresh();
+  }
 
   return (
     <div
       className={`space-y-1.5 px-3.5 py-2.5 transition hover:bg-slate-50/60 ${
-        item.status === 'returned' ? 'bg-rose-50/20' : ''
+        item.status === 'returned'
+          ? 'bg-rose-50/20'
+          : item.status === 'draft'
+            ? 'bg-amber-50/25'
+            : ''
       }`}
     >
       {/* Top Row: Form Title + Case Number + Status + Summary vs Amount + Date + Actions */}
@@ -496,6 +536,11 @@ export function CompactMyApplicationRow({ item }: { item: MyApplicationItem }) {
                 {item.pendingApproverNames.join('、')}
               </span>
             )}
+            {item.status === 'withdrawn' && (
+              <span className="text-xs text-slate-500">
+                （{tr('已作廢保留單據，可檢視紀錄或複製重送')}）
+              </span>
+            )}
           </div>
 
           {item.summary && <p className="text-sm text-td-text">{item.summary}</p>}
@@ -511,30 +556,85 @@ export function CompactMyApplicationRow({ item }: { item: MyApplicationItem }) {
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
           {item.totalAmount !== null && item.totalAmount > 0 && (
             <span className="text-base font-bold text-td-blue-dark">
               {sealAmountLabel(item.totalAmount, item.currency)}
             </span>
           )}
           <span className="text-xs text-td-muted">{item.dateLabel}</span>
-          {item.status === 'approved' && <QuickPrintButton href={item.href} size="sm" />}
-          {item.editHref && (
-            <Link
-              href={item.editHref}
-              className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
-            >
-              {t.approvalsPage.editAndResubmit}
-            </Link>
+
+          {item.status === 'draft' ? (
+            <>
+              <Link
+                href={item.href}
+                className="rounded-lg bg-td-blue px-3 py-1.5 text-xs font-semibold text-white hover:bg-td-blue-dark"
+              >
+                {tr('繼續編輯草稿')}
+              </Link>
+              <button
+                type="button"
+                disabled={deletingDraft}
+                onClick={handleDeleteDraft}
+                className="rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+              >
+                {deletingDraft ? tr('刪除中…') : tr('刪除草稿')}
+              </button>
+            </>
+          ) : (
+            <>
+              <QuickPrintButton href={item.href} size="sm" />
+              {item.cloneHref && (
+                <Link
+                  href={item.cloneHref}
+                  className="rounded-lg border border-td-border bg-white px-2.5 py-1.5 text-xs font-medium text-td-blue hover:bg-blue-50"
+                  title="複製此單據內容建立新申請"
+                >
+                  {tr('複製舊單')}
+                </Link>
+              )}
+              {item.status === 'returned' && item.editHref && (
+                <Link
+                  href={item.editHref}
+                  className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
+                >
+                  {t.approvalsPage.editAndResubmit}
+                </Link>
+              )}
+              {item.canSelfEditBeforeFirstApproval && (
+                <>
+                  {item.editHref && (
+                    <Link
+                      href={item.editHref}
+                      className="rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+                      title="第一關簽核前可自行編輯修改單據內容"
+                    >
+                      {tr('編輯')}
+                    </Link>
+                  )}
+                  <button
+                    type="button"
+                    disabled={withdrawing}
+                    onClick={handleWithdraw}
+                    className="rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                    title="第一關簽核前可將此單據作廢撤回"
+                  >
+                    {withdrawing ? tr('作廢中…') : tr('作廢')}
+                  </button>
+                </>
+              )}
+              <Link
+                href={item.href}
+                className="rounded-lg border border-td-border bg-white px-3 py-1.5 text-xs font-medium text-td-blue hover:bg-slate-50"
+              >
+                {t.common.viewDetails}
+              </Link>
+            </>
           )}
-          <Link
-            href={item.href}
-            className="rounded-lg border border-td-border bg-white px-3 py-1.5 text-xs font-medium text-td-blue hover:bg-slate-50"
-          >
-            {t.common.viewDetails}
-          </Link>
         </div>
       </div>
+
+      {withdrawError && <p className="text-xs font-medium text-rose-600">{withdrawError}</p>}
 
       {/* Directly visible streamlined approval pipeline */}
       <StreamlinedStepPipeline progress={item.progress} />

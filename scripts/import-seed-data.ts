@@ -94,6 +94,12 @@ async function main() {
       projectId = (project as { id: string } | null)?.id ?? null;
     }
 
+    if (budget.annualBudgetAmount != null && budget.annualBudgetAmount < 0) {
+      throw new Error(
+        `匯入失敗：預算編號「${budget.code}」（部門／專案：${budget.departmentCode}，類別：${budget.category}）的「年度預算金額」不可為負數（輸入值：${budget.annualBudgetAmount}），請修正 Excel 後再匯入。`
+      );
+    }
+
     const { error } = await db.from('budget_codes').upsert(
       {
         code: budget.code,

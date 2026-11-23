@@ -1,6 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
+import { confirmDialog } from '@/app/components/dialog';
+import {
+  prewarmSpeechTranslations,
+  speakTextWithFemaleVoice,
+  stopActiveSpeech,
+} from '@/lib/tts/speech';
 import {
   bootstrapAssistantConversation,
   createConversationAction,
@@ -51,12 +57,16 @@ import { DraftPanel } from './draft-panel';
 import { MessageBlocks } from './message-blocks';
 import { SubmissionActionsProvider } from './submission-actions';
 import { SubmissionPanel } from './submission-panel';
-import { TurnProgressList, upsertProgressStep } from './turn-progress';
+import {
+  ClaudeThinkingFallback,
+  TurnProgressList,
+  upsertProgressStep,
+} from './turn-progress';
 import { formatSizeCompare, optimizeChatImage } from './optimize-chat-image';
 import { SafeMarkdown } from './safe-markdown';
 import type { ChatProgressStep } from '@/lib/ai-chat/progress';
 import type { AiChatActionResult } from '@/lib/ai-chat/turn';
-import { useI18n } from '@/lib/i18n/context';
+import { getClientActiveLocale, useI18n } from '@/lib/i18n/context';
 
 type UiMessage = {
   id: string;
@@ -118,13 +128,22 @@ async function streamAssistantTurn(
     stagedAttachmentIds: string[];
     targetDraftId?: string;
     replyToMessageId?: string;
+    locale?: string;
   },
   onStep: (step: ChatProgressStep) => void
 ): Promise<AiChatActionResult> {
+  const activeLocale = getClientActiveLocale(
+    body.locale === 'en' || body.locale === 'ja' || body.locale === 'zh-Hant'
+      ? body.locale
+      : 'zh-Hant'
+  );
   const res = await fetch('/api/ai-chat/send', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    headers: {
+      'Content-Type': 'application/json',
+      'x-accsys-locale': activeLocale,
+    },
+    body: JSON.stringify({ ...body, locale: activeLocale }),
     credentials: 'same-origin',
   });
   if (!res.ok || !res.body) {
@@ -180,7 +199,7 @@ async function streamAssistantTurn(
 }
 
 export function AiChatApp() {
-  const { t, tr } = useI18n();
+  const { locale, t, tr } = useI18n();
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [title, setTitle] = useState('AI 助手');
   const [messages, setMessages] = useState<UiMessage[]>([]);
@@ -608,17 +627,35 @@ export function AiChatApp() {
     if (intent === 'view_pending' || intent === 'view_mine') {
       startNav(async () => {
         const res = await getAssistantInboxAction();
+        const errMsg =
+          locale === 'en'
+            ? 'Failed to load tasks. Please try again later.'
+            : locale === 'ja'
+              ? 'タスクの読み込みに失敗しました。後ほど再試行してください。'
+              : '待辦載入失敗，請稍後重試。（不是「沒有待辦」）';
         if (!res.ok) {
-          setInboxHint('待辦載入失敗，請稍後重試。（不是「沒有待辦」）');
+          setInboxHint(errMsg);
           return;
         }
         const items = intent === 'view_pending' ? res.inbox.pendingApprovals : res.inbox.myInProgress;
         if (res.inbox.loadError) {
-          setInboxHint('待辦載入失敗，請稍後重試。（不是「沒有待辦」）');
+          setInboxHint(errMsg);
           return;
         }
         if (items.length === 0) {
-          setInboxHint(intent === 'view_pending' ? '目前沒有待簽核事項。' : '目前沒有進行中的送件。');
+          setInboxHint(
+            intent === 'view_pending'
+              ? locale === 'en'
+                ? 'There are currently no pending approvals.'
+                : locale === 'ja'
+                  ? '現在、承認待ちの案件はありません。'
+                  : '目前沒有待簽核事項。'
+              : locale === 'en'
+                ? 'There are currently no active submissions.'
+                : locale === 'ja'
+                  ? '現在、進行中の申請はありません。'
+                  : '目前沒有進行中的送件。'
+          );
           return;
         }
         const total = intent === 'view_pending' ? res.inbox.pendingTotal : res.inbox.mineTotal;
@@ -626,12 +663,25 @@ export function AiChatApp() {
           .slice(0, 8)
           .map((i) => {
             const who = intent === 'view_pending' && i.applicantName ? `${i.applicantName}｜` : '';
-            const state = i.status === 'returned' ? '｜已退回' : '';
-            return `· ${i.label}：${who}${i.summary || i.caseNumber}${state}`;
+            const state = i.status === 'returned' ? `｜${tr('已退回')}` : '';
+            return `· ${tr(i.label)}：${who}${i.summary || i.caseNumber}${state}`;
           })
           .join('\n');
-        const more = total > items.length ? `\n還有 ${total - items.length} 張，請到${intent === 'view_pending' ? '待簽核' : '我的申請'}頁查看全部。` : '';
-        setInboxHint(`${intent === 'view_pending' ? '待簽核' : '送件進度'}（共 ${total} 張）：\n${lines}${more}`);
+        const more =
+          total > items.length
+            ? locale === 'en'
+              ? `\n${total - items.length} more item(s). View all in ${intent === 'view_pending' ? 'To Approve' : 'My Applications'}.`
+              : locale === 'ja'
+                ? `\n他 ${total - items.length} 件あります。すべて見るには「${intent === 'view_pending' ? '承認待ち' : '自分の申請'}」ページを開いてください。`
+                : `\n還有 ${total - items.length} 張，請到${intent === 'view_pending' ? '待簽核' : '我的申請'}頁查看全部。`
+            : '';
+        const header =
+          locale === 'en'
+            ? `${intent === 'view_pending' ? 'To Approve' : 'Submission Progress'} (${total} total):\n`
+            : locale === 'ja'
+              ? `${intent === 'view_pending' ? '承認待ち' : '申請進捗'}（計 ${total} 件）：\n`
+              : `${intent === 'view_pending' ? '待簽核' : '送件進度'}（共 ${total} 張）：\n`;
+        setInboxHint(`${header}${lines}${more}`);
       });
       return;
     }
@@ -645,10 +695,16 @@ export function AiChatApp() {
     }
   }
 
-  function closeTab(tabId: string) {
+  async function closeTab(tabId: string) {
     const tab = tabs.find((t) => t.tabId === tabId);
     if (tab?.saveState === 'dirty' || tab?.saveState === 'error') {
-      if (!window.confirm('此文件尚未儲存或儲存失敗。關閉將可能遺失未存內容，仍要關閉？')) return;
+      const ok = await confirmDialog({
+        title: '關閉尚未儲存的文件？',
+        message: '此文件尚未儲存或儲存失敗。關閉將可能遺失未存內容，仍要關閉？',
+        confirmLabel: '仍要關閉',
+        tone: 'danger',
+      });
+      if (!ok) return;
     }
     setTabs((prev) => {
       const next = prev.filter((t) => t.tabId !== tabId);
@@ -679,13 +735,13 @@ export function AiChatApp() {
     patchAttachment(clientAttachmentId, { status: 'selected', error: undefined });
   }
 
-  async function onFilesSelected(fileList: FileList | null) {
+  async function onFilesSelected(fileList: FileList | File[] | null) {
     if (!fileList?.length) return;
     if (!conversationId) {
       setError('請先開啟對話再上傳檔案。');
       return;
     }
-    const picked = [...fileList];
+    const picked = Array.from(fileList);
     const videoCount = picked.filter((f) => f.type.startsWith('video/') || /\.(mp4|webm|mov)$/i.test(f.name)).length;
     const { candidates: rawCandidates, invalid } = buildImageCandidates(picked, newClientId);
     const processing = rawCandidates.map((c) => ({ ...c, status: 'processing' as const }));
@@ -818,17 +874,140 @@ export function AiChatApp() {
     onSend(message.text);
   }
 
-  async function copyModelReply(message: UiMessage) {
-    if (!message.text) return;
-    try {
-      await navigator.clipboard.writeText(message.text);
-      setCopiedMessageId(message.id);
-      window.setTimeout(() => {
-        setCopiedMessageId((id) => (id === message.id ? null : id));
-      }, 1600);
-    } catch {
-      setError('無法複製到剪貼簿，請手動選取文字。');
+  const [pinnedMessageIds, setPinnedMessageIds] = useState<Set<string>>(() => new Set());
+  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
+
+  function extractCopyableMessageContent(message: UiMessage): string {
+    const parts: string[] = [];
+    if (message.text?.trim()) {
+      parts.push(message.text.trim());
     }
+    for (const b of message.blocks ?? []) {
+      if (b.kind === 'text' && b.text?.trim() && !parts.includes(b.text.trim())) {
+        parts.push(b.text.trim());
+      } else if (b.kind === 'document_summary') {
+        const lines = b.fields.map((f) => `${f.label}：${f.value}`);
+        parts.push(`${b.title}\n${lines.join('\n')}`);
+      } else if (b.kind === 'action_result' && b.message) {
+        parts.push(b.message);
+      } else if (b.kind === 'submission_card') {
+        const cardLines = [
+          `${b.formName}（${b.formNumber}）`,
+          b.summary ? `摘要：${b.summary}` : '',
+          `狀態：${b.status}`,
+        ].filter(Boolean);
+        parts.push(cardLines.join('\n'));
+      } else if (b.kind === 'draft_reference') {
+        parts.push(`草稿：${b.formName} (${b.formKey} v${b.version})`);
+      }
+    }
+    return parts.join('\n\n').trim();
+  }
+
+  async function copyModelReply(message: UiMessage) {
+    const copyText = extractCopyableMessageContent(message);
+    if (!copyText) return;
+    try {
+      await navigator.clipboard.writeText(copyText);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = copyText;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+      } catch {
+        setError('無法複製到剪貼簿，請手動選取文字。');
+        document.body.removeChild(ta);
+        return;
+      }
+      document.body.removeChild(ta);
+    }
+    setCopiedMessageId(message.id);
+    window.setTimeout(() => {
+      setCopiedMessageId((id) => (id === message.id ? null : id));
+    }, 2000);
+  }
+
+  function togglePinMessage(messageId: string) {
+    setPinnedMessageIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      return next;
+    });
+  }
+
+  function extractSpeakableMessageContent(message: UiMessage): string {
+    if (message.text?.trim()) {
+      return message.text.trim();
+    }
+    const parts: string[] = [];
+    for (const b of message.blocks ?? []) {
+      if (b.kind === 'text' && b.text?.trim()) {
+        parts.push(b.text.trim());
+      } else if (b.kind === 'document_summary') {
+        const lines = b.fields.map((f) => `${tr(f.label)}：${f.value}`);
+        parts.push(`${tr(b.title)}\n${lines.join('\n')}`);
+      } else if (b.kind === 'action_result' && b.message) {
+        parts.push(b.message);
+      } else if (b.kind === 'submission_card') {
+        parts.push(`${tr(b.formName)}（${b.formNumber}）${b.summary ? `：${b.summary}` : ''}`);
+      }
+    }
+    return parts.join('\n').trim();
+  }
+
+  useEffect(() => {
+    stopActiveSpeech();
+    setSpeakingMessageId(null);
+    const modelTexts = messages
+      .filter((m) => m.role === 'model')
+      .map((m) => extractSpeakableMessageContent(m))
+      .filter(Boolean);
+    if (modelTexts.length > 0) {
+      prewarmSpeechTranslations(modelTexts, locale);
+    }
+  }, [locale, messages]);
+
+  function toggleSpeakMessage(message: UiMessage) {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    if (speakingMessageId === message.id) {
+      stopActiveSpeech();
+      setSpeakingMessageId(null);
+      return;
+    }
+    const textToRead = extractSpeakableMessageContent(message);
+    if (!textToRead) return;
+    void speakTextWithFemaleVoice({
+      text: textToRead,
+      uiLocale: locale,
+      onStart: () => setSpeakingMessageId(message.id),
+      onEnd: () => setSpeakingMessageId((prev) => (prev === message.id ? null : prev)),
+      onError: () => setSpeakingMessageId((prev) => (prev === message.id ? null : prev)),
+    });
+  }
+
+  function formatMessageRelativeTime(iso?: string): string {
+    const justNow = tr('剛剛');
+    if (!iso) return justNow;
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return justNow;
+    const diffSec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+    if (diffSec < 60) return justNow;
+    if (diffSec < 3600) {
+      const mins = Math.floor(diffSec / 60);
+      return locale === 'en' ? `${mins}m ago` : locale === 'ja' ? `${mins}分前` : `${mins} 分鐘前`;
+    }
+    return d.toLocaleTimeString(locale === 'en' ? 'en-US' : locale === 'ja' ? 'ja-JP' : 'zh-TW', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
   }
 
   /** `override`: text from a choice card, sent exactly as if typed (attachments are not included). */
@@ -932,6 +1111,7 @@ export function AiChatApp() {
           // The draft the person is looking at; the server checks ownership and links it to this conversation.
           targetDraftId: draftTargetId ?? undefined,
           replyToMessageId: replyToMessageId ?? undefined,
+          locale,
         },
         (step) => setTurnSteps((prev) => upsertProgressStep(prev, step))
       );
@@ -1212,7 +1392,10 @@ export function AiChatApp() {
                     >
                       <SafeMarkdown text={m.text} />
                       {m.toolsUsed && m.toolsUsed.length > 0 && (
-                        <p className="text-sm text-td-muted">工具：{m.toolsUsed.join('、')}</p>
+                        <p className="text-sm text-td-muted">
+                          {locale === 'en' ? 'Tools: ' : locale === 'ja' ? 'ツール：' : '工具：'}
+                          {m.toolsUsed.map((tool) => tr(tool)).join(locale === 'en' ? ', ' : '、')}
+                        </p>
                       )}
                       {m.blocks && conversationId && (
                         <MessageBlocks
@@ -1236,7 +1419,7 @@ export function AiChatApp() {
                           disabled={pending}
                           onClick={() => beginEdit(m)}
                         >
-                          編輯
+                          {tr('編輯')}
                         </button>
                         <button
                           type="button"
@@ -1244,29 +1427,102 @@ export function AiChatApp() {
                           disabled={pending || !m.text.trim()}
                           onClick={() => resendUserMessage(m)}
                         >
-                          重送
+                          {tr('重送')}
                         </button>
                       </div>
                     )}
                     {isModel && (
-                      <div className="flex flex-wrap gap-1 px-0.5">
+                      <div className="flex flex-wrap items-center gap-1 px-0.5 pt-1 text-slate-500">
+                        {/* 1. Copy button (Image 3 first icon) */}
                         <button
                           type="button"
-                          className={actionBtn}
-                          disabled={!m.text}
+                          disabled={!extractCopyableMessageContent(m)}
                           onClick={() => void copyModelReply(m)}
+                          title={copiedMessageId === m.id ? tr('已複製到剪貼簿') : tr('複製產生的資料與回應')}
+                          aria-label={tr('複製產生的資料與回應')}
+                          className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium transition ${
+                            copiedMessageId === m.id
+                              ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
+                              : 'hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40'
+                          }`}
                         >
-                          {copiedMessageId === m.id ? '已複製' : '複製回應'}
+                          {copiedMessageId === m.id ? (
+                            <>
+                              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.2">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                              </svg>
+                              <span>{tr('已複製')}</span>
+                            </>
+                          ) : (
+                            <>
+                              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+                                <rect x="9" y="9" width="11" height="11" rx="2" />
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                              </svg>
+                              <span>{tr('複製')}</span>
+                            </>
+                          )}
                         </button>
+
+                        {/* 2. Expand / Reply inquiry button (Image 3 second icon) */}
                         <button
                           type="button"
-                          className={actionBtn}
                           disabled={pending}
                           aria-pressed={replyingTo?.id === m.id}
                           onClick={() => beginReplyToModel(m)}
+                          title={tr('針對此內容接續回覆')}
+                          aria-label={tr('接續回覆')}
+                          className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium transition ${
+                            replyingTo?.id === m.id
+                              ? 'bg-slate-200 text-slate-900'
+                              : 'hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40'
+                          }`}
                         >
-                          {replyingTo?.id === m.id ? '回覆中' : '接續回覆'}
+                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15 3h6v6M14 10l6.1-6.1M9 21H3v-6M10 14l-6.1 6.1" />
+                          </svg>
+                          <span>{replyingTo?.id === m.id ? tr('回覆中') : tr('接續回覆')}</span>
                         </button>
+
+                        {/* 3. Pin / Bookmark button (Image 3 third icon) */}
+                        <button
+                          type="button"
+                          onClick={() => togglePinMessage(m.id)}
+                          title={pinnedMessageIds.has(m.id) ? tr('取消釘選') : tr('釘選此重要回應')}
+                          aria-label={tr('釘選回應')}
+                          className={`inline-flex items-center justify-center rounded-lg p-1.5 transition ${
+                            pinnedMessageIds.has(m.id)
+                              ? 'bg-amber-100 text-amber-700 ring-1 ring-amber-300'
+                              : 'hover:bg-slate-100 hover:text-slate-800'
+                          }`}
+                        >
+                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill={pinnedMessageIds.has(m.id) ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.9">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M16 3l5 5-7 7-4-1-5 5-1-1 5-5-1-4 7-7z" />
+                          </svg>
+                        </button>
+
+                        {/* 4. Read Aloud / Speaker button (Image 3 fourth icon) */}
+                        <button
+                          type="button"
+                          onClick={() => toggleSpeakMessage(m)}
+                          title={speakingMessageId === m.id ? tr('停止語音朗讀') : tr('語音朗讀此回應')}
+                          aria-label={tr('語音朗讀')}
+                          className={`inline-flex items-center justify-center rounded-lg p-1.5 transition ${
+                            speakingMessageId === m.id
+                              ? 'bg-indigo-100 text-indigo-700 ring-1 ring-indigo-300'
+                              : 'hover:bg-slate-100 hover:text-slate-800'
+                          }`}
+                        >
+                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M11 5L6 9H2v6h4l5 4V5z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14" />
+                          </svg>
+                        </button>
+
+                        {/* 5. Timestamp (Image 3 right side) */}
+                        <span className="ml-1.5 text-xs text-slate-400" suppressHydrationWarning>
+                          {formatMessageRelativeTime(m.createdAt)}
+                        </span>
                       </div>
                     )}
                   </div>
@@ -1278,24 +1534,7 @@ export function AiChatApp() {
                 </div>
               )}
               {turnSteps.length > 0 && <TurnProgressList steps={turnSteps} />}
-              {pending && turnSteps.length === 0 && (
-                <div
-                  className="mr-auto flex items-center gap-2 text-base text-td-muted"
-                  role="status"
-                  aria-live="polite"
-                >
-                  <span
-                    className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-td-border border-t-td-blue"
-                    aria-hidden
-                  />
-                  <span>
-                    正在想怎麼回你
-                    <span className="inline-flex w-4 justify-start">
-                      <span className="animate-pulse">…</span>
-                    </span>
-                  </span>
-                </div>
-              )}
+              {pending && turnSteps.length === 0 && <ClaudeThinkingFallback />}
             </div>
 
             <div className="relative border-t border-td-border p-3">
@@ -1331,9 +1570,22 @@ export function AiChatApp() {
               )}
               {boundDraft && (
                 <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
-                  <span className="rounded-full bg-td-blue-light/60 px-2 py-1 text-td-blue-dark">
-                    AI 目標草稿：{boundDraft.title}
-                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openDraftMeta(boundDraft.draftId, {
+                        title: boundDraft.title,
+                        version: boundDraft.version,
+                      })
+                    }
+                    className="inline-flex items-center gap-1.5 rounded-full bg-td-blue-light/60 px-2.5 py-1 text-left font-medium text-td-blue-dark transition hover:bg-td-blue-light"
+                    title="點擊於右側開啟此草稿詳情"
+                  >
+                    <span>AI 目標草稿：{boundDraft.title}</span>
+                    <span className="rounded bg-white/90 px-1.5 py-0.5 text-xs font-semibold text-td-blue">
+                      詳情
+                    </span>
+                  </button>
                   <button type="button" className="underline" onClick={() => setBoundDraft(null)}>
                     解除
                   </button>
@@ -1591,6 +1843,8 @@ export function AiChatApp() {
                   <SubmissionPanel
                     submissionId={activeTab.resourceId}
                     focusApprove={activeTab.status === 'approve'}
+                    conversationId={conversationId}
+                    onDraftOpened={openDraftMeta}
                   />
                 )}
               </div>

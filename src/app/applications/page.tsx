@@ -1,4 +1,3 @@
-import { revalidatePath } from 'next/cache';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import {
@@ -6,6 +5,7 @@ import {
   CompactMyApplicationRow,
   QuickPendingApprovalRow,
 } from '@/app/applications/approval-hub-client';
+import { StageTestingAnd104Banner } from '@/app/applications/stage-testing-and-104-banner';
 import {
   APPLICATION_CATEGORY_LABELS,
   getMyApplicationsAll,
@@ -14,19 +14,10 @@ import {
   type MyApplicationItem,
   type PendingApprovalRichItem,
 } from '@/lib/applications/my-applications';
-import { ensureDemoPendingApprovals } from '@/lib/applications/seed-pending-demo';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getServerI18n } from '@/lib/i18n/server';
 
 export const dynamic = 'force-dynamic';
-
-async function generateDemoApprovalsAction() {
-  'use server';
-  await ensureDemoPendingApprovals({ force: true });
-  revalidatePath('/applications');
-  revalidatePath('/approvals');
-  revalidatePath('/dashboard');
-}
 
 const CATEGORY_KEYS: MyApplicationCategoryKey[] = [
   'procurement',
@@ -69,9 +60,8 @@ export async function UnifiedApplicationsAndApprovalsView({
     { key: 'pending_approval', label: t.approvalsPage.tabs.pendingApproval },
     { key: 'returned', label: t.approvalsPage.tabs.returned },
     { key: 'approved', label: t.approvalsPage.tabs.approved },
+    { key: 'withdrawn', label: tr('已撤回') },
   ] as const;
-
-  await ensureDemoPendingApprovals();
 
   const [pendingApprovals, myItems] = await Promise.all([
     getMyPendingApprovalsEnriched(),
@@ -166,6 +156,11 @@ export async function UnifiedApplicationsAndApprovalsView({
           <p className="text-xs text-td-muted">{t.approvalsPage.subtitle}</p>
         </div>
       </section>
+
+      <StageTestingAnd104Banner
+        currentEmployeeCode={employee.employeeCode}
+        currentEmployeeName={employee.name}
+      />
 
       {/* Filter & Search Toolbar */}
       <section className="card space-y-2.5 !p-3.5">
@@ -264,16 +259,6 @@ export async function UnifiedApplicationsAndApprovalsView({
           title={t.approvalsPage.toApproveSectionTitle}
           countText={`${filteredApprovals.length} ${t.common.itemsUnit}`}
           defaultOpen
-          headerActions={
-            <form action={generateDemoApprovalsAction}>
-              <button
-                type="submit"
-                className="rounded-md border border-td-border bg-white px-2.5 py-1 text-xs font-semibold text-td-blue hover:bg-slate-50"
-              >
-                {t.approvalsPage.seedDemoButton}
-              </button>
-            </form>
-          }
         >
           {filteredApprovals.length === 0 ? (
             <div className="card flex flex-wrap items-center justify-between gap-2 !py-4 text-xs text-td-muted">

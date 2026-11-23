@@ -30,7 +30,13 @@ export type ExpenseClaimQueueItem = {
 };
 
 /** `scopeName` is the department of a department code (used to follow the 申請部門). */
-export type ExpenseBudgetOption = { id: string; scopeName: string; label: string };
+export type ExpenseBudgetOption = {
+  id: string;
+  scopeName: string;
+  label: string;
+  groupName?: string;
+  itemLabel?: string;
+};
 export type PayeeSupplierOption = { id: string; name: string };
 
 export type ExpenseClaimDetail = {
@@ -92,6 +98,7 @@ export async function getExpenseBudgetOptions(edition: ExpenseEdition): Promise<
     .innerJoin(owner, eq(owner.id, budgetCodes.ownerEmployeeId))
     .leftJoin(departments, eq(departments.id, budgetCodes.departmentId))
     .leftJoin(projects, eq(projects.id, budgetCodes.projectId))
+    .where(eq(budgetCodes.active, true))
     .orderBy(asc(budgetCodes.code));
   const codes = rows
     .filter((c) => (scope === 'department' ? c.departmentName : c.projectKind === scope))
@@ -103,6 +110,8 @@ export async function getExpenseBudgetOptions(edition: ExpenseEdition): Promise<
     id: c.id,
     scopeName: c.scopeName,
     label: (seen.get(base(c)) ?? 0) > 1 ? `${base(c)}（${c.category}｜${c.code}）` : base(c),
+    groupName: c.scopeName,
+    itemLabel: `${c.category}｜${c.code}（負責人：${c.ownerName}）`,
   }));
 }
 

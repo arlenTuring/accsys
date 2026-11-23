@@ -140,6 +140,16 @@ describe('批次 4 approval chain matches generateAssetTransferChain + escalatio
     general_manager: 'general_manager',
     chairman: 'chairman',
   };
+  const DISPOSAL_ROLE_TO_BLOCK: Record<string, string> = {
+    original_custodian: 'disposal_original_custodian',
+    new_custodian: 'disposal_new_custodian',
+    other_custodian: 'disposal_other_custodian',
+    original_custodian_manager: 'disposal_original_manager',
+    new_custodian_manager: 'disposal_new_manager',
+    other_custodian_manager: 'disposal_other_manager',
+    general_manager: 'disposal_general_manager',
+    chairman: 'disposal_chairman',
+  };
   const people = ['A', 'B', 'C', 'GM', 'CH'];
   /** A and B in DA, C in DC, GM and CH in DG. */
   const deptOf: Record<string, string> = { A: 'DA', B: 'DA', C: 'DC', GM: 'DG', CH: 'DG' };
@@ -166,7 +176,7 @@ describe('批次 4 approval chain matches generateAssetTransferChain + escalatio
     };
   }
 
-  it('every applicant, custodian, unit manager and 總經理／董事長 setup', () => {
+  it('custodian_change mode: every applicant, custodian, unit manager and 總經理／董事長 setup', () => {
     const r = definition();
     let cases = 0;
     let refused = 0;
@@ -194,6 +204,7 @@ describe('批次 4 approval chain matches generateAssetTransferChain + escalatio
                   originalManagerEmployeeId: managers[deptOf[original] as 'DA'],
                   newManagerEmployeeId: managers[deptOf[next] as 'DA'],
                   otherManagerEmployeeId: other ? managers[deptOf[other] as 'DA'] : null,
+                  transferTypes: ['custodian_change'],
                 };
                 const legacy = escalateIfSelfManaged(generateAssetTransferChain(parties), parties, {
                   generalManagerEmployeeId: top.gm ? 'GM' : null,
@@ -207,7 +218,12 @@ describe('批次 4 approval chain matches generateAssetTransferChain + escalatio
                     departmentId: deptOf[applicant],
                     formKey: ASSET_TRANSFER_FORM.key,
                     today: TODAY,
-                    fields: { originalCustodianEmployeeId: original, newCustodianEmployeeId: next, otherCustodianEmployeeId: other },
+                    fields: {
+                      transferTypes: ['custodian_change'],
+                      originalCustodianEmployeeId: original,
+                      newCustodianEmployeeId: next,
+                      otherCustodianEmployeeId: other,
+                    },
                   },
                   org(managers, top)
                 );
@@ -231,5 +247,50 @@ describe('批次 4 approval chain matches generateAssetTransferChain + escalatio
               }
     expect(cases).toBe(4 * 4 * people.length ** 3 * (people.length + 1));
     expect(refused).toBeGreaterThan(0);
+  });
+
+  it('non-custodian disposal/lend mode (第 37 條): custodians -> managers -> GM', () => {
+    const r = definition();
+    const managers = { DA: 'B', DC: 'C', DG: 'GM' };
+    const top = { gm: true, ch: true };
+    for (const t of ['lend', 'merge', 'sell', 'scrap', 'other'] as const) {
+      const parties: AssetTransferParties = {
+        applicantEmployeeId: 'A',
+        originalCustodianEmployeeId: 'A',
+        newCustodianEmployeeId: 'C',
+        otherCustodianEmployeeId: null,
+        originalManagerEmployeeId: 'B',
+        newManagerEmployeeId: 'C',
+        otherManagerEmployeeId: null,
+        transferTypes: [t],
+      };
+      const legacy = escalateIfSelfManaged(generateAssetTransferChain(parties), parties, {
+        generalManagerEmployeeId: 'GM',
+        chairmanEmployeeId: 'CH',
+      });
+      const resolved = resolveFlow(
+        r.flow,
+        {
+          applicantEmployeeId: 'A',
+          filerEmployeeId: 'A',
+          departmentId: 'DA',
+          formKey: ASSET_TRANSFER_FORM.key,
+          today: TODAY,
+          fields: {
+            transferTypes: [t],
+            originalCustodianEmployeeId: 'A',
+            newCustodianEmployeeId: 'C',
+            otherCustodianEmployeeId: null,
+          },
+        },
+        org(managers, top)
+      );
+      expect(resolved.ok).toBe(true);
+      if (resolved.ok && legacy) {
+        const pending = resolved.steps.filter((s) => s.status === 'pending').map((s) => [s.approverEmployeeId, s.blockId]);
+        expect(pending).toEqual(legacy.map((s) => [s.approverEmployeeId, DISPOSAL_ROLE_TO_BLOCK[s.approverRole]]));
+        expect(pending.map((p) => p[0])).toEqual(['C', 'B', 'GM']);
+      }
+    }
   });
 });

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { listMentionEmployeesAction } from '@/lib/ai-chat/actions';
 import { useI18n } from '@/lib/i18n/context';
 
@@ -93,7 +93,7 @@ type Props = {
   value: string;
   onChange: (value: string) => void;
   onSend: (overrideText?: string) => void;
-  onFilesSelected: (files: FileList | null) => void;
+  onFilesSelected: (files: FileList | File[] | null) => void;
   disabled?: boolean;
   sendDisabled?: boolean;
   sendTitle?: string;
@@ -121,7 +121,7 @@ export function ChatComposer({
   modelLabel = 'Gemini',
   quickPrompts,
 }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [dragging, setDragging] = useState(false);
   const [listening, setListening] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -416,6 +416,76 @@ export function ChatComposer({
     onFilesSelected(e.dataTransfer?.files ?? null);
   }
 
+  function handlePaste(e: ClipboardEvent<HTMLTextAreaElement>) {
+    if (disabled) return;
+    const clipboardData = e.clipboardData;
+    if (!clipboardData) return;
+
+    const extractedFiles: File[] = [];
+    const seenKeys = new Set<string>();
+
+    const normalizePastedFile = (file: File, index: number): File => {
+      const mime = (file.type || 'image/png').toLowerCase();
+      const rawName = (file.name || '').trim();
+      if (rawName && !/^(image|blob)(\.[a-z0-9]+)?$/i.test(rawName)) {
+        return file;
+      }
+      const extMap: Record<string, string> = {
+        'image/png': 'png',
+        'image/jpeg': 'jpg',
+        'image/jpg': 'jpg',
+        'image/webp': 'webp',
+        'image/gif': 'gif',
+        'image/heic': 'heic',
+        'application/pdf': 'pdf',
+      };
+      const ext = extMap[mime] || mime.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'png';
+      const now = new Date();
+      const stamp = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+      const suffix = index > 0 ? `-${index + 1}` : '';
+      const fileName = mime.startsWith('image/')
+        ? `剪貼簿圖片-${stamp}${suffix}.${ext}`
+        : `剪貼簿檔案-${stamp}${suffix}.${ext}`;
+      return new File([file], fileName, {
+        type: file.type || 'image/png',
+        lastModified: Date.now(),
+      });
+    };
+
+    if (clipboardData.items && clipboardData.items.length > 0) {
+      for (let i = 0; i < clipboardData.items.length; i++) {
+        const item = clipboardData.items[i];
+        if (!item || item.kind !== 'file') continue;
+        const f = item.getAsFile();
+        if (!f) continue;
+        const key = `${f.name}:${f.size}:${f.type}`;
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+        extractedFiles.push(normalizePastedFile(f, extractedFiles.length));
+      }
+    }
+
+    if (extractedFiles.length === 0 && clipboardData.files && clipboardData.files.length > 0) {
+      for (let i = 0; i < clipboardData.files.length; i++) {
+        const f = clipboardData.files[i];
+        if (!f) continue;
+        const key = `${f.name}:${f.size}:${f.type}`;
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+        extractedFiles.push(normalizePastedFile(f, extractedFiles.length));
+      }
+    }
+
+    if (extractedFiles.length === 0) return;
+
+    // Prevent browser default paste when pasting image/file blobs so it doesn't swallow the event or insert garbage
+    const plainText = clipboardData.getData('text/plain');
+    if (!plainText) {
+      e.preventDefault();
+    }
+    onFilesSelected(extractedFiles);
+  }
+
   function stopListening(opts?: { cancel?: boolean; send?: boolean }) {
     cancelledSpeechRef.current = Boolean(opts?.cancel);
     sendAfterSpeechRef.current = Boolean(opts?.send);
@@ -506,7 +576,7 @@ export function ChatComposer({
       try {
         const rec = new Ctor();
         recognitionRef.current = rec;
-        rec.lang = 'zh-TW';
+        rec.lang = locale === 'en' ? 'en-US' : locale === 'ja' ? 'ja-JP' : 'zh-TW';
         rec.continuous = true;
         rec.interimResults = true;
         rec.onresult = (ev) => {
@@ -728,6 +798,7 @@ export function ChatComposer({
           isComposingRef.current = false;
           setTimeout(() => setMentionState(null), 150);
         }}
+        onPaste={handlePaste}
         onKeyDown={onKeyDown}
         placeholder={placeholder}
         aria-label="訊息"

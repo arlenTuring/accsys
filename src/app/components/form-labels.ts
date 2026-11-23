@@ -1,4 +1,5 @@
 export const STATUS_LABELS: Record<string, string> = {
+  draft: '暫存草稿',
   pending_approval: '簽核中',
   approved: '已核准',
   returned: '已退回（待修改）',
@@ -6,6 +7,7 @@ export const STATUS_LABELS: Record<string, string> = {
 };
 
 export const STATUS_BADGE: Record<string, string> = {
+  draft: 'badge-withdrawn',
   pending_approval: 'badge-pending',
   approved: 'badge-approved',
   returned: 'badge-returned',

@@ -1,5 +1,4 @@
-import { and, desc, eq, inArray, ne, notExists, sql } from 'drizzle-orm';
-import { alias } from 'drizzle-orm/pg-core';
+import { and, desc, eq, inArray, isNull, ne, or } from 'drizzle-orm';
 import { isUuid } from '@/lib/authz/forms';
 import { formDefinitions, formDefinitionVersions, formSubmissions } from '@/lib/db/schema';
 import { abort, type Tx } from '@/lib/workflow/tx';
@@ -47,21 +46,30 @@ function parsedSchema(schema: unknown, flow: unknown): FormSchema {
   return (parsed as Extract<typeof parsed, { ok: true }>).schema;
 }
 
-async function caseHasApproved(tx: Reader, caseId: string, key: string): Promise<boolean> {
+export async function caseHasApproved(tx: Reader, caseId: string, key: string, sourceId?: string): Promise<boolean> {
   const [row] = await tx
     .select({ id: formSubmissions.id })
     .from(formSubmissions)
     .innerJoin(formDefinitions, eq(formDefinitions.id, formSubmissions.definitionId))
-    .where(and(eq(formSubmissions.procurementCaseId, caseId), eq(formDefinitions.key, key), eq(formSubmissions.status, 'approved')))
+    .where(
+      and(
+        eq(formSubmissions.procurementCaseId, caseId),
+        eq(formDefinitions.key, key),
+        eq(formSubmissions.status, 'approved'),
+        sourceId
+          ? or(eq(formSubmissions.sourceSubmissionId, sourceId), isNull(formSubmissions.sourceSubmissionId))
+          : undefined
+      )
+    )
     .limit(1);
   return !!row;
 }
 
 /**
  * Locks the picked source and checks it: the applicant's own, approved, one
- * of the allowed forms (meeting its condition), and the case has no
- * submission of this form yet (withdrawn ones count). `own` skips the
- * submission being revised.
+ * of the allowed forms (meeting its condition). Unless `rule.allowMultiple`
+ * is enabled (第 16 條：一張請購單對應多張採購、驗收、費用單), the case holds at most one
+ * submission of this form. `own` skips the submission being revised.
  */
 export async function loadSource(
   tx: Tx,
@@ -100,21 +108,23 @@ export async function loadSource(
   const schema = parsedSchema(row.schema, row.flow);
   const data = row.data as SubmissionData;
   if (!ruleHolds(rule!, schema, data)) abort('validation', `來源${row.name} ${row.formNumber} 不符合「${field.label}」的條件`);
-  if (rule!.unlessCaseHas && (await caseHasApproved(tx, row.caseId, rule!.unlessCaseHas))) {
+  if (rule!.unlessCaseHas && (await caseHasApproved(tx, row.caseId, rule!.unlessCaseHas, id))) {
     abort('conflict', `此案件已有核准的後續單據，請改選該單據作為「${field.label}」`);
   }
-  const [twin] = await tx
-    .select({ id: formSubmissions.id })
-    .from(formSubmissions)
-    .where(
-      and(
-        eq(formSubmissions.definitionId, target.definitionId),
-        eq(formSubmissions.procurementCaseId, row.caseId),
-        own ? ne(formSubmissions.id, own) : undefined
+  if (!rule!.allowMultiple) {
+    const [twin] = await tx
+      .select({ id: formSubmissions.id })
+      .from(formSubmissions)
+      .where(
+        and(
+          eq(formSubmissions.definitionId, target.definitionId),
+          eq(formSubmissions.procurementCaseId, row.caseId),
+          own ? ne(formSubmissions.id, own) : undefined
+        )
       )
-    )
-    .limit(1);
-  if (twin) abort('conflict', `此案件已建立過${target.name}`);
+      .limit(1);
+    if (twin) abort('conflict', `此案件已建立過${target.name}`);
+  }
   return { id, caseId: row.caseId, formNumber: row.formNumber, name: row.name, rule: rule!, schema, data };
 }
 
@@ -125,10 +135,56 @@ function eligibleRows(rule: SourceRule, data: SubmissionData): { row: Record<str
   return rows.map((row, index) => ({ row, index })).filter(({ row }) => !map.filter || row[map.filter.column] === map.filter.value);
 }
 
-/** One carried-over row: mapped columns from the source, the rest from `input`. */
+/** One carried-over row: mapped columns from the source (or adjusted partial quantity/amount within source bounds), the rest from `input`. */
 function carried(rule: SourceRule, source: Record<string, unknown>, index: number, input: Record<string, unknown> = {}): Record<string, unknown> {
   const out: Record<string, unknown> = { ...input };
-  for (const c of rule.rows!.columns) out[c.to] = source[c.from] ?? null;
+  const adjustable = new Set(rule.rows?.adjustableColumns ?? []);
+  const srcQtyNum = Number(String(source.quantity ?? '').replace(/,/g, ''));
+  let appliedQtyNum = srcQtyNum;
+
+  for (const c of rule.rows!.columns) {
+    const srcVal = source[c.from] ?? null;
+    if (adjustable.has(c.to) && input[c.to] !== undefined && input[c.to] !== null && input[c.to] !== '') {
+      const rawStr = String(input[c.to]).replace(/,/g, '').trim();
+      const rawNum = Number(rawStr);
+      const srcNum = Number(String(srcVal ?? '').replace(/,/g, ''));
+      if (Number.isFinite(rawNum) && rawNum > 0) {
+        if (c.to === 'quantity') {
+          const maxQ = Number.isFinite(srcNum) && srcNum > 0 ? srcNum : rawNum;
+          if (Number.isInteger(rawNum) && rawNum <= maxQ) {
+            out[c.to] = rawNum;
+            appliedQtyNum = rawNum;
+            continue;
+          }
+        } else {
+          const maxAmt = Number.isFinite(srcNum) && srcNum > 0 ? srcNum : rawNum;
+          if (rawNum <= maxAmt && /^\d+(\.\d{1,2})?$/.test(rawStr)) {
+            out[c.to] = rawStr;
+            continue;
+          }
+        }
+      }
+    }
+    out[c.to] = srcVal;
+  }
+
+  // If quantity was partially adjusted (e.g. partial acceptance) and amount comes from source without manual adjustment, scale amount proportionally
+  const amountCol = rule.rows!.columns.find((c) => c.to === 'amount');
+  if (
+    amountCol &&
+    !adjustable.has('amount') &&
+    Number.isFinite(srcQtyNum) &&
+    srcQtyNum > 0 &&
+    Number.isFinite(appliedQtyNum) &&
+    appliedQtyNum > 0 &&
+    appliedQtyNum < srcQtyNum
+  ) {
+    const srcAmtNum = Number(String(source[amountCol.from] ?? '').replace(/,/g, ''));
+    if (Number.isFinite(srcAmtNum) && srcAmtNum > 0) {
+      out.amount = ((srcAmtNum * appliedQtyNum) / srcQtyNum).toFixed(2);
+    }
+  }
+
   out[SOURCE_ROW_KEY] = index;
   return out;
 }
@@ -214,12 +270,17 @@ export type SourceOption = {
   rows: Record<string, unknown>[];
   /** The applicant may drop carried rows (subset) or must keep them all. */
   subset: boolean;
+  /** 第 16 條：1 對多核銷追蹤資訊 */
+  childCount?: number;
+  sourceTotalAmount?: number | null;
+  totalUsedAmount?: number;
+  remainingAmount?: number | null;
 };
 
 /**
  * The applicant's approved submissions this form may continue: allowed form,
- * condition met, and no submission of this form in the case yet. `current`
- * (editing) is always offered.
+ * condition met, and (unless `rule.allowMultiple` is true) no submission of
+ * this form in the case yet. `current` (editing) is always offered.
  */
 export async function sourceOptions(
   db: Reader,
@@ -228,7 +289,6 @@ export async function sourceOptions(
   applicantId: string,
   current?: string
 ): Promise<SourceOption[]> {
-  const other = alias(formSubmissions, 'other_submission');
   const keys = field.sources.map((r) => r.form);
   const rows = await db
     .select({
@@ -251,17 +311,33 @@ export async function sourceOptions(
         : and(
             eq(formSubmissions.applicantEmployeeId, applicantId),
             eq(formSubmissions.status, 'approved'),
-            inArray(formDefinitions.key, keys),
-            notExists(
-              db
-                .select({ one: sql`1` })
-                .from(other)
-                .where(and(eq(other.definitionId, target.definitionId), eq(other.procurementCaseId, formSubmissions.procurementCaseId)))
-            )
+            inArray(formDefinitions.key, keys)
           )
     )
     .orderBy(desc(formSubmissions.submittedAt))
     .limit(200);
+
+  if (rows.length === 0) return [];
+
+  // Query existing downstream submissions in these cases for this target definitionId
+  const caseIds = [...new Set(rows.map((r) => r.caseId))];
+  const existingChildren = await db
+    .select({
+      id: formSubmissions.id,
+      caseId: formSubmissions.procurementCaseId,
+      sourceSubmissionId: formSubmissions.sourceSubmissionId,
+      status: formSubmissions.status,
+      totalAmount: formSubmissions.totalAmount,
+      data: formSubmissions.data,
+    })
+    .from(formSubmissions)
+    .where(
+      and(
+        eq(formSubmissions.definitionId, target.definitionId),
+        inArray(formSubmissions.procurementCaseId, caseIds)
+      )
+    );
+
   const out: SourceOption[] = [];
   for (const r of rows) {
     const rule = field.sources.find((x) => x.form === r.key);
@@ -269,14 +345,94 @@ export async function sourceOptions(
     if (!rule || !parsed.ok) continue;
     const data = r.data as SubmissionData;
     if (!current && !ruleHolds(rule, parsed.schema, data)) continue;
-    if (!current && rule.unlessCaseHas && (await caseHasApproved(db, r.caseId, rule.unlessCaseHas))) continue;
-    const total = r.totalAmount === null ? '' : `｜合計 NT$ ${Number(r.totalAmount).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+    if (!current && rule.unlessCaseHas && (await caseHasApproved(db, r.caseId, rule.unlessCaseHas, r.id))) continue;
+
+    // Legacy 1-to-1 check when allowMultiple is not enabled
+    if (!current && !rule.allowMultiple) {
+      const hasInCase = existingChildren.some((c) => c.caseId === r.caseId);
+      if (hasInCase) continue;
+    }
+
+    // Active (non-withdrawn) downstream submissions linked to this source
+    const activeChildren = existingChildren.filter(
+      (c) => (c.sourceSubmissionId === r.id || (!c.sourceSubmissionId && c.caseId === r.caseId)) && c.status !== 'withdrawn'
+    );
+    const childCount = activeChildren.length;
+    const totalUsedAmount = activeChildren.reduce((sum, c) => sum + (c.totalAmount !== null ? Number(c.totalAmount) : 0), 0);
+    const sourceTotalAmount = r.totalAmount === null ? null : Number(r.totalAmount);
+    const remainingAmount =
+      sourceTotalAmount === null ? null : Math.max(0, Math.round((sourceTotalAmount - totalUsedAmount) * 100) / 100);
+
+    // Track per-row used quantity and amount across active child submissions
+    const usedQtyByRow = new Map<number, number>();
+    const usedAmtByRow = new Map<number, number>();
+    if (rule.rows) {
+      const targetTable = rule.rows.table;
+      for (const child of activeChildren) {
+        const childData = (child.data ?? {}) as Record<string, unknown>;
+        const childRows = ((childData[targetTable] as TableValue | undefined)?.rows ?? []) as Record<string, unknown>[];
+        for (const cr of childRows) {
+          const srcIdx = sourceRowOf(cr);
+          if (srcIdx === null) continue;
+          const q = Number(String(cr.quantity ?? '0').replace(/,/g, ''));
+          if (Number.isFinite(q) && q > 0) usedQtyByRow.set(srcIdx, (usedQtyByRow.get(srcIdx) ?? 0) + q);
+          const amtRaw = cr.totalPrice ?? cr.amount ?? cr.twdAmount ?? '0';
+          const amt = Number(String(amtRaw).replace(/,/g, ''));
+          if (Number.isFinite(amt) && amt > 0) usedAmtByRow.set(srcIdx, (usedAmtByRow.get(srcIdx) ?? 0) + amt);
+        }
+      }
+    }
+
+    const carriedRows = rule.rows
+      ? eligibleRows(rule, data).map((e) => {
+          const base = carried(rule, e.row, e.index);
+          if (!rule.allowMultiple) return base;
+          const srcQty = Number(String(e.row.quantity ?? '0').replace(/,/g, ''));
+          const usedQty = usedQtyByRow.get(e.index) ?? 0;
+          const remQty = Number.isFinite(srcQty) && srcQty > 0 ? Math.max(0, srcQty - usedQty) : null;
+          const srcAmtRaw = e.row.estimatedAmount ?? e.row.totalPrice ?? e.row.amount ?? null;
+          const srcAmt = srcAmtRaw !== null ? Number(String(srcAmtRaw).replace(/,/g, '')) : null;
+          const usedAmt = Math.round((usedAmtByRow.get(e.index) ?? 0) * 100) / 100;
+          const remAmt = srcAmt !== null && Number.isFinite(srcAmt) ? Math.max(0, Math.round((srcAmt - usedAmt) * 100) / 100) : null;
+
+          const adjustable = new Set(rule.rows?.adjustableColumns ?? []);
+          if (adjustable.has('quantity') && remQty !== null && remQty > 0) {
+            base.quantity = remQty;
+          }
+          if (adjustable.has('amount') && remAmt !== null && remAmt > 0 && usedAmt > 0) {
+            base.amount = remAmt.toFixed(2);
+          }
+          return {
+            ...base,
+            ...(Number.isFinite(srcQty) && srcQty > 0
+              ? { _maxQty: srcQty, _usedQty: usedQty, _remainingQty: remQty }
+              : {}),
+            ...(srcAmt !== null && Number.isFinite(srcAmt)
+              ? { _sourceAmount: srcAmt, _usedAmount: usedAmt, _remainingAmount: remAmt }
+              : {}),
+          };
+        })
+      : [];
+
+    const total =
+      sourceTotalAmount === null
+        ? ''
+        : `｜合計 NT$ ${sourceTotalAmount.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+    const balanceTag =
+      rule.allowMultiple && childCount > 0 && remainingAmount !== null
+        ? `（已開 ${childCount} 張｜剩餘 NT$ ${remainingAmount.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}）`
+        : '';
+
     out.push({
       id: r.id,
-      label: `${r.formNumber}｜${r.name}${total}`,
+      label: `${r.formNumber}｜${r.name}${total}${balanceTag}`,
       table: rule.rows?.table ?? null,
-      rows: rule.rows ? eligibleRows(rule, data).map((e) => carried(rule, e.row, e.index)) : [],
+      rows: carriedRows,
       subset: rule.rows?.mode === 'subset',
+      childCount,
+      sourceTotalAmount,
+      totalUsedAmount,
+      remainingAmount,
     });
   }
   return out;

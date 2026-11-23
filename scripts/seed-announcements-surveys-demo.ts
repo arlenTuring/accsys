@@ -62,15 +62,15 @@ function hoursAgo(n: number): Date {
 }
 
 async function main() {
-  const employees = await sql<{ id: string; name: string }[]>`
-    select id, name from employees where access_enabled = true order by employee_code
+  const employees = await sql<{ id: string; employee_code: string; name: string; role: string }[]>`
+    select id, employee_code, name, role from employees where access_enabled = true order by employee_code
   `;
   if (employees.length === 0) {
     console.error('No active employees. Run local seed first (./scripts/start-dev.sh).');
     process.exit(1);
   }
-  const adminExists = employees.some((e) => e.id === ADMIN);
-  const actorId = adminExists ? ADMIN : employees[0]!.id;
+  const adminEmp = employees.find((e) => e.employee_code === '0054') ?? employees.find((e) => e.role === 'admin') ?? employees[0]!;
+  const actorId = adminEmp.id;
 
   await sql.begin(async (tx) => {
     const surveyIds = [SURVEY.closed, SURVEY.openNew, SURVEY.openPartial];

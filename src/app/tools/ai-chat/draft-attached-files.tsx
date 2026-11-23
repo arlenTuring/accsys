@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useTransition } from 'react';
+import { confirmDialog } from '@/app/components/dialog';
 import { removeDraftFileAction } from '@/lib/ai-chat/actions';
 import { formatBytesLabel } from '@/lib/attachments/policy';
 import { PhotoEditor } from './photo-editor';
@@ -75,8 +76,14 @@ export function DraftAttachedFiles({ draftId, draftVersion, conversationId, file
             type="button"
             className="underline"
             disabled={pending || busyId !== null}
-            onClick={() => {
-              if (!window.confirm(`確定移除這張草稿的全部 ${files.length} 個附件？`)) return;
+            onClick={async () => {
+              const ok = await confirmDialog({
+                title: '移除全部附件？',
+                message: `確定移除這張草稿的全部 ${files.length} 個附件？`,
+                confirmLabel: '移除全部',
+                tone: 'danger',
+              });
+              if (!ok) return;
               setError(null);
               setBusyId('all');
               start(async () => {

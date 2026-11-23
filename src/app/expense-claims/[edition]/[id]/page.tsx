@@ -15,7 +15,9 @@ import { CURRENCY_LABELS } from '@/lib/travel-expenses/constants';
 import { ROLE_LABELS, STATUS_BADGE, STATUS_LABELS } from '@/app/components/form-labels';
 import { ApprovalActions } from '@/app/components/approval-actions';
 import { ApprovalTimeline } from '@/app/components/approval-timeline';
+import { DetailQueueNav } from '@/app/components/detail-queue-nav';
 import { PrintButton } from '@/app/components/print-button';
+import { getDetailQueueNavigation } from '@/lib/applications/my-applications';
 
 const money = (v: string | number) => Number(v).toLocaleString('zh-TW', { maximumFractionDigits: 2 });
 const day = (iso: string) => iso.replaceAll('-', '/');
@@ -46,7 +48,11 @@ export default async function ExpenseClaimDetailPage({
   if (!detail) notFound();
   const config = EDITIONS[edition];
   const base = `${FORM_ROUTE_PREFIX[config.formType]}/${id}`;
-  const [employee, attachments] = await Promise.all([getCurrentEmployee(), getAttachments(config.formType, id)]);
+  const [employee, attachments, queueNav] = await Promise.all([
+    getCurrentEmployee(),
+    getAttachments(config.formType, id),
+    getDetailQueueNavigation(id),
+  ]);
   const attachmentExtras = await loadAttachmentPanelExtras(attachments.map((a) => a.id));
 
   const currentStep =
@@ -65,13 +71,12 @@ export default async function ExpenseClaimDetailPage({
 
   return (
     <main className="page-shell space-y-5">
-      <nav className="text-sm text-td-muted print:hidden">
-        <Link href="/expense-claims" className="hover:text-td-blue">
-          費用申請
-        </Link>
-        <span className="mx-2">/</span>
-        <span className="text-td-blue-dark">{detail.caseNumber}</span>
-      </nav>
+      <DetailQueueNav
+        currentId={detail.id}
+        currentCaseNumber={detail.caseNumber}
+        currentFormLabel={config.label}
+        preloadedNav={queueNav}
+      />
 
       <section className="flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -82,7 +87,7 @@ export default async function ExpenseClaimDetailPage({
           </p>
         </div>
         <div className="flex flex-wrap gap-2 print:hidden">
-          {detail.status === 'approved' && <PrintButton label="列印費用申請單" />}
+          <PrintButton label="列印費用申請單 / PDF" />
           {canSelfEdit && (
             <Link href={`${base}/edit`} className="btn-secondary">
               編輯
@@ -129,6 +134,7 @@ export default async function ExpenseClaimDetailPage({
                 <th className={`${th} w-10`}>#</th>
                 <th className={`${th} w-40`}>項目</th>
                 <th className={th}>內容或說明</th>
+                <th className={`${th} w-16`}>數量</th>
                 <th className={`${th} w-20`}>幣別</th>
                 <th className={`${th} w-20`}>匯率</th>
                 <th className={`${th} w-28`}>金額</th>
@@ -136,21 +142,26 @@ export default async function ExpenseClaimDetailPage({
               </tr>
             </thead>
             <tbody>
-              {detail.items.map((i) => (
+              {detail.items.map((i) => {
+                const unitTwd = Number(i.amount) * Number(i.exchangeRate || 1);
+                const qty = unitTwd > 0 ? Math.max(1, Math.round(Number(i.twdAmount) / unitTwd)) : 1;
+                return (
                 <tr key={i.lineNo}>
                   <td className={`${td} text-center text-td-muted`}>{i.lineNo}</td>
                   <td className={`${td} text-center`}>{i.category}</td>
                   <td className={`${td} whitespace-pre-wrap`}>{i.description}</td>
+                  <td className={`${td} text-right`}>{qty}</td>
                   <td className={`${td} text-center`}>{CURRENCY_LABELS[i.currency] ?? i.currency}</td>
                   <td className={`${td} text-right`}>{Number(i.exchangeRate)}</td>
                   <td className={`${td} text-right`}>{money(i.amount)}</td>
                   <td className={`${td} text-right font-medium`}>{money(i.twdAmount)}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={6} className={`${td} text-right font-semibold`}>
+                <td colSpan={7} className={`${td} text-right font-semibold`}>
                   總金額
                 </td>
                 <td className={`${td} text-right font-bold text-td-blue-dark`}>NT$ {money(detail.totalAmount)}</td>
@@ -196,6 +207,12 @@ export default async function ExpenseClaimDetailPage({
           version={detail.version}
           onApprove={approveExpenseClaimStep.bind(null, edition)}
           onReturn={returnExpenseClaimStep.bind(null, edition)}
+          nextHref={queueNav.nextItem?.href ?? null}
+          nextLabel={
+            queueNav.nextItem
+              ? `${queueNav.nextItem.formLabel} ${queueNav.nextItem.caseNumber}`
+              : null
+          }
         />
       )}
     </main>

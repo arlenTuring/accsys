@@ -10,7 +10,7 @@ import {
   startResubmissionAction,
 } from '@/lib/ai-chat/actions';
 import type { LauncherEvent } from '@/lib/ai-chat/launcher-events';
-import { useI18n } from '@/lib/i18n/context';
+import { getClientActiveLocale, useI18n } from '@/lib/i18n/context';
 import { SafeMarkdown } from '@/app/tools/ai-chat/safe-markdown';
 import { usePathname } from 'next/navigation';
 
@@ -31,7 +31,7 @@ type Props = {
  */
 export function GlobalAssistant({ enabled }: Props) {
   const pathname = usePathname();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const titleId = useId();
   const [open, setOpen] = useState(false);
   const [mutedUntil, setMutedUntil] = useState(0);
@@ -246,6 +246,7 @@ export function GlobalAssistant({ enabled }: Props) {
           message: text,
           clientMessageId,
           conversationId: id,
+          locale: getClientActiveLocale(locale),
         });
         if (!res.ok) {
           setError(res.error);

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" fill="none">
+  <rect width="960" height="540" rx="16" fill="#F8FAFC"/>
+  <rect width="64" height="540" fill="#0F172A"/>
+  <rect x="10" y="236" width="44" height="44" rx="12" fill="#059669"/>
+  <text x="32" y="263" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="12" font-weight="bold">財會</text>
+  <rect x="64" y="0" width="196" height="540" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="82" y="42" fill="#0F172A" font-family="sans-serif" font-size="15" font-weight="bold">財會管理 · 預算平台</text>
+  <rect x="76" y="112" width="172" height="36" rx="8" fill="#ECFDF5" stroke="#10B981"/>
+  <text x="90" y="135" fill="#065F46" font-family="sans-serif" font-size="13" font-weight="bold">建立預算 &amp; 派發</text>
+  <rect x="76" y="156" width="172" height="36" rx="8" fill="#EFF6FF" stroke="#3B82F6"/>
+  <text x="90" y="179" fill="#1D4ED8" font-family="sans-serif" font-size="13" font-weight="bold">預算管理 &amp; 分析</text>
+  <text x="286" y="46" fill="#0F172A" font-family="sans-serif" font-size="20" font-weight="bold">派發年度預算編列任務 → 審核各部門預算與發布差異分析</text>
+  <rect x="286" y="70" width="644" height="200" rx="14" fill="#FFFFFF" stroke="#CBD5E1"/>
+  <text x="310" y="102" fill="#0F172A" font-family="sans-serif" font-size="16" font-weight="bold">步驟 A：選擇年度（如 116 年度）並勾選要派發填報的部門／專案負責人</text>
+  <rect x="310" y="120" width="410" height="84" rx="10" fill="#F8FAFC" stroke="#CBD5E1"/>
+  <text x="328" y="148" fill="#0F172A" font-family="sans-serif" font-size="13">[v] 自動駕駛系統部（主管：楊為任）｜[v] 車輛開發部（主管：陳冠文）</text>
+  <text x="328" y="178" fill="#0F172A" font-family="sans-serif" font-size="13">[v] 管理部（主管：吳旭東）｜[v] 產品部（負責人：張晏銘）</text>
+  <rect x="738" y="136" width="168" height="52" rx="10" fill="#059669"/>
+  <text x="822" y="167" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="bold">一鍵派發預算任務</text>
+  <text x="310" y="236" fill="#059669" font-family="sans-serif" font-size="13" font-weight="bold">派發後系統自動寄送通知信，受派主管於「我的待辦 → 年度預算填報」填寫 1~12 月預算。</text>
+  <rect x="286" y="288" width="644" height="220" rx="14" fill="#FFFFFF" stroke="#93C5FD" stroke-width="2"/>
+  <text x="310" y="322" fill="#1E3A8A" font-family="sans-serif" font-size="16" font-weight="bold">步驟 B：於「預算管理 / 預算分析」檢視全科目 SE01~SE99 明細與執行率</text>
+  <rect x="310" y="340" width="596" height="94" rx="10" fill="#EFF6FF"/>
+  <text x="328" y="368" fill="#1E3A8A" font-family="sans-serif" font-size="13" font-weight="bold">• 展開部門或專案預算表：完整檢視 1～12 月分月金額、前一年核定 vs 實際差異</text>
+  <text x="328" y="396" fill="#1E40AF" font-family="sans-serif" font-size="13">• 點擊「發布預算分析報告」或「匯出 Excel」供管理階層審閱</text>
+  <rect x="720" y="448" width="186" height="42" rx="8" fill="#2563EB"/>
+  <text x="813" y="474" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="13" font-weight="bold">發布年度預算分析</text>
+  <circle cx="738" cy="136" r="16" fill="#DC2626" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="738" y="141" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="bold">1</text>
+  <circle cx="720" cy="448" r="16" fill="#DC2626" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="720" y="453" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="bold">2</text>
+</svg>

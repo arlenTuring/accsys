@@ -7,7 +7,13 @@ import {
   PAYMENT_METHOD_LABELS,
   PAYMENT_METHODS,
 } from '@/lib/expense-claims/constants';
-import { EDITIONS, type ExpenseEdition } from '@/lib/expense-claims/editions';
+import {
+  EDITIONS,
+  UNIFIED_CAPPED_CATEGORIES,
+  UNIFIED_EXPENSE_CATEGORIES,
+  UNIFIED_SMALL_PURCHASE_MAX_TWD,
+  type ExpenseEdition,
+} from '@/lib/expense-claims/editions';
 import { centsToNumber, type Cents } from '@/lib/money';
 import { TRAVEL_CURRENCIES } from '@/lib/travel-expenses/constants';
 import type { MigratedForm } from './types';
@@ -98,6 +104,7 @@ function expenseClaimForm(edition: ExpenseEdition): MigratedForm {
                   default: config.categories[0],
                 },
                 { id: 'description', label: '內容或說明', type: 'text', required: true, maxLength: 500 },
+                { id: 'quantity', label: '數量', type: 'number', required: true, decimals: 0, min: 1, default: '1' },
                 {
                   id: 'currency',
                   label: '幣別',
@@ -114,7 +121,7 @@ function expenseClaimForm(edition: ExpenseEdition): MigratedForm {
                   type: 'money',
                   required: false,
                   min: 0.01,
-                  formula: { op: 'multiply', of: ['amount', 'exchangeRate'] },
+                  formula: { op: 'multiply', of: ['quantity', 'amount', 'exchangeRate'] },
                   ...(caps.length > 0 ? { rules: caps } : {}),
                 },
               ],
@@ -213,3 +220,179 @@ function expenseClaimForm(edition: ExpenseEdition): MigratedForm {
 }
 
 export const EXPENSE_CLAIM_FORMS: MigratedForm[] = (['department', 'minor', 'project', 'revenue'] as const).map(expenseClaimForm);
+
+export const UNIFIED_EXPENSE_CLAIM_KEY = 'expense-claim';
+
+/**
+ * 第 13、15 條：五合一整併後之通用《費用申請單》
+ * - 整併舊版「部門版」、「部門小額版」、「產品專案版」、「營收專案版」與「免走採購費用申請單」。
+ * - 預算來源不鎖定單一範圍，由兩層式級聯選單（部門／產品專案／營收專案 → 預算科目與負責人）動態決定簽核鏈之預算負責人。
+ * - 採購／購置類項目（設備、材料、軟體、辦公用品、雜項購置等）單筆上限 NT$ 30,000（三萬元），超過三萬元才提示須先開立【1. 請購單】走採購流程；一般日常費用不限額。
+ */
+export const UNIFIED_EXPENSE_CLAIM_FORM: MigratedForm = {
+  key: UNIFIED_EXPENSE_CLAIM_KEY,
+  name: '費用申請單',
+  description: '日常營業費用報支與三萬元以下免走採購之費用申請（支援部門預算、產品專案、營收專案兩層式選單）。',
+  categoryKey: 'expense',
+  numberPrefix: 'EC',
+  sortOrder: 0,
+  legacyFormType: 'expense_claim',
+  schema: {
+    version: 1,
+    sections: [
+      {
+        id: 'claim',
+        title: '請款內容',
+        description: '',
+        fields: [
+          {
+            id: 'budgetCodeId',
+            type: 'budget_code',
+            label: '預算來源',
+            help: '第一層選擇「部門」或「產品／營收專案」，第二層選擇預算科目（系統自動帶出預算負責人）。',
+            required: true,
+            width: 2,
+            showInHeader: true,
+            semantic: 'budget_code',
+          },
+          {
+            id: 'items',
+            type: 'table',
+            label: '請款內容',
+            help: '外幣請填入匯率，系統自動換算新臺幣小計。',
+            required: true,
+            width: 4,
+            semantic: 'amount',
+            minRows: 1,
+            maxRows: MAX_EXPENSE_CLAIM_LINES,
+            totalColumn: 'twdAmount',
+            columns: [
+              {
+                id: 'category',
+                label: '項目',
+                type: 'select',
+                required: true,
+                options: UNIFIED_EXPENSE_CATEGORIES.map((c) => ({ value: c, label: c })),
+                default: UNIFIED_EXPENSE_CATEGORIES[0],
+              },
+              { id: 'description', label: '內容或說明', type: 'text', required: true, maxLength: 500 },
+              { id: 'quantity', label: '數量', type: 'number', required: true, decimals: 0, min: 1, default: '1' },
+              {
+                id: 'currency',
+                label: '幣別',
+                type: 'select',
+                required: true,
+                options: TRAVEL_CURRENCIES.map((c) => ({ value: c.code, label: c.label })),
+                default: 'TWD',
+              },
+              { id: 'exchangeRate', label: '匯率', type: 'number', required: false, decimals: 6, rateFor: 'currency' },
+              { id: 'amount', label: '金額', type: 'money', required: true, min: 0.01, currencyColumn: 'currency' },
+              {
+                id: 'twdAmount',
+                label: '小計',
+                type: 'money',
+                required: false,
+                min: 0.01,
+                formula: { op: 'multiply', of: ['quantity', 'amount', 'exchangeRate'] },
+                rules: [
+                  {
+                    check: { kind: 'max', value: UNIFIED_SMALL_PURCHASE_MAX_TWD },
+                    when: { column: 'category', in: [...UNIFIED_CAPPED_CATEGORIES] },
+                    message: `單筆不可超過新臺幣 ${UNIFIED_SMALL_PURCHASE_MAX_TWD.toLocaleString('en-US')} 元（三萬元），超過三萬元請走請購流程（先開立 1.請購單 → 2.採購單）`,
+                  },
+                ],
+              },
+            ],
+          },
+          { id: 'remark', type: 'textarea', label: '備註', width: 4, maxLength: 1000, rows: 3 },
+        ],
+      },
+      {
+        id: 'payment',
+        title: '付款資訊',
+        description: '',
+        fields: [
+          {
+            id: 'payeeType',
+            type: 'select',
+            label: '付款對象',
+            required: true,
+            width: 2,
+            options: PAYEE_TYPES.map((p) => ({ value: p, label: PAYEE_TYPE_LABELS[p] })),
+            default: 'applicant',
+          },
+          {
+            id: 'payeeSupplierId',
+            type: 'supplier',
+            label: '付款廠商',
+            required: true,
+            width: 2,
+            visibleWhen: { field: 'payeeType', op: 'eq', value: 'supplier' },
+          },
+          {
+            id: 'expectedPaymentDate',
+            type: 'date',
+            label: '期望付款日',
+            help: '1.員工代墊付款日為每月15號與30號、廠商付款日為次月25號。 2.收件截止日為付款前5個工作日。',
+            required: true,
+            width: 2,
+            showInHeader: true,
+            notBeforeToday: true,
+          },
+          {
+            id: 'paymentMethod',
+            type: 'select',
+            label: '付款方式',
+            required: true,
+            width: 2,
+            options: PAYMENT_METHODS.map((m) => ({ value: m, label: PAYMENT_METHOD_LABELS[m] })),
+            default: 'transfer',
+          },
+          {
+            id: 'remittanceInfo',
+            type: 'textarea',
+            label: '匯款資訊',
+            help: '請填入"銀行名稱+銀行戶名+銀行帳號"；若不是選擇匯款，請填入"無"',
+            required: true,
+            width: 4,
+            maxLength: 500,
+            rows: 3,
+            sensitive: true,
+            rules: [
+              {
+                when: { field: 'paymentMethod', op: 'eq', value: 'transfer' },
+                check: { kind: 'not_equal', value: NO_REMITTANCE },
+                message: '付款方式為匯款時，請填入「銀行名稱+銀行戶名+銀行帳號」',
+              },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'files',
+        title: '附件',
+        description: '',
+        fields: [
+          {
+            id: 'attachments',
+            type: 'attachments',
+            label: '附件',
+            help: '請上傳相關費用報支附件（發票、收據或憑證）',
+            required: true,
+            width: 4,
+          },
+          { id: 'notices', type: 'notice', label: '注意事項', width: 4, text: NOTICES.map((n, i) => `${i + 1}. ${n}`).join('\n') },
+          {
+            id: 'reminder',
+            type: 'notice',
+            label: '提醒',
+            width: 4,
+            text: '完成線上簽核流程後，請印出核准之費用申請單，連同原始附件繳交給會計做帳，謝謝。',
+          },
+        ],
+      },
+    ],
+  },
+  flow: standardFlow({ amountField: 'items', budgetField: 'budgetCodeId' }),
+};
+

@@ -12,6 +12,7 @@ import {
   employeeGroups,
   employeeJobRoles,
   employees,
+  filingAgents,
   formDefinitions,
   formDefinitionVersions,
   jobRoles,
@@ -52,6 +53,17 @@ export type OrgDelegationRow = {
   status: DelegationStatus;
 };
 
+export type OrgFilingAgentRow = {
+  id: string;
+  agentEmployeeId: string;
+  targetType: 'employee' | 'department';
+  targetEmployeeId: string | null;
+  targetDepartmentId: string | null;
+  note: string;
+  createdByName: string;
+  createdAt: Date;
+};
+
 /** Forms whose live flows name each level code / department / role code / group id. */
 export type OrgInUse = Record<'levels' | 'departments' | 'roles' | 'groups', Record<string, string[]>>;
 
@@ -63,6 +75,7 @@ export type OrgDirectory = {
   jobRoles: OrgJobRoleRow[];
   groups: OrgGroupRow[];
   delegations: OrgDelegationRow[];
+  filingAgents: OrgFilingAgentRow[];
   forms: { key: string; name: string }[];
   inUse: OrgInUse;
 };
@@ -78,7 +91,8 @@ export async function getOrgDirectory(): Promise<OrgDirectory | null> {
   const db = getDb();
   const today = taipeiToday();
   const creator = alias(employees, 'creator');
-  const [levels, depts, emps, roles, bindings, groups, members, delegations, forms, inUse] = await Promise.all([
+  const filingCreator = alias(employees, 'filing_creator');
+  const [levels, depts, emps, roles, bindings, groups, members, delegations, filingAgentRows, forms, inUse] = await Promise.all([
     db.select({ id: orgLevels.id, code: orgLevels.code, name: orgLevels.name, rank: orgLevels.rank }).from(orgLevels).orderBy(desc(orgLevels.rank)),
     db
       .select({
@@ -125,6 +139,12 @@ export async function getOrgDirectory(): Promise<OrgDirectory | null> {
       )
       .orderBy(desc(approvalDelegations.createdAt))
       .limit(200),
+    db
+      .select({ f: filingAgents, createdByName: filingCreator.name })
+      .from(filingAgents)
+      .innerJoin(filingCreator, eq(filingCreator.id, filingAgents.createdByEmployeeId))
+      .orderBy(desc(filingAgents.createdAt))
+      .limit(300),
     db.select({ key: formDefinitions.key, name: formDefinitions.name }).from(formDefinitions).orderBy(asc(formDefinitions.name)),
     referencesInUse(db),
   ]);
@@ -164,6 +184,16 @@ export async function getOrgDirectory(): Promise<OrgDirectory | null> {
       createdByName,
       createdAt: d.createdAt,
       status: d.revokedAt ? 'revoked' : d.endsOn < today ? 'ended' : d.startsOn > today ? 'scheduled' : 'active',
+    })),
+    filingAgents: filingAgentRows.map(({ f, createdByName }) => ({
+      id: f.id,
+      agentEmployeeId: f.agentEmployeeId,
+      targetType: f.targetType === 'department' ? 'department' : 'employee',
+      targetEmployeeId: f.targetEmployeeId,
+      targetDepartmentId: f.targetDepartmentId,
+      note: f.note ?? '',
+      createdByName,
+      createdAt: f.createdAt,
     })),
     forms,
     inUse: {

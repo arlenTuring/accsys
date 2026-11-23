@@ -1,5 +1,6 @@
 import type { AppDb } from '@/lib/db/app-client';
 import { sendEmail } from '@/lib/email/send';
+import type { EmailAttachment } from '@/lib/email/gmail-sender';
 
 export type NotifyInput = {
   recipientEmployeeId: string;
@@ -8,6 +9,9 @@ export type NotifyInput = {
   formId: string;
   caseNumber: string;
   message: string;
+  templateId?: string;
+  templateVars?: Record<string, string | undefined>;
+  attachments?: EmailAttachment[];
 };
 
 export type NotifyResult = { ok: true } | { ok: false; error: string };
@@ -45,6 +49,9 @@ export async function notifyAndEmail(db: AppDb, input: NotifyInput): Promise<Not
       to: recipient.google_email,
       subject: `${EMAIL_SUBJECT_PREFIX[input.type]}${input.caseNumber}`,
       text: input.message,
+      ...(input.templateId ? { templateId: input.templateId } : {}),
+      ...(input.templateVars ? { templateVars: input.templateVars } : {}),
+      ...(input.attachments ? { attachments: input.attachments } : {}),
     });
   } catch {
     // Email is best-effort — the in-app notification row above is the source of truth.

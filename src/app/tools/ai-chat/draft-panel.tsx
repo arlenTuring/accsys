@@ -265,14 +265,28 @@ export function DraftPanel({
           資料庫欄位 {filledCount} 項 · v{panel.draft.version}
           {loading ? ' · 重新載入中…' : ''}
         </span>
-        <button
-          type="button"
-          className="underline"
-          disabled={loading}
-          onClick={() => void reload({ soft: false, fromRemote: true })}
-        >
-          重新載入草稿
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          <a
+            href={
+              panel.formKey === 'budget-request'
+                ? '/my-tasks/budget'
+                : `/f/${panel.formKey}/new?draft=${panel.draft.id}`
+            }
+            target="_blank"
+            rel="noreferrer"
+            className="text-td-blue underline"
+          >
+            開啟完整頁面
+          </a>
+          <button
+            type="button"
+            className="underline"
+            disabled={loading}
+            onClick={() => void reload({ soft: false, fromRemote: true })}
+          >
+            重新載入草稿
+          </button>
+        </div>
       </div>
       {confirming && (
         <div ref={(el) => el?.scrollIntoView({ block: 'center' })} role="dialog" aria-modal="true" aria-labelledby="submit-confirm-title" className="rounded-lg border-2 border-td-blue bg-white px-4 py-3 text-base shadow">

@@ -4,6 +4,7 @@ import type { FlowContext, FlowDef, ResolvedStep } from '@/lib/approval/flow/typ
 import { recordAudit } from '@/lib/audit/record';
 import { isUuid } from '@/lib/authz/forms';
 import { ACTIVE_ASSET_STATUSES, type AssetStatus } from '@/lib/asset-transfers/constants';
+import { isConfiguredFilingAgent } from '@/lib/filing-agents/queries';
 import {
   assets,
   attachments,
@@ -227,10 +228,9 @@ function flowContext(
   };
 }
 
-/** The applicant named on create: the actor, or (代為申請 forms only) another employee. */
-function applicantIdFor(schema: FormSchema, actorId: string, requested: unknown): string {
+/** The applicant named on create: the actor, or (代為申請 forms or authorized 經辦人) another employee. */
+function parseRequestedApplicantId(actorId: string, requested: unknown): string {
   if (requested === undefined || requested === null || requested === '' || requested === actorId) return actorId;
-  if (!schema.onBehalf) abort('validation', '這張表單不能代為申請');
   if (!isUuid(requested)) abort('validation', '請選擇申請人');
   return (requested as string).toLowerCase();
 }
@@ -314,9 +314,13 @@ export function createSubmission(actor: Actor, key: string, input: CreateInput, 
 
       const filer = await applicantOf(tx, actor.id);
       const def = await publishedVersion(tx, key, filer);
-      const applicantId = applicantIdFor(def.schema, actor.id, rest.applicantEmployeeId);
+      const applicantId = parseRequestedApplicantId(actor.id, rest.applicantEmployeeId);
       const applicant =
         applicantId === actor.id ? filer : await applicantOf(tx, applicantId, { code: 'validation', message: '選取的申請人無效或已停用' });
+      if (applicantId !== actor.id && !def.schema.onBehalf) {
+        const isAgent = await isConfiguredFilingAgent(tx, actor.id, applicantId, applicant.departmentId);
+        if (!isAgent) abort('validation', '這張表單不能代為申請');
+      }
       if (!canFile(def.visibility, applicant)) abort('validation', '選取的申請人沒有這張表單的填寫權限');
       const link = sourceFieldOf(def.schema);
       const raw = rest.data && typeof rest.data === 'object' ? (rest.data as Record<string, unknown>) : {};

@@ -6,7 +6,6 @@
 import postgres from 'postgres';
 
 const TARGETS = [
-  { email: 'arlen@turing-drive.com' },
   { email: 'david_shen@turing-drive.com' },
   // Seed/import had 吳旭東 without google_email; bind the Workspace address here.
   { email: 'ivan_wu@turing-drive.com', employeeCode: '0065', nameHint: '吳旭東' },

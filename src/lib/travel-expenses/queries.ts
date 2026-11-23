@@ -9,12 +9,15 @@ import {
   budgetCodes,
   departments,
   employees,
+  formDefinitions,
   procurementCases,
   projects,
   travelExpenseCostItems,
   travelExpenseReportItems,
   travelExpenses,
 } from '@/lib/db/schema';
+import { TRAVEL_COST_CATEGORIES } from '@/lib/travel-expenses/constants';
+import { allFields, type FormSchema } from '@/lib/custom-forms/schema';
 
 export type TravelExpenseSummary = {
   id: string;
@@ -84,6 +87,28 @@ export async function getTravelBudgetOptions(): Promise<TravelBudgetOption[]> {
     id: c.id,
     label: (seen.get(base(c)) ?? 0) > 1 ? `${base(c)}（${c.category}｜${c.code}）` : base(c),
   }));
+}
+
+/** Reads backend-configured travel cost categories from the `travel-expense` form definition, falling back to defaults. */
+export async function getTravelCostCategories(): Promise<string[]> {
+  try {
+    const [row] = await getDb()
+      .select({ draftSchema: formDefinitions.draftSchema })
+      .from(formDefinitions)
+      .where(eq(formDefinitions.key, 'travel-expense'));
+    const schema = row?.draftSchema as FormSchema | undefined;
+    if (schema && Array.isArray(schema.sections)) {
+      const table = allFields(schema).find((f) => f.id === 'costItems' && f.type === 'table');
+      if (table && table.type === 'table') {
+        const catCol = table.columns.find((c) => c.id === 'category' && c.type === 'select');
+        const opts = (catCol?.options ?? []).map((o) => o.value.trim()).filter(Boolean);
+        if (opts.length > 0) return opts;
+      }
+    }
+  } catch {
+    // Fall back to default categories if DB is unavailable
+  }
+  return [...TRAVEL_COST_CATEGORIES];
 }
 
 export async function getMyTravelExpenses(): Promise<TravelExpenseSummary[]> {

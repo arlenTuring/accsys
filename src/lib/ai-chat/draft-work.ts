@@ -1,7 +1,8 @@
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { activateDueScheduled, listVisibleAnnouncements } from '@/lib/announcements/service';
 import { parseDefinition } from '@/lib/custom-forms/definition';
-import { getPickerOptions, type PickerOptions } from '@/lib/custom-forms/queries';
+import { ensureUnifiedExpenseClaimPublished, getPickerOptions, LEGACY_SPLIT_EXPENSE_KEYS, type PickerOptions } from '@/lib/custom-forms/queries';
+import { UNIFIED_EXPENSE_CLAIM_KEY } from '@/lib/custom-forms/migrated/expense-claims';
 import { allFields, isDisplayOnly, type FieldDef, type FormSchema } from '@/lib/custom-forms/schema';
 import { getDb } from '@/lib/db';
 import {
@@ -409,13 +410,16 @@ let cachedFormsIndex: { entries: CachedFormEntry[]; expiresAt: number } | null =
  * L1 uses only `key=name` (~80 tokens total);
  * L2 selectively expands `fieldLine` ONLY for the 1-2 forms matching the user's message intent.
  */
-async function getCompanyFormsIndex(): Promise<CachedFormEntry[]> {
+async function getCompanyFormsIndex(actorId?: string): Promise<CachedFormEntry[]> {
   const now = Date.now();
   if (cachedFormsIndex && cachedFormsIndex.expiresAt > now) {
     return cachedFormsIndex.entries;
   }
+  if (actorId) {
+    await ensureUnifiedExpenseClaimPublished(actorId).catch(() => {});
+  }
   const db = getDb();
-  const defs = await db
+  const rawDefs = await db
     .select({
       key: formDefinitions.key,
       name: formDefinitions.name,
@@ -426,6 +430,11 @@ async function getCompanyFormsIndex(): Promise<CachedFormEntry[]> {
     .innerJoin(formCategories, eq(formCategories.id, formDefinitions.categoryId))
     .where(and(eq(formDefinitions.status, 'published'), eq(formCategories.active, true)))
     .orderBy(asc(formCategories.sortOrder), asc(formDefinitions.sortOrder), asc(formDefinitions.name));
+
+  const hasUnifiedExpense = rawDefs.some((d) => d.key === UNIFIED_EXPENSE_CLAIM_KEY);
+  const defs = hasUnifiedExpense
+    ? rawDefs.filter((d) => !LEGACY_SPLIT_EXPENSE_KEYS.has(d.key))
+    : rawDefs;
 
   const verIds = defs.map((d) => d.versionId).filter((x): x is string => Boolean(x));
   const verRows = verIds.length
@@ -474,18 +483,22 @@ export function invalidateAiCatalogCache(): void {
 }
 
 /** Match user query to relevant form_keys so we only inject field schemas for relevant forms (saves ~85% tokens). */
-function matchRelevantFormKeys(msg: string, entries: CachedFormEntry[]): Set<string> {
+export function matchRelevantFormKeys(
+  msg: string,
+  entries: Array<{ key: string; name: string }>
+): Set<string> {
   const q = msg.toLowerCase();
   const matched = new Set<string>();
   if (!q.trim()) return matched;
 
   const rules: Array<{ re: RegExp; keys: string[] }> = [
-    { re: /資產|財產|設備|轉給|轉移|移交|保管人|借出|報廢|macbook|dell|螢幕|筆電|光達|電腦/, keys: ['asset-transfer'] },
+    { re: /資產|財產|設備|轉給|轉移|移交|保管人|借出|報廢|合併|出售|macbook|dell|螢幕|筆電|光達|電腦/, keys: ['asset-transfer'] },
     { re: /公出|出差申請|差旅申請|拜訪客戶|外出/, keys: ['business-trip'] },
     { re: /旅費|出差報支|差旅報支|高鐵|機票|住宿|油資|車資/, keys: ['travel-expense'] },
-    { re: /採購|請購|買|報價|廠商|供應商/, keys: ['general-procurement', 'small-purchase'] },
-    { re: /報支|請款|核銷|發票|收據|費用|代墊/, keys: ['expense-reimbursement', 'travel-expense'] },
-    { re: /用印|蓋章|大小章|合約用印|印鑑/, keys: ['seal-request'] },
+    { re: /請購|採購|買|報價|廠商|供應商|驗收|預付/, keys: ['purchase-request', 'purchase-order', 'acceptance', 'procurement-payment', 'expense-claim'] },
+    { re: /報支|請款|核銷|發票|收據|費用|代墊|三萬|小額/, keys: ['expense-claim', 'procurement-payment', 'travel-expense'] },
+    { re: /用印|蓋章|大小章|合約用印|印鑑|nda|mou|協議書/, keys: ['contract-seal', 'general-seal', 'invoice-seal'] },
+    { re: /預算申請|編列預算|新增預算|年度預算|預算變更|追加預算|追減預算|流用|預算代號/, keys: ['budget-request', 'budget-change'] },
   ];
   for (const r of rules) {
     if (r.re.test(q)) {
@@ -534,16 +547,21 @@ export async function buildWorkState(input: {
 }): Promise<string> {
   const db = getDb();
   const msg = input.userMessage ?? '';
-  const needsAssets = /資產|財產|設備|轉給|轉移|移交|保管|借出|報廢|macbook|dell|螢幕|筆電|光達|電腦/i.test(msg);
+  const needsAssets = /資產|財產|設備|轉給|轉移|移交|保管|借出|報廢|清點|盤點|點交|macbook|dell|螢幕|筆電|光達|電腦/i.test(msg);
   const needsAnnouncements = /公告|消息|最新|置頂|重要|政策|福利|活動|announcement/i.test(msg);
   const needsSurveys = /問卷|調查|投票|意見|survey/i.test(msg);
 
-  const formsIndex = await getCompanyFormsIndex();
+  const formsIndex = await getCompanyFormsIndex(input.ownerEmployeeId);
   const matchedFormKeys = matchRelevantFormKeys(msg, formsIndex);
   const needsBudgets =
-    matchedFormKeys.has('general-procurement') ||
-    matchedFormKeys.has('small-purchase') ||
-    matchedFormKeys.has('expense-reimbursement') ||
+    matchedFormKeys.has('expense-claim') ||
+    matchedFormKeys.has('purchase-request') ||
+    matchedFormKeys.has('purchase-order') ||
+    matchedFormKeys.has('acceptance') ||
+    matchedFormKeys.has('procurement-payment') ||
+    matchedFormKeys.has('budget-request') ||
+    matchedFormKeys.has('budget-change') ||
+    matchedFormKeys.has('asset-transfer') ||
     matchedFormKeys.has('travel-expense');
 
   const [[empRow], myAssets, deptBudgets] = await Promise.all([
@@ -583,6 +601,7 @@ export async function buildWorkState(input: {
           })
           .from(budgetCodes)
           .leftJoin(projects, eq(projects.id, budgetCodes.projectId))
+          .where(eq(budgetCodes.active, true))
           .orderBy(asc(budgetCodes.code))
           .limit(20)
       : Promise.resolve([]),
@@ -719,9 +738,7 @@ export async function buildWorkState(input: {
     return lines.join('\n');
   }
   lines.push(
-    drafts[0]?.id === input.focusDraftId
-      ? '本對話進行中的草稿（第一張是使用者畫面上目前開啟的草稿，未指明時修改它）：'
-      : '本對話進行中的草稿（第一張是最近更新的「目前草稿」）：'
+    '本對話進行中的草稿（第一張為目前目標草稿；注意：使用者可能隨時關閉右側面板，因此回覆時請勿假設右側面板已開啟，也絕對不要在文字中輸出草稿 UUID 或逐列抄寫整張明細表，系統會自動在你的回覆下方附上帶有「詳情」按鈕的草稿卡片，只需簡短摘要重點並提醒使用者可點下方卡片的「詳情」在右側面板查看或編輯，或直接告訴你要修改哪一欄）：'
   );
   for (const [i, d] of drafts.slice(0, 4).entries()) {
     const ctx = await loadDraftFormContext(d.id, input.ownerEmployeeId);
@@ -732,7 +749,7 @@ export async function buildWorkState(input: {
       .map((f) => `${f.id}（${f.label}）=${displayValue(f, d.data[f.id], ctx.options)}`);
     const status = draftStatus(ctx.schema, d.data, ctx.today);
     lines.push(
-      `${i === 0 ? '▶ 目前草稿' : '・草稿'} draft_id=${d.id}｜${ctx.name}（${d.formDefinitionKey}）｜version=${d.version}`,
+      `${i === 0 ? '▶ 目前草稿' : '・草稿'} draft_id=${d.id}｜標題=${d.title || ctx.name}｜表單=${ctx.name}（${d.formDefinitionKey}）｜version=${d.version}`,
       `  已填：${filled.length ? filled.join('；') : '（無）'}`
     );
     for (const f of fields.filter((x): x is Extract<FieldDef, { type: 'table' }> => x.type === 'table')) {

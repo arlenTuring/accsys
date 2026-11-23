@@ -1,5 +1,4 @@
 import type { FlowDef } from '@/lib/approval/flow/types';
-import { standardFlow } from '@/lib/approval/flow/presets';
 import {
   CONTRACT_DOCUMENT_TYPES,
   CONTRACT_SEAL_OPTIONS,
@@ -84,13 +83,14 @@ function lendingFields() {
 
 const reminder = (text: string) => ({ id: 'reminder', type: 'notice', label: '提醒', width: 4, text });
 
-/** 申請單位主管 → 總經理 (no amount, so never the chairman). */
-const MANAGER_THEN_GM: FlowDef = {
+/** 用印申請單皆須簽至董事長（第 38 條）：申請單位主管 → 總經理 → 董事長。 */
+export const SEAL_TO_CHAIRMAN_FLOW: FlowDef = {
   version: 1,
   options: { skipApplicant: true, skipFiler: true, collapseDuplicates: true, whenEmpty: 'auto_approve' },
   blocks: [
     { id: 'dept_manager', type: 'approver', label: '申請單位主管', source: { kind: 'department_manager', of: 'applicant', levelsUp: 0 }, onUnresolved: 'block' },
     { id: 'general_manager', type: 'approver', label: '總經理', source: { kind: 'job_role', jobRole: 'general_manager', scope: 'company' }, onUnresolved: 'block' },
+    { id: 'chairman', type: 'approver', label: '董事長', source: { kind: 'job_role', jobRole: 'chairman', scope: 'company' }, onUnresolved: 'block' },
   ],
 };
 
@@ -197,7 +197,7 @@ export const CONTRACT_SEAL_FORM: MigratedForm = {
       },
     ],
   },
-  flow: standardFlow({ amountField: 'totalAmount' }),
+  flow: SEAL_TO_CHAIRMAN_FLOW,
 };
 
 export const GENERAL_SEAL_FORM: MigratedForm = {
@@ -235,7 +235,7 @@ export const GENERAL_SEAL_FORM: MigratedForm = {
       },
     ],
   },
-  flow: MANAGER_THEN_GM,
+  flow: SEAL_TO_CHAIRMAN_FLOW,
 };
 
 export const INVOICE_SEAL_FORM: MigratedForm = {
@@ -327,7 +327,7 @@ export const INVOICE_SEAL_FORM: MigratedForm = {
       },
     ],
   },
-  flow: MANAGER_THEN_GM,
+  flow: SEAL_TO_CHAIRMAN_FLOW,
 };
 
 export const SEAL_FORMS: MigratedForm[] = [CONTRACT_SEAL_FORM, GENERAL_SEAL_FORM, INVOICE_SEAL_FORM];

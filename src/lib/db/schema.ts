@@ -268,6 +268,7 @@ export const budgetCodes = pgTable(
     ownerEmployeeId: uuid('owner_employee_id'),
     fiscalYear: text('fiscal_year').notNull(),
     annualBudgetAmount: money('annual_budget_amount'),
+    active: boolean('active').notNull().default(true),
     createdAt: createdAt(),
   },
   (t): PgTableExtraConfigValue[] => [
@@ -2698,4 +2699,60 @@ export const companyRegulationAttachments = pgTable(
     index('company_regulation_attachments_reg_idx').on(t.regulationId, t.createdAt),
   ]
 );
+
+// ---------------------------------------------------------------------------
+// Common Form Features: 經辦人設定 (filing_agents) & 表單送出前暫存草稿 (form_drafts)
+// ---------------------------------------------------------------------------
+
+export const filingAgents = pgTable(
+  'filing_agents',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentEmployeeId: uuid('agent_employee_id').notNull(),
+    targetType: text('target_type').notNull(),
+    targetEmployeeId: uuid('target_employee_id'),
+    targetDepartmentId: uuid('target_department_id'),
+    note: text('note'),
+    createdByEmployeeId: uuid('created_by_employee_id').notNull(),
+    createdAt: createdAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    fk('filing_agents_agent_employee_id_fkey', t.agentEmployeeId, employees.id).onDelete('cascade'),
+    fk('filing_agents_target_employee_id_fkey', t.targetEmployeeId, employees.id).onDelete('cascade'),
+    fk('filing_agents_target_department_id_fkey', t.targetDepartmentId, departments.id).onDelete('cascade'),
+    fk('filing_agents_created_by_employee_id_fkey', t.createdByEmployeeId, employees.id),
+    check(
+      'filing_agents_target_check',
+      sql`(${t.targetType} = 'employee' and ${t.targetEmployeeId} is not null and ${t.targetDepartmentId} is null and ${t.targetEmployeeId} <> ${t.agentEmployeeId}) or (${t.targetType} = 'department' and ${t.targetDepartmentId} is not null and ${t.targetEmployeeId} is null)`
+    ),
+    check('filing_agents_note_check', sql`${t.note} is null or char_length(${t.note}) <= 200`),
+    index('filing_agents_agent_idx').on(t.agentEmployeeId),
+    index('filing_agents_target_emp_idx').on(t.targetEmployeeId),
+    index('filing_agents_target_dept_idx').on(t.targetDepartmentId),
+  ]
+);
+
+export const formDrafts = pgTable(
+  'form_drafts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ownerEmployeeId: uuid('owner_employee_id').notNull(),
+    applicantEmployeeId: uuid('applicant_employee_id'),
+    formType: text('form_type').notNull().default('custom'),
+    formKey: text('form_key').notNull(),
+    formLabel: text('form_label').notNull(),
+    title: text('title').notNull().default(''),
+    data: jsonb('data').$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t): PgTableExtraConfigValue[] => [
+    fk('form_drafts_owner_employee_id_fkey', t.ownerEmployeeId, employees.id).onDelete('cascade'),
+    fk('form_drafts_applicant_employee_id_fkey', t.applicantEmployeeId, employees.id).onDelete('set null'),
+    check('form_drafts_data_object_check', sql`jsonb_typeof(${t.data}) = 'object'`),
+    index('form_drafts_owner_updated_idx').on(t.ownerEmployeeId, t.updatedAt),
+    index('form_drafts_owner_form_idx').on(t.ownerEmployeeId, t.formKey),
+  ]
+);
+
 

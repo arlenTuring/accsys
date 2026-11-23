@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { STATUS_BADGE, STATUS_LABELS } from '@/app/components/form-labels';
 import { QuickPrintButton } from '@/app/components/print-button';
-import { getSubmissionPanelAction } from '@/lib/ai-chat/actions';
+import { getSubmissionPanelAction, startResubmissionAction } from '@/lib/ai-chat/actions';
 import { ActionSpinner, useSubmissionAction } from './submission-actions';
 
 type Panel = Extract<Awaited<ReturnType<typeof getSubmissionPanelAction>>, { ok: true }>;
@@ -21,15 +21,23 @@ const timeFmt = new Intl.DateTimeFormat('zh-TW', {
 export function SubmissionPanel({
   submissionId,
   focusApprove,
+  conversationId,
+  onDraftOpened,
 }: {
   submissionId: string;
   /** Scroll to the approve/return controls when opened via 簽核. */
   focusApprove?: boolean;
+  conversationId?: string | null;
+  onDraftOpened?: (
+    draftId: string,
+    meta?: { title?: string; version?: number; formKey?: string; status?: string }
+  ) => void;
 }) {
   const [panel, setPanel] = useState<Panel | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reason, setReason] = useState('');
   const [loadPending, startLoad] = useTransition();
+  const [resubmitPending, startResubmit] = useTransition();
   const approveRef = useRef<HTMLElement>(null);
   const tick = useRef(0);
   const action = useSubmissionAction(submissionId);
@@ -120,6 +128,33 @@ export function SubmissionPanel({
           <a className="inline-block text-sm text-td-blue underline" href={panel.href} target="_blank" rel="noreferrer">
             開啟完整頁面
           </a>
+          {panel.canResubmit && onDraftOpened && (
+            <button
+              type="button"
+              disabled={resubmitPending}
+              onClick={() => {
+                startResubmit(async () => {
+                  const res = await startResubmissionAction({
+                    submissionId: panel.id,
+                    conversationId: conversationId ?? undefined,
+                  });
+                  if (!res.ok) {
+                    setError(res.error);
+                    return;
+                  }
+                  onDraftOpened(res.draftId, {
+                    title: res.title,
+                    version: res.version,
+                    formKey: res.formKey,
+                    status: 'draft',
+                  });
+                });
+              }}
+              className="inline-block text-sm font-medium text-td-blue underline disabled:opacity-60"
+            >
+              {resubmitPending ? '開啟草稿中…' : '開啟草稿修改'}
+            </button>
+          )}
           {(panel.status === 'approved' || action.phase === 'approved') && (
             <QuickPrintButton href={panel.href} size="xs" />
           )}

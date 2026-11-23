@@ -24,6 +24,15 @@ function isSafeHref(href: string): boolean {
   );
 }
 
+const DOCUMENT_CARD_HREF_RE =
+  /^\/(?:f\/|requests\/|purchase-orders\/|acceptances\/|expense-requests\/|expense-claims\/|travel-expenses\/|seal-requests\/|asset-transfers\/|assets\/inventory-forms\/)/;
+
+function cleanDocumentLinkLabel(label: string): string {
+  return label
+    .replace(/^(?:立即繼續填寫|立即前往簽核|立即前往處理|立即前往|查看預算申請單|查看單據)\s*[：:]?\s*/u, '')
+    .trim();
+}
+
 function parseInline(src: string): Seg[] {
   const out: Seg[] = [];
   const re =
@@ -36,7 +45,11 @@ function parseInline(src: string): Seg[] {
     else if (m[3]) out.push({ t: 'italic', v: m[3] });
     else if (m[4]) out.push({ t: 'code', v: m[4] });
     else if (m[5] && m[6] && isSafeHref(m[6])) {
-      out.push({ t: 'link', v: m[5], href: m[6] });
+      if (DOCUMENT_CARD_HREF_RE.test(m[6])) {
+        out.push({ t: 'bold', v: cleanDocumentLinkLabel(m[5]) || m[5] });
+      } else {
+        out.push({ t: 'link', v: m[5], href: m[6] });
+      }
     } else {
       out.push({ t: 'text', v: m[0] });
     }

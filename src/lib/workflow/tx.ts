@@ -6,9 +6,17 @@ import type { ResolvedStep } from '@/lib/approval/flow/types';
 import { getDb, type Db } from '@/lib/db';
 import { errorSummary } from '@/lib/db/error-summary';
 import { approvalSteps, departments, employeeIdentities, employees, idempotencyKeys, notifications } from '@/lib/db/schema';
-import { sendEmail } from '@/lib/email/send';
+import {
+  isEmailDeliveryConfigured,
+  resolveTemplateIdForNotification,
+  sendEmail,
+} from '@/lib/email/send';
+import {
+  loadEmailApprovalDocumentSummary,
+  renderEmailDocumentAndActions,
+} from '@/lib/email/submission-detail-html';
 import { centsToNumber, type Cents } from '@/lib/money';
-import { FORM_LABELS, FORM_TABLE, type FormType, type SealFormType } from '@/lib/procurement/form-registry';
+import { FORM_LABELS, FORM_ROUTE_PREFIX, FORM_TABLE, type FormType, type SealFormType } from '@/lib/procurement/form-registry';
 
 /**
  * Transaction building blocks shared by the four form modules. Each module's
@@ -38,7 +46,15 @@ export function abort(code: ErrorCode, error: string): never {
   throw new Abort(fail(code, error));
 }
 
-export type Outbox = { recipientEmployeeId: string; subject: string; text: string }[];
+export type Outbox = {
+  recipientEmployeeId: string;
+  subject: string;
+  text: string;
+  type?: 'approval_requested' | 'request_returned' | 'request_approved';
+  formType?: string;
+  formId?: string;
+  caseNumber?: string;
+}[];
 
 /** Test-only fault injection: runs just before commit. */
 export type TxHooks = { beforeCommit?: (tx: Tx) => Promise<void> };
@@ -73,22 +89,178 @@ export async function runInTransaction<T extends { ok: true }>(
 }
 
 async function deliverOutbox(outbox: Outbox): Promise<void> {
-  if (outbox.length === 0 || !process.env.SMTP_HOST) return;
+  if (outbox.length === 0 || !(await isEmailDeliveryConfigured())) return;
   const ids = [...new Set(outbox.map((m) => m.recipientEmployeeId))];
   // The bound Google identity's address follows Workspace renames (login and
   // directory sync update it); employees.google_email is only the original
   // registration value. Disabled accounts get no mail.
   const rows = await getDb()
-    .select({ id: employees.id, current: employeeIdentities.email, registered: employees.googleEmail })
+    .select({
+      id: employees.id,
+      name: employees.name,
+      current: employeeIdentities.email,
+      registered: employees.googleEmail,
+    })
     .from(employees)
     .leftJoin(employeeIdentities, and(eq(employeeIdentities.employeeId, employees.id), isNull(employeeIdentities.revokedAt)))
     .where(and(inArray(employees.id, ids), eq(employees.accessEnabled, true)));
   const emailOf = new Map(rows.map((r) => [r.id, r.current ?? r.registered]));
+  const nameOf = new Map(rows.map((r) => [r.id, r.name]));
+
+  const appOrigin = process.env.APP_ORIGIN || 'http://localhost:3001';
+
   for (const m of outbox) {
     const to = emailOf.get(m.recipientEmployeeId);
     if (!to) continue;
     try {
-      await sendEmail({ to, subject: m.subject, text: m.text });
+      let resolvedFormLabel = m.formType ? (FORM_LABELS[m.formType as FormType] ?? m.formType) : '單據';
+      let applicantName = '申請同仁';
+      let departmentName = '所屬部門';
+      let stepLabel = '簽核審核關卡';
+      let amountText: string | undefined;
+      let reasonText: string | undefined;
+      let actionUrl = `${appOrigin}/applications`;
+      let documentDetailsHtml = '';
+      let documentDetailsText = '';
+      let approvalActionsHtml = '';
+      let approvalActionsText = '';
+
+      const allowedTestEmail =
+        process.env.TEST_ALLOWED_RECIPIENT_EMAIL?.trim().toLowerCase() || '';
+      const isAllowedTestRecipient =
+        allowedTestEmail.length > 0 && to.trim().toLowerCase() === allowedTestEmail;
+      const skipHeavyHtmlForBlockedTestRecipient =
+        (process.env.GMAIL_TEST_MODE_ONLY !== 'false' &&
+          allowedTestEmail.length > 0 &&
+          !isAllowedTestRecipient) ||
+        (globalThis as Record<string, unknown>).__e2eBatchThrottleGmail === true;
+
+      if (m.formType && m.formId && m.formType in FORM_TABLE && !skipHeavyHtmlForBlockedTestRecipient) {
+        const prefix = FORM_ROUTE_PREFIX[m.formType as FormType] ?? '/applications';
+        actionUrl = `${appOrigin}${prefix}/${m.formId}`;
+        try {
+          const table = FORM_TABLE[m.formType as FormType];
+          const metaRows = await getDb().execute<{
+            applicant_name: string | null;
+            dept_name: string | null;
+            dept_code: string | null;
+            form_label: string | null;
+            total_amount: string | number | null;
+            step_label: string | null;
+            return_reason: string | null;
+          }>(sql`
+            select
+              e.name as applicant_name,
+              d.name as dept_name,
+              d.code as dept_code,
+              (select fd.name from form_definitions fd where fd.id = (to_jsonb(f) ->> 'definition_id')::uuid) as form_label,
+              coalesce(to_jsonb(f) ->> 'total_amount', to_jsonb(f) ->> 'estimated_total') as total_amount,
+              (select coalesce(s.step_label, s.approver_role)
+                 from approval_steps s
+                where s.form_type = ${m.formType}
+                  and s.form_id = f.id
+                  and s.step_order = f.current_step_order
+                limit 1) as step_label,
+              (select s.comment
+                 from approval_steps s
+                where s.form_type = ${m.formType}
+                  and s.form_id = f.id
+                  and s.status = 'returned'
+                order by s.acted_at desc nulls last, s.step_order desc
+                limit 1) as return_reason
+            from ${sql.identifier(table)} f
+            left join employees e on e.id = f.applicant_employee_id
+            left join departments d on d.id = f.department_id
+            where f.id = ${m.formId}
+            limit 1
+          `);
+          const meta = metaRows[0];
+          if (meta) {
+            if (meta.form_label) resolvedFormLabel = meta.form_label;
+            if (meta.applicant_name) applicantName = meta.applicant_name;
+            if (meta.dept_name) {
+              departmentName = meta.dept_code ? `${meta.dept_name} (${meta.dept_code})` : meta.dept_name;
+            }
+            if (meta.step_label) stepLabel = meta.step_label;
+            if (meta.return_reason) reasonText = meta.return_reason;
+            if (meta.total_amount !== null && meta.total_amount !== undefined) {
+              const num = Number(meta.total_amount);
+              if (Number.isFinite(num) && num > 0) {
+                amountText = `NT$ ${Math.round(num).toLocaleString('en-US')}`;
+              }
+            }
+          }
+        } catch {
+          // Best-effort metadata lookup; fall back to defaults if table/row is unavailable in unit tests
+        }
+
+        try {
+          const docSummary = await loadEmailApprovalDocumentSummary(
+            m.formType as FormType,
+            m.formId,
+            appOrigin
+          );
+          if (docSummary) {
+            resolvedFormLabel = docSummary.formLabel || resolvedFormLabel;
+            applicantName = docSummary.applicantName || applicantName;
+            departmentName = docSummary.departmentName || departmentName;
+            stepLabel = docSummary.currentStepLabel || stepLabel;
+            if (docSummary.totalAmountText) amountText = docSummary.totalAmountText;
+            actionUrl = docSummary.detailUrl;
+
+            const rendered = renderEmailDocumentAndActions(docSummary, {
+              appOrigin,
+              recipientEmployeeId: m.recipientEmployeeId,
+              includeApprovalActions: m.type === 'approval_requested',
+            });
+            documentDetailsHtml = rendered.documentDetailsHtml;
+            documentDetailsText = rendered.documentDetailsText;
+            approvalActionsHtml = rendered.approvalActionsHtml;
+            approvalActionsText = rendered.approvalActionsText;
+          }
+        } catch {
+          // Best-effort rich detail rendering; fall back if DB schema is mocked in unit tests
+        }
+      }
+
+      if (!reasonText && m.type === 'request_returned') {
+        const idx = m.text.indexOf('：');
+        reasonText = idx >= 0 ? m.text.slice(idx + 1).trim() : m.text;
+      }
+
+      const templateId = m.type
+        ? resolveTemplateIdForNotification({
+            type: m.type,
+            formType: m.formType,
+            caseNumber: m.caseNumber,
+            message: m.text,
+          })
+        : undefined;
+      await sendEmail({
+        to,
+        subject: m.subject,
+        text: m.text,
+        templateId,
+        templateVars: m.caseNumber
+          ? {
+              recipientName: nameOf.get(m.recipientEmployeeId) ?? to.split('@')[0],
+              recipientEmail: to,
+              applicantName,
+              departmentName,
+              caseNumber: m.caseNumber,
+              formLabel: resolvedFormLabel,
+              stepLabel,
+              amount: amountText ?? '依單據明細',
+              reason: reasonText ?? '請參閱系統簽核紀錄',
+              actionUrl,
+              message: m.text,
+              documentDetailsHtml,
+              documentDetailsText,
+              approvalActionsHtml,
+              approvalActionsText,
+            }
+          : undefined,
+      });
     } catch {
       // In-app notifications are the source of truth; e-mail is best effort (at-least-once not guaranteed).
     }
@@ -345,6 +517,10 @@ export async function notify(
       recipientEmployeeId: input.recipientEmployeeId,
       subject: `${SUBJECT_PREFIX[input.type]}${input.caseNumber}`,
       text: input.message,
+      type: input.type,
+      formType: input.formType,
+      formId: input.formId,
+      caseNumber: input.caseNumber,
     });
   }
 }

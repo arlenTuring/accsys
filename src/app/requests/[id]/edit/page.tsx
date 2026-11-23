@@ -17,13 +17,17 @@ export default async function EditRequestPage({ params }: { params: Promise<{ id
 
   const { data } = await supabase
     .from('budget_codes')
-    .select('id, code, category, departments(name), owner:employees!owner_employee_id(id, name)')
+    .select('id, code, category, departments(name), projects(name), owner:employees!owner_employee_id(id, name)')
+    .eq('active', true)
     .order('code');
   const budgetCodes: BudgetCodeOption[] = (data ?? []).map((b) => ({
     id: b.id,
     code: b.code,
     category: b.category,
-    departmentName: (b.departments as unknown as { name: string } | null)?.name ?? '',
+    departmentName:
+      (b.departments as unknown as { name: string } | null)?.name ??
+      (b.projects as unknown as { name: string } | null)?.name ??
+      '',
     ownerId: (b.owner as unknown as { id: string } | null)?.id ?? '',
     ownerName: (b.owner as unknown as { name: string } | null)?.name ?? '（未指定）',
   }));
@@ -42,7 +46,9 @@ export default async function EditRequestPage({ params }: { params: Promise<{ id
           itemCategory: i.itemCategory,
           description: i.description,
           quantity: String(i.quantity),
-          estimatedAmount: String(i.estimatedAmount),
+          estimatedAmount: String(
+            i.quantity > 0 ? Math.round((i.estimatedAmount / i.quantity) * 100) / 100 : i.estimatedAmount
+          ),
         }))}
       />
     </main>

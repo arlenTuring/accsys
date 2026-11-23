@@ -289,6 +289,22 @@ describe('budget-codes actions', () => {
       .eq('code', code)
       .single();
     expect(row).toEqual({ category: '租金支出', annual_budget_amount: '2000.00' });
+
+    const duplicateCreate = await upsertBudgetCode({
+      code,
+      departmentCode,
+      projectCode: null,
+      category: '旅費',
+      fiscalYear: '115',
+      annualBudgetAmount: NaN,
+      ownerEmployeeCode: null,
+      mode: 'create',
+    });
+    expect(duplicateCreate.ok).toBe(false);
+    if (!duplicateCreate.ok) {
+      expect(duplicateCreate.error).toContain('已存在');
+      expect(duplicateCreate.error).toContain('唯一值');
+    }
   });
 
   it('rejects delete from a non-finance employee', async () => {
@@ -399,9 +415,10 @@ describe('budget-codes actions', () => {
     const result = await importBudgetCodesFromExcel(formData);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.summary.successCount).toBe(2);
-    expect(result.summary.errors).toHaveLength(1);
+    expect(result.summary.successCount).toBe(1);
+    expect(result.summary.errors).toHaveLength(2);
     expect(result.summary.errors[0].reason).toBe('部門代碼「NOPE-DEPT」查無此部門');
+    expect(result.summary.errors[1].reason).toContain('不可為負數');
 
     const { data: createdRow } = await admin
       .from('budget_codes')
@@ -412,11 +429,10 @@ describe('budget-codes actions', () => {
 
     const { data: negRow } = await admin
       .from('budget_codes')
-      .select('id, annual_budget_amount')
+      .select('id')
       .eq('code', negativeCode)
-      .single();
-    createdBudgetCodeIds.push(negRow!.id);
-    expect(Number(negRow!.annual_budget_amount)).toBe(8000);
+      .maybeSingle();
+    expect(negRow).toBeNull();
   });
 
   it('rejects import from a non-finance employee', async () => {

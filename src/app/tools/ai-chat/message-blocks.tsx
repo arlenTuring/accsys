@@ -18,6 +18,7 @@ import {
 import type { OpenResourceEvent } from '@/lib/ai-chat/open-resource';
 import { ActionSpinner, useSubmissionAction } from './submission-actions';
 import { SafeMarkdown } from './safe-markdown';
+import { useI18n } from '@/lib/i18n/context';
 
 type Props = {
   blocks: AiMessageBlock[];
@@ -85,6 +86,7 @@ function BlockView({
   onRefresh?: () => void;
   onSendText?: Props['onSendText'];
 }) {
+  const { tr } = useI18n();
   switch (block.kind) {
     case 'text':
       return <SafeMarkdown className="text-base" text={block.text} />;
@@ -110,37 +112,56 @@ function BlockView({
       return <SubmissionCardBlock block={block} onOpenResources={onOpenResources} />;
     case 'draft_reference':
       return (
-        <button
-          type="button"
-          className="w-full rounded-lg border border-td-blue/30 bg-td-blue-light/40 px-3 py-2 text-left text-base"
-          onClick={() =>
-            onDraftOpened?.(block.draftId, {
-              title: block.formName,
-              version: block.version,
-              formKey: block.formKey,
-              status: block.status,
-            })
-          }
-        >
-          <span className="font-semibold text-td-blue-dark">草稿：{block.formName}</span>
-          <span className="mt-0.5 block text-sm text-td-muted">
-            {block.formKey} · v{block.version} · {block.status}
-          </span>
-        </button>
+        <div className="rounded-xl border border-td-border bg-white p-3.5 shadow-2xs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm">
+                <span className="font-semibold text-td-blue-dark">{tr(block.formName)}</span>
+                <span className="font-mono text-xs text-td-muted">
+                  {block.formKey} · v{block.version}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-td-muted">
+                {tr('點擊「詳情」於右側面板檢視或編輯草稿，亦可直接於對話中請 AI 協助撰寫欄位')}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <span className="rounded-full bg-td-blue-light/60 px-2 py-0.5 text-[11px] font-medium text-td-blue-dark">
+                {tr('草稿')}
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  onDraftOpened?.(block.draftId, {
+                    title: tr(block.formName),
+                    version: block.version,
+                    formKey: block.formKey,
+                    status: block.status,
+                  })
+                }
+                className="rounded-lg border border-td-blue bg-white px-2.5 py-1 text-xs font-medium text-td-blue transition hover:bg-td-blue-light/50"
+              >
+                {tr('詳情')}
+              </button>
+            </div>
+          </div>
+        </div>
       );
     case 'action_result':
+      if (
+        block.href ||
+        block.action.startsWith('open_') ||
+        block.id.startsWith('budget_')
+      ) {
+        return null;
+      }
       return (
         <div
-          className={`rounded-lg border px-3 py-2 text-base ${
+          className={`rounded-lg border px-3 py-2 text-sm ${
             block.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-amber-200 bg-amber-50 text-amber-900'
           }`}
         >
           <p>{block.message}</p>
-          {block.href && (
-            <a href={block.href} className="mt-1 inline-block text-sm font-medium underline">
-              查看單據 {block.formNumber}
-            </a>
-          )}
         </div>
       );
     case 'nudge_confirm':
@@ -159,10 +180,10 @@ function BlockView({
     case 'approved_pdf_card':
       return (
         <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-base text-emerald-900">
-          <p className="font-medium">核准 PDF：{block.formNumber}</p>
+          <p className="font-medium">{tr('核准 PDF')}：{block.formNumber}</p>
           <p className="text-sm">{block.fileName}</p>
           <a href={block.previewHref} className="mt-1 inline-block text-sm underline" target="_blank" rel="noreferrer">
-            預覽／下載
+            {tr('預覽／下載')}
           </a>
         </div>
       );
@@ -195,21 +216,41 @@ type CardStep = NonNullable<
   NonNullable<Extract<AiMessageBlock, { kind: 'submission_card' }>['progress']>['steps']
 >[number];
 
-function normalizeWaitingText(raw: string | null | undefined): string | null {
+function normalizeWaitingText(
+  raw: string | null | undefined,
+  locale: 'zh-Hant' | 'en' | 'ja' = 'zh-Hant'
+): string | null {
   if (!raw) return null;
   const s = raw.trim();
   if (!s) return null;
-  if (s === '未滿 1 小時') return '1 小時內';
-  const hourMatch = s.match(/^(\d+)\s*小時$/);
-  if (hourMatch) return `${hourMatch[1]} 小時前`;
-  const dayMatch = s.match(/^(\d+)\s*天$/);
-  if (dayMatch) return `${dayMatch[1]} 天前`;
+  if (s === '未滿 1 小時' || s === '1 小時內') {
+    if (locale === 'en') return '< 1h ago';
+    if (locale === 'ja') return '1時間以内';
+    return '1 小時內';
+  }
+  const hourMatch = s.match(/^(\d+)\s*小時(?:前)?$/);
+  if (hourMatch) {
+    if (locale === 'en') return `${hourMatch[1]}h ago`;
+    if (locale === 'ja') return `${hourMatch[1]}時間前`;
+    return `${hourMatch[1]} 小時前`;
+  }
+  const dayMatch = s.match(/^(\d+)\s*天(?:前)?$/);
+  if (dayMatch) {
+    if (locale === 'en') return `${dayMatch[1]}d ago`;
+    if (locale === 'ja') return `${dayMatch[1]}日前`;
+    return `${dayMatch[1]} 天前`;
+  }
+  const monthDayMatch = s.match(/^(\d{1,2})月(\d{1,2})日$/);
+  if (monthDayMatch && locale === 'en') {
+    return `${monthDayMatch[1]}/${monthDayMatch[2]}`;
+  }
   return s;
 }
 
 function ApprovalStepper({ steps }: { steps: CardStep[] }) {
+  const { tr } = useI18n();
   return (
-    <ol className="flex w-full items-start gap-0 overflow-x-auto" aria-label="簽核關卡">
+    <ol className="flex w-full items-start gap-0 overflow-x-auto" aria-label={tr('簽核關卡')}>
       {steps.map((step, i) => {
         const next = steps[i + 1];
         const lineDone =
@@ -219,12 +260,13 @@ function ApprovalStepper({ steps }: { steps: CardStep[] }) {
         const lineReturnedRight = next?.state === 'returned';
         const stateText =
           step.state === 'done'
-            ? '已簽'
+            ? tr('已簽')
             : step.state === 'current'
-              ? '簽核中'
+              ? tr('簽核中')
               : step.state === 'returned'
-                ? '已退回'
-                : '待簽';
+                ? tr('已退回')
+                : tr('待簽');
+        const localizedStepLabel = tr(step.label);
         return (
           <li key={step.key} className="flex min-w-[4.25rem] flex-1 flex-col items-center text-center">
             <span
@@ -255,7 +297,7 @@ function ApprovalStepper({ steps }: { steps: CardStep[] }) {
                         ? 'border-amber-500 bg-amber-500 text-white'
                         : 'border-slate-300 bg-white text-slate-400'
                 }`}
-                title={`${step.label}（${stateText}）`}
+                title={`${localizedStepLabel}（${stateText}）`}
               >
                 {step.state === 'done' ? (
                   <svg viewBox="0 0 16 16" className="h-2.5 w-2.5" aria-hidden>
@@ -274,7 +316,7 @@ function ApprovalStepper({ steps }: { steps: CardStep[] }) {
                 ) : step.state === 'current' ? (
                   <span className="h-1.5 w-1.5 rounded-full bg-td-blue" aria-hidden />
                 ) : (
-                  <span className="sr-only">待簽</span>
+                  <span className="sr-only">{tr('待簽')}</span>
                 )}
               </span>
               <div
@@ -294,9 +336,9 @@ function ApprovalStepper({ steps }: { steps: CardStep[] }) {
                         : 'text-td-muted'
                 }`}
               >
-                {step.name || '未指定'}
+                {step.name || tr('未指定')}
               </span>
-              <span className="truncate text-[10px] text-td-muted">{step.label}</span>
+              <span className="truncate text-[10px] text-td-muted">{localizedStepLabel}</span>
             </div>
           </li>
         );
@@ -312,6 +354,7 @@ function SubmissionCardBlock({
   block: Extract<AiMessageBlock, { kind: 'submission_card' }>;
   onOpenResources?: Props['onOpenResources'];
 }) {
+  const { locale, tr } = useI18n();
   const action = useSubmissionAction(block.formId);
   const [returnOpen, setReturnOpen] = useState(false);
   const [returnReason, setReturnReason] = useState('');
@@ -323,7 +366,13 @@ function SubmissionCardBlock({
     if (block.progress && block.progress.total > 0 && hasSteps) return;
     if (block.status !== 'pending_approval' && block.status !== 'approved' && block.status !== 'returned') return;
     let cancelled = false;
-    void getSubmissionProgressAction(block.formType === 'custom' || block.formKey ? 'custom' : block.formType, block.formId).then(
+    const progressFormType =
+      block.formType === 'inventory_handover'
+        ? 'inventory_handover'
+        : block.formType === 'custom' || block.formKey
+          ? 'custom'
+          : block.formType;
+    void getSubmissionProgressAction(progressFormType, block.formId).then(
       (res) => {
         if (cancelled || !res.ok) return;
         setLiveProgress(res.progress);
@@ -335,15 +384,15 @@ function SubmissionCardBlock({
   }, [block.formId, block.formType, block.formKey, block.progress, block.status]);
 
   const openPanel = () => {
-    if (block.formType === 'custom' || block.formKey) {
-      onOpenResources?.([
+    if (onOpenResources) {
+      onOpenResources([
         {
           type: 'open_resource',
           resourceType: 'form_submission',
           resourceId: block.formId,
-          title: `${block.formName} ${block.formNumber}`,
+          title: `${tr(block.formName)} ${block.formNumber}`,
           operation: 'opened',
-          formKey: block.formKey,
+          formKey: block.formKey || block.formType,
           status: block.status,
         },
       ]);
@@ -354,31 +403,31 @@ function SubmissionCardBlock({
 
   const badge =
     action.phase === 'approved'
-      ? { text: '已簽核', className: 'bg-emerald-100 text-emerald-800' }
+      ? { text: tr('已簽核'), className: 'bg-emerald-100 text-emerald-800' }
       : action.phase === 'returned'
-        ? { text: '已退回', className: 'bg-amber-100 text-amber-900' }
+        ? { text: tr('已退回'), className: 'bg-amber-100 text-amber-900' }
         : action.phase === 'approving'
-          ? { text: '簽核中…', className: 'bg-td-blue-light text-td-blue-dark' }
+          ? { text: tr('簽核中…'), className: 'bg-td-blue-light text-td-blue-dark' }
           : action.phase === 'returning'
-            ? { text: '退回中…', className: 'bg-amber-50 text-amber-900' }
+            ? { text: tr('退回中…'), className: 'bg-amber-50 text-amber-900' }
             : block.mode === 'approve'
-              ? { text: '待您簽核', className: 'bg-slate-100 text-td-muted' }
+              ? { text: tr('待您簽核'), className: 'bg-slate-100 text-td-muted' }
               : block.status === 'pending_approval'
-                ? { text: '簽核中', className: 'bg-blue-50 text-td-blue-dark' }
+                ? { text: tr('簽核中'), className: 'bg-blue-50 text-td-blue-dark' }
                 : block.status === 'approved'
-                  ? { text: '已核准', className: 'bg-emerald-100 text-emerald-800' }
+                  ? { text: tr('已核准'), className: 'bg-emerald-100 text-emerald-800' }
                   : block.status === 'returned'
-                    ? { text: '已退回', className: 'bg-amber-100 text-amber-900' }
+                    ? { text: tr('已退回'), className: 'bg-amber-100 text-amber-900' }
                     : block.status === 'withdrawn'
-                      ? { text: '已撤回', className: 'bg-slate-100 text-slate-600' }
+                      ? { text: tr('已撤回'), className: 'bg-slate-100 text-slate-600' }
                       : block.status === 'draft'
-                        ? { text: '草稿', className: 'bg-slate-100 text-slate-600' }
-                        : { text: block.status, className: 'bg-slate-100 text-td-muted' };
+                        ? { text: tr('草稿'), className: 'bg-slate-100 text-slate-600' }
+                        : { text: tr(block.status), className: 'bg-slate-100 text-td-muted' };
 
   const canAct = block.canApprove && action.phase !== 'approved' && action.phase !== 'returned';
 
   const waitingLine = block.lines.find((l) => l.label === '已等待')?.value;
-  const waitingText = normalizeWaitingText(waitingLine);
+  const waitingText = normalizeWaitingText(waitingLine, locale);
   const applicantText =
     block.applicantName || block.lines.find((l) => l.label === '申請人')?.value || null;
   const amountLine = block.lines.find((l) => l.label === '金額')?.value || null;
@@ -409,11 +458,11 @@ function SubmissionCardBlock({
       {/* Compact Header Row: Title + Case# + Applicant on Left | Status Badge + Waiting Time on Right */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <span className="text-sm font-semibold text-td-blue-dark">{block.formName}</span>
+          <span className="text-sm font-semibold text-td-blue-dark">{tr(block.formName)}</span>
           <span className="mono-case text-xs text-td-muted">{block.formNumber}</span>
           {applicantText && (
             <span className="text-xs text-td-muted">
-              申請人 <span className="font-medium text-td-blue-dark">{applicantText}</span>
+              {tr('申請人')} <span className="font-medium text-td-blue-dark">{applicantText}</span>
             </span>
           )}
           {showHeaderAmount && (
@@ -436,7 +485,7 @@ function SubmissionCardBlock({
         <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
           {extraLines.map((line) => (
             <span key={`${line.label}:${line.value}`} className="text-td-muted">
-              {line.label} <span className="text-td-blue-dark">{line.value}</span>
+              {tr(line.label)} <span className="text-td-blue-dark">{tr(line.value)}</span>
             </span>
           ))}
         </div>
@@ -445,22 +494,30 @@ function SubmissionCardBlock({
       {/* Compact Approval Progress + Inline Action Buttons */}
       <div className="mt-2 flex flex-wrap items-end justify-between gap-2 border-t border-slate-100 pt-1.5">
         {liveProgress && liveProgress.total > 0 ? (
-          <div className="min-w-[14rem] flex-1 space-y-1" aria-label="簽核進度">
+          <div className="min-w-[14rem] flex-1 space-y-1" aria-label={tr('簽核進度')}>
             <div className="flex items-center justify-between gap-2 text-[11px]">
               <span className="font-medium text-td-blue-dark">
-                簽核進度 {liveProgress.done}/{liveProgress.total}
+                {locale === 'en'
+                  ? `Approval Progress ${liveProgress.done}/${liveProgress.total}`
+                  : locale === 'ja'
+                    ? `承認進捗 ${liveProgress.done}/${liveProgress.total}`
+                    : `簽核進度 ${liveProgress.done}/${liveProgress.total}`}
               </span>
               <span className="text-td-muted">
                 {block.status === 'returned' ||
                 action.phase === 'returned' ||
                 liveProgress.steps?.some((s) => s.state === 'returned') ? (
-                  <span className="font-medium text-amber-700">已退回</span>
+                  <span className="font-medium text-amber-700">{tr('已退回')}</span>
                 ) : liveProgress.remaining > 0 ? (
-                  `還差 ${liveProgress.remaining} 關`
+                  locale === 'en'
+                    ? `${liveProgress.remaining} step(s) left`
+                    : locale === 'ja'
+                      ? `残り ${liveProgress.remaining} 段階`
+                      : `還差 ${liveProgress.remaining} 關`
                 ) : block.status === 'approved' || liveProgress.percent >= 100 ? (
-                  '已全部簽完'
+                  tr('已全部簽完')
                 ) : (
-                  '進行中'
+                  tr('進行中')
                 )}
               </span>
             </div>
@@ -489,9 +546,11 @@ function SubmissionCardBlock({
                 {(liveProgress.currentLabel ||
                   (liveProgress.waitingNames && liveProgress.waitingNames.length > 0)) && (
                   <p className="text-[11px] text-td-muted">
-                    {liveProgress.currentLabel ? `目前：${liveProgress.currentLabel}` : null}
+                    {liveProgress.currentLabel
+                      ? `${locale === 'en' ? 'Current: ' : locale === 'ja' ? '現在：' : '目前：'}${tr(liveProgress.currentLabel)}`
+                      : null}
                     {liveProgress.waitingNames && liveProgress.waitingNames.length > 0
-                      ? `${liveProgress.currentLabel ? ' · ' : ''}待簽：${liveProgress.waitingNames.join('、')}`
+                      ? `${liveProgress.currentLabel ? ' · ' : ''}${tr('待簽')}：${liveProgress.waitingNames.join(locale === 'en' ? ', ' : '、')}`
                       : null}
                   </p>
                 )}
@@ -511,7 +570,7 @@ function SubmissionCardBlock({
             className="rounded-lg border border-td-blue bg-white px-2.5 py-1 text-xs font-medium text-td-blue transition hover:bg-td-blue-light/50"
             onClick={openPanel}
           >
-            詳情
+            {tr('詳情')}
           </button>
           {block.canApprove && action.phase === 'approved' && (
             <button
@@ -520,7 +579,7 @@ function SubmissionCardBlock({
               className="btn-quick-approve inline-flex cursor-default items-center gap-1 rounded-lg bg-status-approved px-2.5 py-1 text-xs font-medium text-white"
               disabled
             >
-              ✓ 已簽核
+              {tr('✓ 已簽核')}
             </button>
           )}
           {block.canApprove && action.phase === 'returned' && (
@@ -529,7 +588,7 @@ function SubmissionCardBlock({
               className="inline-flex cursor-default items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-900"
               disabled
             >
-              已退回
+              {tr('已退回')}
             </button>
           )}
           {canAct && !returnOpen && (
@@ -547,10 +606,10 @@ function SubmissionCardBlock({
                 {action.phase === 'approving' ? (
                   <>
                     <ActionSpinner />
-                    簽核中…
+                    {tr('簽核中…')}
                   </>
                 ) : (
-                  '✓ 快速簽核'
+                  tr('✓ 快速簽核')
                 )}
               </button>
               <button
@@ -559,7 +618,7 @@ function SubmissionCardBlock({
                 disabled={action.busy}
                 onClick={() => setReturnOpen(true)}
               >
-                退回
+                {tr('退回')}
               </button>
             </>
           )}
@@ -570,13 +629,13 @@ function SubmissionCardBlock({
       {canAct && returnOpen && (
         <div className="mt-2 space-y-1.5 rounded-lg border border-amber-200 bg-amber-50/80 p-2">
           <label className="block text-xs text-amber-950">
-            退回原因
+            {tr('退回原因')}
             <textarea
               className="mt-1 w-full resize-y rounded-md border border-td-border bg-white px-2.5 py-1.5 text-xs text-td-blue-dark"
               rows={2}
               value={returnReason}
               disabled={action.busy}
-              placeholder="非必填"
+              placeholder={tr('非必填')}
               onChange={(e) => setReturnReason(e.target.value)}
             />
           </label>
@@ -593,10 +652,10 @@ function SubmissionCardBlock({
               {action.phase === 'returning' ? (
                 <>
                   <ActionSpinner tone="danger" />
-                  退回中…
+                  {tr('退回中…')}
                 </>
               ) : (
-                '確認退回'
+                tr('確認退回')
               )}
             </button>
             <button
@@ -608,7 +667,7 @@ function SubmissionCardBlock({
                 setReturnReason('');
               }}
             >
-              取消
+              {tr('取消')}
             </button>
           </div>
         </div>
@@ -634,18 +693,30 @@ function ChoiceBlock({
   onRefresh?: () => void;
   onSendText?: Props['onSendText'];
 }) {
+  const { locale, tr } = useI18n();
   const [pending, start] = useTransition();
   const [done, setDone] = useState(block.status !== 'open');
   const [error, setError] = useState<string | null>(null);
 
   if (done || block.status !== 'open') {
+    const selectedLabel = tr(
+      block.options.find((o) => o.id === block.selectedOptionId)?.label ?? block.selectedOptionId ?? ''
+    );
     return (
       <div className="rounded-lg border border-td-border bg-slate-50 px-3 py-2 text-base text-td-muted">
-        {block.prompt}
+        {tr(block.prompt)}
         <p className="mt-1 text-sm">
           {block.selectedOptionId
-            ? `已選擇：${block.options.find((o) => o.id === block.selectedOptionId)?.label ?? block.selectedOptionId}`
-            : '選項已失效或已回答'}
+            ? locale === 'en'
+              ? `Selected: ${selectedLabel}`
+              : locale === 'ja'
+                ? `選択済み：${selectedLabel}`
+                : `已選擇：${selectedLabel}`
+            : locale === 'en'
+              ? 'Option expired or already answered'
+              : locale === 'ja'
+                ? '選択肢は無効または回答済みです'
+                : '選項已失效或已回答'}
         </p>
       </div>
     );
@@ -653,7 +724,7 @@ function ChoiceBlock({
 
   return (
     <div className="rounded-lg border border-td-border bg-white px-3 py-3">
-      <p className="text-base font-medium text-td-blue-dark">{block.prompt}</p>
+      <p className="text-base font-medium text-td-blue-dark">{tr(block.prompt)}</p>
       <div className="mt-2 flex flex-wrap gap-2">
         {block.options.map((o) => (
           <button
@@ -670,7 +741,7 @@ function ChoiceBlock({
                   blockId: block.id,
                   optionId: o.id,
                   optionValue: o.value,
-                  optionLabel: o.label,
+                  optionLabel: tr(o.label),
                 });
                 if (!res.ok) {
                   setError(res.error);
@@ -686,7 +757,7 @@ function ChoiceBlock({
             }}
           >
             {pending ? <ActionSpinner tone="muted" /> : null}
-            {o.label}
+            {tr(o.label)}
           </button>
         ))}
       </div>

@@ -79,6 +79,14 @@ export async function revokeDelegationAction(id: string) {
   return done(await org.revokeDelegation(await me(), id));
 }
 
+export async function createFilingAgentAction(input: unknown) {
+  return done(await org.createFilingAgent(await me(), input));
+}
+
+export async function deleteFilingAgentAction(id: string) {
+  return done(await org.deleteFilingAgent(await me(), id));
+}
+
 export async function simulateFormAction(input: unknown) {
   return simulateForm(await me(), input);
 }

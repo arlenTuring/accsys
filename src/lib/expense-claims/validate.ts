@@ -16,6 +16,7 @@ import { convertToTwdCents, isIsoDate, parseRateMicros, rateOutOfBounds } from '
 export type ExpenseClaimItemInput = {
   category: string;
   description: string;
+  quantity?: string | number;
   currency: string;
   exchangeRate: string;
   amount: string;
@@ -35,6 +36,7 @@ export type ExpenseClaimInput = {
 export type NormalizedExpenseClaimItem = {
   category: string;
   description: string;
+  quantity: number;
   currency: TravelCurrency;
   exchangeRate: string;
   amount: Cents;
@@ -76,7 +78,10 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[], message:
 }
 
 /** NT$ for one row, or null while the row is incomplete (used for the live 小計). */
-export function rowTwdCents(row: Pick<ExpenseClaimItemInput, 'currency' | 'exchangeRate' | 'amount'>): Cents | null {
+export function rowTwdCents(row: Pick<ExpenseClaimItemInput, 'quantity' | 'currency' | 'exchangeRate' | 'amount'>): Cents | null {
+  const rawQty = row.quantity === undefined || row.quantity === null || String(row.quantity).trim() === '' ? '1' : String(row.quantity).trim();
+  const qty = Number(rawQty);
+  if (!Number.isInteger(qty) || qty < 1) return null;
   let amount: Cents;
   try {
     amount = toCents(typeof row.amount === 'string' ? row.amount.trim() : row.amount);
@@ -87,7 +92,8 @@ export function rowTwdCents(row: Pick<ExpenseClaimItemInput, 'currency' | 'excha
   const rate = parseRateMicros(row.currency === 'TWD' ? '1' : row.exchangeRate);
   if (rate === null) return null;
   try {
-    return convertToTwdCents(amount, rate);
+    const unitTwd = convertToTwdCents(amount, rate);
+    return (unitTwd * qty) as Cents;
   } catch {
     return null;
   }
@@ -99,6 +105,10 @@ function item(edition: ExpenseEdition, raw: ExpenseClaimItemInput, n: number): N
   if (!raw || typeof raw !== 'object') invalid(`${at}格式不正確`);
   if (!categories.includes(raw.category)) invalid(`${at}的項目不正確`);
   if (!CURRENCY_CODES.has(raw.currency)) invalid(`${at}的幣別不正確`);
+
+  const rawQty = raw.quantity === undefined || raw.quantity === null || String(raw.quantity).trim() === '' ? '1' : String(raw.quantity).trim();
+  const quantity = Number(rawQty);
+  if (!Number.isInteger(quantity) || quantity < 1) invalid(`${at}的數量必須為大於 0 的整數`);
 
   let amount: Cents;
   try {
@@ -115,7 +125,8 @@ function item(edition: ExpenseEdition, raw: ExpenseClaimItemInput, n: number): N
   if (outOfBounds) invalid(`${at}的${outOfBounds}`);
   let twdAmount: Cents;
   try {
-    twdAmount = convertToTwdCents(amount, rate!);
+    const unitTwd = convertToTwdCents(amount, rate!);
+    twdAmount = (unitTwd * quantity) as Cents;
   } catch {
     return invalid(`${at}換算後金額超出上限`);
   }
@@ -128,6 +139,7 @@ function item(edition: ExpenseEdition, raw: ExpenseClaimItemInput, n: number): N
   return {
     category: raw.category,
     description: text(raw.description, `${at}的內容或說明`, 500),
+    quantity,
     currency: raw.currency as TravelCurrency,
     exchangeRate: rateText,
     amount,

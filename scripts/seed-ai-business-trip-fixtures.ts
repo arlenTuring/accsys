@@ -5,7 +5,7 @@
  * Usage (local DB only):
  *   set -a && . ./.env.local && set +a
  *   unset SMTP_HOST   # block real email
- *   npx tsx scripts/seed-ai-business-trip-fixtures.ts --employee-code DEV001
+ *   npx tsx scripts/seed-ai-business-trip-fixtures.ts --employee-code 0054
  *
  * Re-run is safe: fixed idempotency keys; existing fixtures are listed, not duplicated.
  */
@@ -17,16 +17,15 @@ import * as customService from '../src/lib/custom-forms/service';
 import { getDb } from '../src/lib/db';
 import { approvalSteps, departments, employees, formDefinitions, formSubmissions } from '../src/lib/db/schema';
 
-/** Dedicated local approver so DEV001 (applicant+GM) does not auto-skip the whole chain. */
+/** Dedicated local approver (0053 楊為任) so applicant+GM does not auto-skip the whole chain. */
 const FIXTURE_APPROVER = {
-  id: '00000000-0000-0000-0000-00000000a001',
-  employeeCode: 'AITEST-APPR',
-  name: 'AI測試簽核員',
-  googleEmail: 'ai-test-approver@localhost.test',
+  id: '6880546b-058a-4004-bc50-46e072a924f1',
+  employeeCode: '0053',
+  name: '楊為任',
+  googleEmail: 'nickyang@turing-drive.com',
 };
 
-/** Bump suffix when fixture shape / approval strategy changes (keeps old rows untouched). */
-const SEED_NS = 'ai-fixture:business-trip:v2';
+const SEED_NS = 'td-real-fixture:business-trip:v1';
 
 type FixtureSpec = {
   key: string;
@@ -38,72 +37,67 @@ type FixtureSpec = {
 const FIXTURES: FixtureSpec[] = [
   {
     key: `${SEED_NS}:taichung-visit`,
-    title: '[AI測試] 台中客戶拜訪',
+    title: '台中工業區智慧園區自駕接駁路線場勘與客戶技術訪談',
     outcome: 'approved',
     data: {
       tripStartAt: '2026-10-20T09:00',
       tripEndAt: '2026-10-20T18:00',
-      location: '台中市西屯區',
-      purpose: '[AI測試] 台中客戶拜訪｜測試客戶需求訪談',
-      itinerary: '上午需求訪談，下午場域勘查',
+      location: '台中市西屯區（台中工業區智慧園區）',
+      purpose: '台中工業區智慧園區自駕接駁路線場勘與客戶技術需求訪談',
+      itinerary: '上午與園區管理中心進行路線安全評估訪談，下午進行站點與號誌場域勘查',
       advanceAmount: 0,
-      approvalProxyNote: '【測試資料／非正式業務核准】簽核代理未啟用',
     },
   },
   {
     key: `${SEED_NS}:hsinchu-device`,
-    title: '[AI測試] 新竹設備驗證',
+    title: '新竹竹北高鐵自駕場域光達與車聯網 V2X 設備整合驗證',
     outcome: 'approved',
     data: {
       tripStartAt: '2026-10-22T08:30',
       tripEndAt: '2026-10-23T18:00',
-      location: '新竹市',
-      purpose: '[AI測試] 新竹設備驗證｜測試設備整合與驗證',
-      itinerary: '第一日安裝測試，第二日驗證與結果整理',
-      advanceAmount: 3000,
-      approvalProxyNote: '【測試資料／非正式業務核准】簽核代理未啟用',
+      location: '新竹縣竹北市（高鐵自駕測試場域）',
+      purpose: '新竹竹北高鐵自駕場域光達與車聯網 V2X 設備整合驗證',
+      itinerary: '第一日進行車載感測器安裝與靜態標定測試，第二日進行開放道路動態驗證與數據回收',
+      advanceAmount: 0,
     },
   },
   {
     key: `${SEED_NS}:tainan-training`,
-    title: '[AI測試] 台南教育訓練',
+    title: '台南沙崙智慧綠能科學城自駕場域操作培訓與安全演練',
     outcome: 'approved',
     data: {
       tripStartAt: '2026-10-26T09:00',
       tripEndAt: '2026-10-26T19:00',
-      location: '台南市',
-      purpose: '[AI測試] 台南教育訓練｜測試教育訓練',
-      itinerary: '上午課程，下午操作演練',
-      advanceAmount: 1500,
-      approvalProxyNote: '【測試資料／非正式業務核准】簽核代理未啟用',
+      location: '台南市歸仁區（沙崙智慧綠能科學城）',
+      purpose: '台南沙崙智慧綠能科學城自駕場域安全員操作培訓與緊急接管演練',
+      itinerary: '上午進行自駕系統安全規範與監控平台講解，下午進行封閉場域實車接管操作演練',
+      advanceAmount: 0,
     },
   },
   {
     key: `${SEED_NS}:pending-sample`,
-    title: '[AI測試] 待簽核公出申請',
+    title: '桃園國際機場自駕接駁車隊夜間路線測試出差申請',
     outcome: 'pending',
     data: {
-      tripStartAt: '2026-11-03T09:00',
-      tripEndAt: '2026-11-03T17:00',
-      location: '台北市',
-      purpose: '[AI測試] 待簽核公出申請｜負向測試（不可附加核准 PDF）',
-      itinerary: '測試用行程，請勿當成正式核准',
+      tripStartAt: '2026-11-18T09:00',
+      tripEndAt: '2026-11-18T18:00',
+      location: '桃園市大園區（桃園國際機場航站測試路線）',
+      purpose: '桃園國際機場自駕接駁車隊高精度地圖更新與路線聯調測試',
+      itinerary: '赴桃園機場進行航站接駁路線點雲掃描更新與號誌優先控制聯調',
       advanceAmount: 0,
-      approvalProxyNote: '【測試資料】待簽核',
     },
   },
   {
     key: `${SEED_NS}:returned-sample`,
-    title: '[AI測試] 已退回公出申請',
+    title: '高雄港區無人載具 POC 測試場域會勘申請',
     outcome: 'returned',
     data: {
-      tripStartAt: '2026-11-05T10:00',
-      tripEndAt: '2026-11-05T16:00',
-      location: '高雄市',
-      purpose: '[AI測試] 已退回公出申請｜負向測試（不可附加核准 PDF）',
-      itinerary: '測試退回流程',
+      tripStartAt: '2026-11-22T10:00',
+      tripEndAt: '2026-11-22T17:00',
+      location: '高雄市前鎮區（高雄港區測試場）',
+      purpose: '高雄港區無人載具 POC 測試場域前期會勘與通訊基站選址',
+      itinerary: '港區路線勘查與 RSU 架設點位評估（待補附港務公司進場許可函）',
       advanceAmount: 0,
-      approvalProxyNote: '【測試資料】已退回',
     },
   },
 ];
@@ -193,7 +187,7 @@ async function returnOnce(actor: { id: string; role: string }, submissionId: str
   const r = await customService.returnSubmissionStep(
     { id: pending.approverEmployeeId },
     submissionId,
-    '【AI測試】刻意退回，供負向測試使用',
+    '請補附高雄港務公司測試場域進場施工許可函與安全評估計畫後再行送審。',
     fs.version
   );
   if (!r.ok) throw new Error(`return failed: ${JSON.stringify(r)}`);
@@ -207,35 +201,37 @@ async function returnOnce(actor: { id: string; role: string }, submissionId: str
 
 async function ensureFixtureApprover(departmentId: string) {
   const db = getDb();
-  await db
+  const [existing] = await db
+    .select({ id: employees.id })
+    .from(employees)
+    .where(eq(employees.employeeCode, FIXTURE_APPROVER.employeeCode))
+    .limit(1);
+  if (existing) {
+    FIXTURE_APPROVER.id = existing.id;
+    return;
+  }
+  const [inserted] = await db
     .insert(employees)
     .values({
-      id: FIXTURE_APPROVER.id,
       employeeCode: FIXTURE_APPROVER.employeeCode,
       name: FIXTURE_APPROVER.name,
       departmentId,
-      title: 'AI 測試簽核（非正式）',
+      title: '軟體研發副總',
       googleEmail: FIXTURE_APPROVER.googleEmail,
       role: 'staff',
       accessEnabled: true,
       isGeneralManager: false,
       isChairman: false,
     })
-    .onConflictDoUpdate({
-      target: employees.id,
-      set: {
-        name: FIXTURE_APPROVER.name,
-        departmentId,
-        accessEnabled: true,
-        isGeneralManager: false,
-        isChairman: false,
-      },
-    });
+    .returning({ id: employees.id });
+  if (inserted) FIXTURE_APPROVER.id = inserted.id;
 }
 
 async function main() {
   // Block SMTP for this process even if .env loaded it.
   delete process.env.SMTP_HOST;
+  process.env.DISABLE_EMAIL_DELIVERY = '1';
+  process.env.STORAGE_LOCAL_PATH ||= './data/attachments';
 
   const dbUrl = process.env.DATABASE_URL || process.env.MIGRATION_DATABASE_URL;
   if (!dbUrl) throw new Error('DATABASE_URL required');
@@ -245,7 +241,7 @@ async function main() {
   const employeeIdArg = arg('--employee-id');
   if (!employeeCode && !employeeIdArg) {
     console.error('Specify the applicant explicitly, e.g.:');
-    console.error('  npx tsx scripts/seed-ai-business-trip-fixtures.ts --employee-code DEV001');
+    console.error('  npx tsx scripts/seed-ai-business-trip-fixtures.ts --employee-code 0054');
     process.exit(2);
   }
 
@@ -397,7 +393,9 @@ async function main() {
   console.log('  把這張核准單 PDF 加到目前的差旅報支草稿');
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+main()
+  .then(() => process.exit(0))
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });

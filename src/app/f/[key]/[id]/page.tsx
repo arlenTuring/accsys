@@ -3,6 +3,8 @@ import { notFound, redirect } from 'next/navigation';
 import { ApprovalActions } from '@/app/components/approval-actions';
 import { ApprovalTimeline } from '@/app/components/approval-timeline';
 import { AttachmentsPanel } from '@/app/components/attachments-panel';
+import { DetailQueueNav } from '@/app/components/detail-queue-nav';
+import { getDetailQueueNavigation } from '@/lib/applications/my-applications';
 import { loadAttachmentPanelExtras } from '@/lib/attachments/analysis-queries';
 import { STATUS_BADGE, STATUS_LABELS } from '@/app/components/form-labels';
 import { PrintButton } from '@/app/components/print-button';
@@ -11,9 +13,15 @@ import { ASSET_TRANSFER_TYPE_LABELS, type AssetTransferType } from '@/lib/asset-
 import { parseUploadFailed } from '@/lib/attachments/batch';
 import { getAttachments } from '@/lib/attachments/queries';
 import { approveCustomFormStep, returnCustomFormStep, withdrawCustomForm } from '@/lib/custom-forms/actions';
-import { getSubmissionDetail, type SubmissionAssetLine } from '@/lib/custom-forms/queries';
+import { getSubmissionDetail, type CaseChainNode, type SubmissionAssetLine } from '@/lib/custom-forms/queries';
+import {
+  ACCEPTANCE_KEY,
+  PROCUREMENT_PAYMENT_KEY,
+  PURCHASE_ORDER_KEY,
+  PURCHASE_REQUEST_KEY,
+} from '@/lib/custom-forms/migrated/procurement';
 import { allFields, isDisplayOnly } from '@/lib/custom-forms/schema';
-import { fieldText, SubmissionFields } from '../../submission-fields';
+import { amountText, fieldText, SubmissionFields } from '../../submission-fields';
 
 const time = new Intl.DateTimeFormat('zh-TW', {
   timeZone: 'Asia/Taipei',
@@ -71,6 +79,146 @@ function AssetRegisterLines({ lines, appliedAt }: { lines: SubmissionAssetLine[]
   );
 }
 
+const PROCUREMENT_CHAIN_KEYS = new Set([
+  PURCHASE_REQUEST_KEY,
+  PURCHASE_ORDER_KEY,
+  ACCEPTANCE_KEY,
+  PROCUREMENT_PAYMENT_KEY,
+]);
+
+function ProcurementCaseChainPanel({
+  currentId,
+  caseNumber,
+  chain,
+}: {
+  currentId: string;
+  caseNumber: string;
+  chain: CaseChainNode[];
+}) {
+  const activeChain = chain.filter((c) => c.status !== 'withdrawn');
+  const hasPrepaidPo = activeChain.some((c) => c.key === PURCHASE_ORDER_KEY && c.paymentTerms === '預付款');
+  const sumByKey = (k: string) =>
+    activeChain.filter((c) => c.key === k).reduce((sum, c) => sum + (c.totalAmount ?? 0), 0);
+  const countByKey = (k: string) => activeChain.filter((c) => c.key === k).length;
+  const prTotal = sumByKey(PURCHASE_REQUEST_KEY);
+  const poTotal = sumByKey(PURCHASE_ORDER_KEY);
+  const acTotal = sumByKey(ACCEPTANCE_KEY);
+  const ppTotal = sumByKey(PROCUREMENT_PAYMENT_KEY);
+  const byId = new Map(chain.map((c) => [c.id, c]));
+
+  const steps = hasPrepaidPo
+    ? [
+        { key: PURCHASE_REQUEST_KEY, stepNo: '1', title: '1. 請購單', sub: '申請請購單號', count: countByKey(PURCHASE_REQUEST_KEY), sum: prTotal },
+        { key: PURCHASE_ORDER_KEY, stepNo: '2', title: '2. 採購單（需預付）', sub: '合約／報價單 & 客供資料卡', count: countByKey(PURCHASE_ORDER_KEY), sum: poTotal },
+        { key: PROCUREMENT_PAYMENT_KEY, stepNo: '4', title: '4. 費用申請單', sub: '預付款項先行請款', count: countByKey(PROCUREMENT_PAYMENT_KEY), sum: ppTotal },
+        { key: ACCEPTANCE_KEY, stepNo: '3', title: '3. 驗收單', sub: '到貨入庫、貼財編', count: countByKey(ACCEPTANCE_KEY), sum: acTotal },
+      ]
+    : [
+        { key: PURCHASE_REQUEST_KEY, stepNo: '1', title: '1. 請購單', sub: '申請請購單號', count: countByKey(PURCHASE_REQUEST_KEY), sum: prTotal },
+        { key: PURCHASE_ORDER_KEY, stepNo: '2', title: '2. 採購單', sub: '合約／報價單 & 客供資料卡', count: countByKey(PURCHASE_ORDER_KEY), sum: poTotal },
+        { key: ACCEPTANCE_KEY, stepNo: '3', title: '3. 驗收單', sub: '到貨入庫、貼財編', count: countByKey(ACCEPTANCE_KEY), sum: acTotal },
+        { key: PROCUREMENT_PAYMENT_KEY, stepNo: '4', title: '4. 費用申請單', sub: '驗收後申請付款', count: countByKey(PROCUREMENT_PAYMENT_KEY), sum: ppTotal },
+      ];
+
+  return (
+    <section className="card space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="font-semibold text-td-blue-dark">採購流程進度與 1 對多關聯單據追蹤（案號：{caseNumber}）</h2>
+          <p className="mt-0.5 text-xs text-td-muted">
+            {hasPrepaidPo
+              ? '目前案件包含「預付款」採購單，適用預付流程順序：1.請購單 → 2.採購單(預付款) → 4.費用申請單(先請款) → 3.驗收單(入庫、貼財編)'
+              : '適用一般採購流程順序：1.請購單 → 2.採購單 → 3.驗收單(入庫、貼財編) → 4.費用申請單'}
+          </p>
+        </div>
+        <span
+          className={`rounded-full px-3 py-1 text-xs font-semibold ${
+            hasPrepaidPo ? 'bg-amber-100 text-amber-900' : 'bg-blue-50 text-td-blue'
+          }`}
+        >
+          {hasPrepaidPo ? '預付款出貨流程（先請款後驗收）' : '一般非預付流程（先驗收後請款）'}
+        </span>
+      </div>
+
+      <div className="grid gap-2.5 sm:grid-cols-4">
+        {steps.map((st, idx) => (
+          <div
+            key={st.key}
+            className={`rounded-lg border p-3 ${
+              st.count > 0 ? 'border-td-blue/40 bg-blue-50/40' : 'border-td-border bg-slate-50/60'
+            }`}
+          >
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-semibold text-td-blue-dark">{st.title}</span>
+              <span className="rounded bg-white px-1.5 py-0.5 text-[11px] font-medium text-td-muted shadow-sm">
+                已開 {st.count} 張
+              </span>
+            </div>
+            <p className="mt-0.5 text-[11px] text-td-muted">{st.sub}</p>
+            <p className="mt-2 text-sm font-bold tabular-nums text-td-blue-dark">
+              {st.count > 0 ? `NT$ ${amountText(st.sum)}` : '尚未建立'}
+            </p>
+            {idx > 0 && prTotal > 0 && st.count > 0 && (
+              <p className="mt-0.5 text-[11px] text-td-muted">
+                佔請購總額 {Math.round((st.sum / prTotal) * 100)}%
+                {st.sum > prTotal + 0.005 ? '（⚠️ 超過原請購預估）' : `（餘額 NT$ ${amountText(Math.max(0, prTotal - st.sum))}）`}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {chain.length > 1 && (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[40rem] border-collapse text-xs">
+            <thead>
+              <tr className="bg-slate-50 text-td-muted">
+                <th className="border border-td-border px-2.5 py-1.5 text-left font-semibold">單據號碼</th>
+                <th className="border border-td-border px-2.5 py-1.5 text-left font-semibold">單據類型</th>
+                <th className="border border-td-border px-2.5 py-1.5 text-left font-semibold">上層來源單據</th>
+                <th className="border border-td-border px-2.5 py-1.5 text-left font-semibold">付款條件</th>
+                <th className="border border-td-border px-2.5 py-1.5 text-right font-semibold">金額 (NT$)</th>
+                <th className="border border-td-border px-2.5 py-1.5 text-center font-semibold">簽核狀態</th>
+              </tr>
+            </thead>
+            <tbody>
+              {chain.map((node) => {
+                const parent = node.sourceSubmissionId ? byId.get(node.sourceSubmissionId) : undefined;
+                const isCurrent = node.id === currentId;
+                return (
+                  <tr key={node.id} className={isCurrent ? 'bg-blue-50/70 font-semibold' : ''}>
+                    <td className="border border-td-border px-2.5 py-1.5 mono-case">
+                      <Link href={`/f/${node.key}/${node.id}`} className="text-td-blue hover:underline">
+                        {node.formNumber}
+                      </Link>
+                      {isCurrent && <span className="ml-1.5 rounded bg-td-blue px-1.5 py-0.5 text-[10px] text-white">目前檢視</span>}
+                    </td>
+                    <td className="border border-td-border px-2.5 py-1.5 text-td-blue-dark">{node.name}</td>
+                    <td className="border border-td-border px-2.5 py-1.5 text-td-muted">
+                      {parent ? `${parent.formNumber}（${parent.name}）` : '—（起點單據）'}
+                    </td>
+                    <td className="border border-td-border px-2.5 py-1.5 text-td-muted">
+                      {node.paymentTerms ?? '—'}
+                    </td>
+                    <td className="border border-td-border px-2.5 py-1.5 text-right tabular-nums text-td-blue-dark">
+                      {node.totalAmount !== null ? amountText(node.totalAmount) : '—'}
+                    </td>
+                    <td className="border border-td-border px-2.5 py-1.5 text-center">
+                      <span className={STATUS_BADGE[node.status] ?? 'badge-withdrawn'}>
+                        {STATUS_LABELS[node.status] ?? node.status}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function Item({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
@@ -93,26 +241,39 @@ export default async function DesignerFormDetailPage({
   if (!detail) notFound();
   // Notifications and approval lists link to /f/_/<id>.
   if (detail.key !== key) redirect(`/f/${detail.key}/${id}`);
-  const attachments = await getAttachments('custom', id);
+  const [attachments, queueNav] = await Promise.all([
+    getAttachments('custom', id),
+    getDetailQueueNavigation(id),
+  ]);
   const attachmentExtras = await loadAttachmentPanelExtras(attachments.map((a) => a.id));
   const headerFields = allFields(detail.schema).filter((f) => f.showInHeader && !isDisplayOnly(f) && f.id in detail.data);
   const hasAttachmentField = allFields(detail.schema).some((f) => f.type === 'attachments');
 
+  const isBudgetForm = detail.key === 'budget-request' || detail.key === 'budget-change';
+  const isAssetForm = detail.key === 'asset-transfer';
+
   return (
     <main className="page-shell space-y-5">
-      <nav className="text-sm text-td-muted print:hidden">
-        {detail.isOwner ? (
-          <Link href={`/f/${detail.key}`} className="hover:text-td-blue">
-            我的{detail.name}
-          </Link>
-        ) : (
-          <Link href="/approvals" className="hover:text-td-blue">
-            待簽核
-          </Link>
-        )}
-        <span className="mx-2">/</span>
-        <span className="text-td-blue-dark">{detail.formNumber}</span>
-      </nav>
+      <DetailQueueNav
+        currentId={detail.id}
+        currentCaseNumber={detail.formNumber}
+        currentFormLabel={detail.name}
+        preloadedNav={queueNav}
+        secondaryBackHref={
+          isBudgetForm
+            ? '/my-tasks/budget'
+            : isAssetForm
+              ? '/assets/mine'
+              : undefined
+        }
+        secondaryBackLabel={
+          isBudgetForm
+            ? '返回年度預算表填報'
+            : isAssetForm
+              ? '返回我的資產管理'
+              : undefined
+        }
+      />
 
       <section className="flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -124,11 +285,14 @@ export default async function DesignerFormDetailPage({
         </div>
         <div className="flex flex-wrap gap-2 print:hidden">
           {detail.followUps.map((f) => (
-            <Link key={f.key} href={`/f/${f.key}/new?source=${detail.id}`} className="btn-primary">
+            <Link key={`${f.key}-${f.sourceId ?? detail.id}`} href={`/f/${f.key}/new?source=${f.sourceId ?? detail.id}`} className="btn-primary">
               接續建立{f.name}
             </Link>
           ))}
-          {detail.status === 'approved' && <PrintButton label="列印申請單" />}
+          <Link href={`/f/${detail.key}/new?copyFrom=${detail.id}`} className="btn-secondary">
+            複製此單據
+          </Link>
+          <PrintButton label="列印 / 存成 PDF" />
           {detail.canEdit && (
             <Link href={`/f/${detail.key}/${detail.id}/edit`} className="btn-secondary">
               編輯
@@ -178,6 +342,10 @@ export default async function DesignerFormDetailPage({
         )}
       </section>
 
+      {(PROCUREMENT_CHAIN_KEYS.has(detail.key) || detail.caseChain.length > 1) && (
+        <ProcurementCaseChainPanel currentId={detail.id} caseNumber={detail.caseNumber} chain={detail.caseChain} />
+      )}
+
       <SubmissionFields schema={detail.schema} data={detail.data} labels={detail.labels} financeEdit={detail.canFinanceFill ? detail.id : undefined} />
 
       {detail.assetRegister && detail.assetRegister.lines.length > 0 && (
@@ -199,7 +367,18 @@ export default async function DesignerFormDetailPage({
       <ApprovalTimeline formType="custom" formId={detail.id} />
 
       {detail.isCurrentApprover && (
-        <ApprovalActions formId={detail.id} version={detail.version} onApprove={approveCustomFormStep} onReturn={returnCustomFormStep} />
+        <ApprovalActions
+          formId={detail.id}
+          version={detail.version}
+          onApprove={approveCustomFormStep}
+          onReturn={returnCustomFormStep}
+          nextHref={queueNav.nextItem?.href ?? null}
+          nextLabel={
+            queueNav.nextItem
+              ? `${queueNav.nextItem.formLabel} ${queueNav.nextItem.caseNumber}`
+              : null
+          }
+        />
       )}
     </main>
   );

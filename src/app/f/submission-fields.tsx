@@ -4,7 +4,12 @@ import { isDisplayOnly, type FieldDef, type FormSchema, type TableColumn } from 
 import type { TableValue } from '@/lib/custom-forms/validate';
 import { FinanceCell } from './finance-cell';
 
-const SPAN: Record<1 | 2 | 3 | 4, string> = { 1: 'md:col-span-1', 2: 'md:col-span-2', 3: 'md:col-span-3', 4: 'md:col-span-4' };
+const SPAN: Record<1 | 2 | 3 | 4, string> = {
+  1: 'md:col-span-1 print:col-span-1',
+  2: 'md:col-span-2 print:col-span-2',
+  3: 'md:col-span-3 print:col-span-3',
+  4: 'md:col-span-4 print:col-span-4',
+};
 
 /** Whole amounts without decimals (like the other forms), otherwise always two: 35.50, not 35.5. */
 export function amountText(v: unknown): string {
@@ -155,8 +160,8 @@ export function SubmissionFields({
         if (fields.length === 0) return null;
         return (
           <section key={section.id} className="card">
-            {section.title && <h2 className="mb-4 font-semibold text-td-blue-dark">{section.title}</h2>}
-            <dl className="grid gap-x-8 gap-y-4 md:grid-cols-4">
+            {section.title && <h2 className="mb-4 font-semibold text-td-blue-dark print:mb-1.5 print:text-xs">{section.title}</h2>}
+            <dl className="grid gap-x-8 gap-y-4 md:grid-cols-4 print:grid-cols-4 print:gap-x-4 print:gap-y-1.5">
               {fields.map((f) => (
                 <div key={f.id} className={SPAN[f.type === 'table' ? 4 : f.width]}>
                   <dt className="text-xs font-semibold text-td-muted">{f.label}</dt>

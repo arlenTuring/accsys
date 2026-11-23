@@ -245,15 +245,15 @@ describe('批次 1 approval chains match the hard-coded chain', () => {
     };
   }
 
-  /** seal-requests/service excludeFiler, on top of generateApprovalChain. */
-  function legacyChain(applicant: string, filer: string, manager: string, amount: number): ApprovalChainStep[] | null {
+  /** 用印申請流程（第 38 條）：所有用印申請單（合約類、非合約類、開立發票）皆需簽至董事長。 */
+  function expectedSealChain(applicant: string, filer: string, manager: string): ApprovalChainStep[] | null {
     const chain = generateApprovalChain({
       applicantEmployeeId: applicant,
       departmentManagerEmployeeId: manager,
       budgetOwnerEmployeeId: null,
       generalManagerEmployeeId: 'GM',
-      chairmanEmployeeId: amount > CHAIRMAN_THRESHOLD ? 'CH' : applicant,
-      totalAmount: amount,
+      chairmanEmployeeId: 'CH',
+      totalAmount: CHAIRMAN_THRESHOLD + 1,
     });
     if (filer === applicant) return chain;
     const rest = withoutFiler(chain, filer);
@@ -273,7 +273,7 @@ describe('批次 1 approval chains match the hard-coded chain', () => {
         for (const filer of people)
           for (const manager of people)
             for (const amount of amountsFor) {
-              const legacy = legacyChain(applicant, filer, manager, amount);
+              const legacy = expectedSealChain(applicant, filer, manager);
               const r = resolveFlow(
                 flow.flow,
                 { applicantEmployeeId: applicant, filerEmployeeId: filer, departmentId: 'D1', formKey: form.key, today: TODAY, fields: { totalAmount: amount.toFixed(2) } },

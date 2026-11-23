@@ -1,17 +1,23 @@
 'use client';
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { inputCls, Req } from '@/app/components/form-fields';
 import { PendingFilesField } from '@/app/components/pending-files-field';
+import { TwoTierBudgetSelect } from '@/app/components/two-tier-budget-select';
 import {
   DraftAttachedFiles,
   type DraftAttachedFile,
 } from '@/app/tools/ai-chat/draft-attached-files';
 import { attachmentFieldLabel, normalizeAttachmentFieldLabel } from '@/lib/attachments/policy';
 import { reviseCustomForm, submitCustomForm, type SubmitResult } from '@/lib/custom-forms/actions';
+import { BUDGET_REQUEST_KEY } from '@/lib/custom-forms/migrated/budget';
 import type { PickerOptions } from '@/lib/custom-forms/queries';
+import type { EmployeeFilingScope } from '@/lib/filing-agents/queries';
+import { deleteFormDraftAction, saveFormDraftAction } from '@/lib/form-drafts/actions';
+import type { SavedFormDraft } from '@/lib/form-drafts/service';
 import {
+  adjustableSourceTargets,
   allFields,
   isDisplayOnly,
   sourceFieldOf,
@@ -26,10 +32,12 @@ import {
   isFieldRequired,
   isFieldVisible,
   minDate,
+  summarizeErrors,
   validateSubmission,
   type TableValue,
 } from '@/lib/custom-forms/validate';
 import { BASE_CURRENCY } from '@/lib/exchange-rates';
+import { BudgetRequestItemsEditor } from './budget-request-items-editor';
 import { NoticeText } from './notice-text';
 import { amountText } from './submission-fields';
 
@@ -165,10 +173,14 @@ function withFollowUps(schema: FormSchema, prev: Values, id: string, v: unknown,
 function preview(field: TableField, col: TableColumn, row: Values): string {
   if (!col.formula) return '';
   const eff = effectiveRow(field, row);
-  const parts = col.formula.of.map((id) => String(eff[id] ?? '').replace(/,/g, '').trim());
+  const byId = new Map(field.columns.map((c) => [c.id, c]));
+  const parts = col.formula.of.map((id) => {
+    const raw = String(eff[id] ?? '').replace(/,/g, '').trim();
+    return raw !== '' ? raw : String(byId.get(id)?.default ?? '');
+  });
   if (parts.some((p) => p === '')) return '';
   try {
-    const result = computeFormula(col, Object.fromEntries(col.formula.of.map((id, i) => [id, parts[i]])), new Map(field.columns.map((c) => [c.id, c])));
+    const result = computeFormula(col, Object.fromEntries(col.formula.of.map((id, i) => [id, parts[i]])), byId);
     return result === null ? '' : String(result);
   } catch {
     return '';
@@ -210,7 +222,14 @@ const COLUMN_MIN_WIDTH: Record<ColumnType, string> = {
 };
 
 /** A table filled from the picked source: `locked` columns come from the source, rows can only be dropped in subset mode. */
-type Carried = { locked: Set<string>; subset: boolean };
+type Carried = {
+  locked: Set<string>;
+  subset: boolean;
+  childCount?: number;
+  sourceTotalAmount?: number | null;
+  totalUsedAmount?: number;
+  remainingAmount?: number | null;
+};
 
 /** Read-only text of a carried cell. */
 function cellLabel(c: TableColumn, v: unknown, options: PickerOptions): string {
@@ -262,8 +281,37 @@ function TableInput({
   };
   const total = tableTotal(field, value);
   const totalIndex = field.columns.findIndex((c) => c.id === field.totalColumn);
+  const projectedCumulative =
+    carried?.sourceTotalAmount !== null && carried?.sourceTotalAmount !== undefined
+      ? (carried.totalUsedAmount ?? 0) + (total ?? 0)
+      : null;
+  const overSourceTotal =
+    projectedCumulative !== null &&
+    carried?.sourceTotalAmount !== null &&
+    carried?.sourceTotalAmount !== undefined &&
+    projectedCumulative > carried.sourceTotalAmount + 0.005;
+
   return (
     <div className="overflow-x-auto">
+      {carried && carried.sourceTotalAmount !== null && carried.sourceTotalAmount !== undefined && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50/60 px-3.5 py-2 text-xs text-td-blue-dark">
+          <span>
+            📊 <strong>來源單據分批追蹤：</strong>
+            原單總額 <strong className="tabular-nums">NT$ {amountText(carried.sourceTotalAmount)}</strong>
+            {' · '}已開立 <strong className="tabular-nums">{carried.childCount ?? 0}</strong> 張（累計{' '}
+            <strong className="tabular-nums">NT$ {amountText(carried.totalUsedAmount ?? 0)}</strong>）
+            {' · '}剩餘額度{' '}
+            <strong className="tabular-nums text-emerald-700">
+              NT$ {amountText(carried.remainingAmount ?? carried.sourceTotalAmount)}
+            </strong>
+          </span>
+          {overSourceTotal && (
+            <span className="rounded bg-amber-100 px-2 py-0.5 font-semibold text-amber-900">
+              ⚠️ 累計金額（NT$ {amountText(projectedCumulative!)}）超過來源單據總額，請確認報價差異
+            </span>
+          )}
+        </div>
+      )}
       <table className="w-full min-w-[36rem] border-collapse text-sm">
         <thead>
           <tr className="bg-slate-50 text-xs text-td-muted">
@@ -282,7 +330,34 @@ function TableInput({
             <tr key={i}>
               <td className="border border-td-border px-2 text-center text-td-muted">{i + 1}</td>
               {field.columns.map((c) => {
-                const err = errors[`${field.id}.${i}.${c.id}`];
+                const rawStr = String(row[c.id] ?? '').trim();
+                const isNeg =
+                  (c.type === 'money' || (c.type === 'number' && (c.min ?? 0) >= 0)) &&
+                  rawStr.startsWith('-') &&
+                  !Number.isNaN(Number(rawStr.replace(/,/g, ''))) &&
+                  Number(rawStr.replace(/,/g, '')) < 0;
+                const liveNegErr = isNeg
+                  ? `第 ${i + 1} 列「${c.label}」：${c.type === 'money' ? '金額不可為負數' : '不可為負數'}`
+                  : undefined;
+                let liveMaxPrompt: string | undefined;
+                if (c.formula && c.rules && c.rules.length > 0) {
+                  const previewStr = preview(field, c, row);
+                  const numericVal = previewStr ? Number(previewStr.replace(/,/g, '')) : NaN;
+                  if (Number.isFinite(numericVal)) {
+                    for (const rule of c.rules) {
+                      if (rule.check.kind === 'max' && numericVal > rule.check.value) {
+                        const condOk =
+                          !rule.when ||
+                          rule.when.in.includes(String(row[rule.when.column] ?? ''));
+                        if (condOk) {
+                          liveMaxPrompt = rule.message || `不可超過 ${rule.check.value.toLocaleString('en-US')}`;
+                          break;
+                        }
+                      }
+                    }
+                  }
+                }
+                const err = errors[`${field.id}.${i}.${c.id}`] ?? liveNegErr ?? liveMaxPrompt;
                 const fixedRate = c.rateFor !== undefined && row[c.rateFor] === BASE_CURRENCY;
                 const rowCurrency = c.currencyColumn ? String(row[c.currencyColumn] ?? '') : '';
                 return (
@@ -297,23 +372,62 @@ function TableInput({
                       >
                         {cellLabel(c, row[c.id], options) || '—'}
                       </span>
-                    ) : c.type === 'select' || c.type === 'employee' || c.type === 'asset' || c.type === 'budget_code' ? (
+                    ) : c.type === 'budget_code' ? (
+                      <TwoTierBudgetSelect
+                        value={String(row[c.id] ?? '')}
+                        onChange={(val) => setCell(i, c.id, val)}
+                        options={choices(c, i)}
+                        className={white}
+                        ariaLabel={`第 ${i + 1} 列 ${c.label}`}
+                        compact
+                      />
+                    ) : c.type === 'select' || c.type === 'employee' || c.type === 'asset' ? (
                       <select value={String(row[c.id] ?? '')} onChange={(e) => setCell(i, c.id, e.target.value)} className={white} aria-label={`第 ${i + 1} 列 ${c.label}`}>
                         <Options list={choices(c, i)} />
                       </select>
                     ) : (
-                      <div className="flex items-center gap-1">
-                        {rowCurrency && <span className="text-xs text-td-muted">{rowCurrency}</span>}
-                        <input
-                          type={c.type === 'date' ? 'date' : 'text'}
-                          inputMode={c.type === 'number' || c.type === 'money' ? 'decimal' : undefined}
-                          maxLength={c.type === 'text' ? (c.maxLength ?? 500) : undefined}
-                          value={fixedRate ? '1' : String(row[c.id] ?? '')}
-                          disabled={fixedRate}
-                          onChange={(e) => setCell(i, c.id, e.target.value)}
-                          aria-label={`第 ${i + 1} 列 ${c.label}`}
-                          className={`${white} ${c.type === 'number' || c.type === 'money' ? 'text-right' : ''} disabled:!bg-slate-100`}
-                        />
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-1">
+                          {rowCurrency && <span className="text-xs text-td-muted">{rowCurrency}</span>}
+                          <input
+                            type={c.type === 'date' ? 'date' : 'text'}
+                            inputMode={c.type === 'number' || c.type === 'money' ? 'decimal' : undefined}
+                            maxLength={c.type === 'text' ? (c.maxLength ?? 500) : undefined}
+                            value={fixedRate ? '1' : String(row[c.id] ?? '')}
+                            disabled={fixedRate}
+                            onKeyDown={(e) => {
+                              if (
+                                (c.type === 'money' || (c.type === 'number' && (c.min ?? 0) >= 0)) &&
+                                (e.key === '-' || e.key === '－')
+                              ) {
+                                e.preventDefault();
+                              }
+                            }}
+                            onChange={(e) => {
+                              const nextVal =
+                                c.type === 'money' || (c.type === 'number' && (c.min ?? 0) >= 0)
+                                  ? e.target.value.replace(/[-－]/g, '')
+                                  : e.target.value;
+                              setCell(i, c.id, nextVal);
+                            }}
+                            aria-label={`第 ${i + 1} 列 ${c.label}`}
+                            className={`${white} ${c.type === 'number' || c.type === 'money' ? 'text-right' : ''} ${err ? '!border-red-500 !bg-red-50' : ''} disabled:!bg-slate-100`}
+                          />
+                        </div>
+                        {c.id === 'quantity' && typeof row._maxQty === 'number' && (
+                          <span className="px-1 text-[11px] text-td-muted">
+                            原核准 {row._maxQty} · 已開 {Number(row._usedQty ?? 0)} · 剩餘可開{' '}
+                            <strong className={Number(row._remainingQty ?? 0) === 0 ? 'text-amber-700' : 'text-emerald-700'}>
+                              {Number(row._remainingQty ?? 0)}
+                            </strong>
+                          </span>
+                        )}
+                        {c.id === 'amount' && typeof row._sourceAmount === 'number' && Number(row._usedAmount ?? 0) > 0 && (
+                          <span className="px-1 text-[11px] text-td-muted">
+                            原金額 {amountText(row._sourceAmount)} · 已請 {amountText(Number(row._usedAmount ?? 0))} · 剩餘{' '}
+                            <strong className="text-emerald-700">{amountText(Number(row._remainingAmount ?? 0))}</strong>
+                          </span>
+                        )}
                       </div>
                     )}
                     {err && <p className="mt-1 text-xs text-red-600">{err}</p>}
@@ -408,13 +522,29 @@ export function FieldInput({
         <textarea rows={field.rows} maxLength={field.maxLength} value={str} onChange={(e) => onChange(e.target.value)} className={`${white} resize-y`} {...a11y} />
       );
     case 'number':
-    case 'money':
+    case 'money': {
+      const disallowNegative = field.type === 'money' || (field.min ?? 0) >= 0;
       return (
         <div className="flex items-center gap-2">
           {field.type === 'money' && <span className="text-sm text-td-muted">{currency}</span>}
-          <input type="text" inputMode="decimal" value={str} onChange={(e) => onChange(e.target.value)} className={`${white} text-right`} {...a11y} />
+          <input
+            type="text"
+            inputMode="decimal"
+            value={str}
+            onKeyDown={(e) => {
+              if (disallowNegative && (e.key === '-' || e.key === '－')) {
+                e.preventDefault();
+              }
+            }}
+            onChange={(e) =>
+              onChange(disallowNegative ? e.target.value.replace(/[-－]/g, '') : e.target.value)
+            }
+            className={`${white} text-right`}
+            {...a11y}
+          />
         </div>
       );
+    }
     case 'date':
       return <input type="date" min={minDay} value={str} onChange={(e) => onChange(e.target.value)} className={white} {...a11y} />;
     case 'datetime':
@@ -464,18 +594,31 @@ export function FieldInput({
           ))}
         </div>
       );
+    case 'budget_code': {
+      const list = options.budgetCodes.filter((o) => !field.budgetScope || o.scope === field.budgetScope);
+      return (
+        <TwoTierBudgetSelect
+          value={str}
+          onChange={(val) => onChange(val)}
+          options={list}
+          className={white}
+          ariaLabelledBy={labelId}
+          ariaInvalid={errors[field.id] ? true : undefined}
+        />
+      );
+    }
     case 'employee':
     case 'department':
-    case 'budget_code':
     case 'project':
     case 'supplier':
     case 'asset': {
-      const list =
-        field.type === 'budget_code'
-          ? options.budgetCodes.filter((o) => !field.budgetScope || o.scope === field.budgetScope)
-          : { employee: options.employees, department: options.departments, project: options.projects, supplier: options.suppliers, asset: options.assets }[
-              field.type
-            ];
+      const list = {
+        employee: options.employees,
+        department: options.departments,
+        project: options.projects,
+        supplier: options.suppliers,
+        asset: options.assets,
+      }[field.type];
       return (
         <select value={str} onChange={(e) => onChange(e.target.value)} className={white} {...a11y}>
           <Options list={list} />
@@ -523,6 +666,12 @@ export function CustomForm({
   initial,
   currentEmployeeId,
   presetSource,
+  filingScope,
+  savedDrafts,
+  initialDraftId,
+  initialApplicantId,
+  clonedFromFormNumber,
+  skipDraftRestore,
 }: {
   formKey: string;
   name: string;
@@ -536,10 +685,23 @@ export function CustomForm({
   currentEmployeeId?: string;
   /** 關聯單據 picked in advance (「接續」 from the source's page). */
   presetSource?: string;
+  /** 經辦人／代為申請可選範圍與部門篩選 */
+  filingScope?: EmployeeFilingScope;
+  /** 使用者在此表單已暫存的草稿清單 */
+  savedDrafts?: SavedFormDraft[];
+  /** 從「我的申請紀錄 > 草稿」點入時預先載入的草稿 ID */
+  initialDraftId?: string | null;
+  /** 複製舊單或草稿帶入的申請人 ID */
+  initialApplicantId?: string | null;
+  /** 從舊單複製時顯示來源單號提示 */
+  clonedFromFormNumber?: string | null;
+  /** 當從「我的資產管理」複選資產帶入、複製舊單或指定關聯單據時，不讓 localStorage 舊草稿覆蓋本次帶入的明細 */
+  skipDraftRestore?: boolean;
 }) {
   const router = useRouter();
   const link = sourceFieldOf(schema);
   const targets = useMemo(() => sourceTargets(schema), [schema]);
+  const adjustableTargets = useMemo(() => adjustableSourceTargets(schema), [schema]);
   const [values, setValues] = useState<Values>(() => {
     const start = initialValues(schema, initial);
     return link && presetSource && options.sources.some((o) => o.id === presetSource)
@@ -547,10 +709,48 @@ export function CustomForm({
       : start;
   });
   const pickedSource = link ? options.sources.find((o) => o.id === values[link.id]) : undefined;
-  const carriedOf = (f: FieldDef): Carried | null =>
-    pickedSource && pickedSource.table === f.id ? { locked: targets.get(f.id) ?? new Set(), subset: pickedSource.subset } : null;
-  const pickApplicant = schema.onBehalf === true && mode.kind !== 'update' && mode.kind !== 'resubmit';
-  const [applicantId, setApplicantId] = useState(currentEmployeeId ?? '');
+  const carriedOf = (f: FieldDef): Carried | null => {
+    if (!pickedSource || pickedSource.table !== f.id) return null;
+    const allTargeted = targets.get(f.id) ?? new Set<string>();
+    const adjustable = adjustableTargets.get(f.id) ?? new Set<string>();
+    const locked = new Set([...allTargeted].filter((colId) => !adjustable.has(colId)));
+    return {
+      locked,
+      subset: pickedSource.subset,
+      childCount: pickedSource.childCount,
+      sourceTotalAmount: pickedSource.sourceTotalAmount,
+      totalUsedAmount: pickedSource.totalUsedAmount,
+      remainingAmount: pickedSource.remainingAmount,
+    };
+  };
+  const pickApplicant =
+    formKey !== 'budget-request' &&
+    (schema.onBehalf === true || filingScope?.hasAssignments === true) &&
+    mode.kind !== 'update' &&
+    mode.kind !== 'resubmit';
+  const [applicantId, setApplicantId] = useState(
+    initialApplicantId && (schema.onBehalf === true || filingScope?.applicants.some((a) => a.id === initialApplicantId))
+      ? initialApplicantId
+      : (currentEmployeeId ?? '')
+  );
+  const [selectedDeptFilter, setSelectedDeptFilter] = useState<string>('ALL');
+  const [draftList, setDraftList] = useState<SavedFormDraft[]>(savedDrafts ?? []);
+  const [activeDraftId, setActiveDraftId] = useState<string | null>(initialDraftId ?? null);
+  const activeDraftIdRef = useRef<string | null>(initialDraftId ?? null);
+  useEffect(() => {
+    activeDraftIdRef.current = activeDraftId;
+  }, [activeDraftId]);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [autoSaveState, setAutoSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>(
+    initialDraftId ? 'saved' : 'idle'
+  );
+  const [lastAutoSavedTime, setLastAutoSavedTime] = useState<string | null>(null);
+  const [draftNotice, setDraftNotice] = useState<string | null>(
+    initialDraftId ? '已自動載入您上次填寫的草稿，所有變更皆會即時自動儲存，關閉視窗下次進入亦可無縫接續。' : null
+  );
+  const localStorageKey = `accsys:live-draft:${formKey}:${currentEmployeeId ?? 'anon'}`;
+  const isFirstRenderRef = useRef(true);
+  const lastSavedSnapshotRef = useRef<string>(JSON.stringify({ values, applicantId }));
   const [files, setFiles] = useState<File[]>([]);
   // One key per form instance: a double submit or retry cannot create a second form.
   const [idempotencyKey] = useState(() => crypto.randomUUID());
@@ -558,6 +758,31 @@ export function CustomForm({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const existing = mode.kind === 'update' || mode.kind === 'resubmit' ? mode.existingAttachmentCount : 0;
+
+  const selectableDepartments = useMemo(() => {
+    if (!filingScope) return [];
+    const seen = new Map<string, string>();
+    for (const a of filingScope.applicants) {
+      if (!seen.has(a.departmentId)) seen.set(a.departmentId, a.departmentName);
+    }
+    return [...seen.entries()].map(([id, deptName]) => ({ id, name: deptName }));
+  }, [filingScope]);
+
+  const applicantChoices = useMemo(() => {
+    if (filingScope && filingScope.applicants.length > 0) {
+      const filtered =
+        selectedDeptFilter === 'ALL'
+          ? filingScope.applicants
+          : filingScope.applicants.filter(
+              (a) => a.departmentId === selectedDeptFilter || a.id === applicantId
+            );
+      return filtered.map((a) => ({
+        id: a.id,
+        label: a.label,
+      }));
+    }
+    return options.employees;
+  }, [filingScope, selectedDeptFilter, applicantId, options.employees]);
 
   /** Which fields show / are required right now, evaluated in order like the server does (tables test their total). */
   const { visible, required, minDates } = useMemo(() => {
@@ -579,7 +804,16 @@ export function CustomForm({
 
   const ticked = (fieldId: string) => (Array.isArray(values[fieldId]) ? (values[fieldId] as string[]) : []);
   const set = (id: string) => (v: unknown) => {
-    setValues((prev) => withFollowUps(schema, prev, id, v, options));
+    setValues((prev) => {
+      const next = withFollowUps(schema, prev, id, v, options);
+      if (formKey === 'budget-request' && id === 'targetDepartmentId' && typeof v === 'string' && v) {
+        const dept = options.departments.find((d) => d.id === v);
+        if (dept?.managerEmployeeId && !next.ownerEmployeeId) {
+          next.ownerEmployeeId = dept.managerEmployeeId;
+        }
+      }
+      return next;
+    });
     setErrors((prev) => {
       const stale = Object.keys(prev).filter((k) => k === id || k.startsWith(`${id}.`));
       if (stale.length === 0) return prev;
@@ -589,12 +823,126 @@ export function CustomForm({
     });
   };
 
+  // Restore any unsynced localStorage snapshot if newer or if no server draft was loaded yet
+  useEffect(() => {
+    if (mode.kind !== 'create' || typeof window === 'undefined' || skipDraftRestore) return;
+    try {
+      const raw = window.localStorage.getItem(localStorageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        draftId?: string | null;
+        applicantId?: string;
+        values?: Values;
+        savedAt?: number;
+      };
+      if (!parsed.values) return;
+      const matchedServerDraft = initialDraftId
+        ? (savedDrafts ?? []).find((d) => d.id === initialDraftId)
+        : undefined;
+      const serverUpdatedMs = matchedServerDraft ? new Date(matchedServerDraft.updatedAt).getTime() : 0;
+      if (!initialDraftId || (parsed.savedAt && parsed.savedAt > serverUpdatedMs + 1500)) {
+        const restored = initialValues(schema, parsed.values);
+        setValues(restored);
+        if (parsed.applicantId) setApplicantId(parsed.applicantId);
+        if (!activeDraftIdRef.current && parsed.draftId) {
+          setActiveDraftId(parsed.draftId);
+          activeDraftIdRef.current = parsed.draftId;
+        }
+        lastSavedSnapshotRef.current = JSON.stringify({
+          values: restored,
+          applicantId: parsed.applicantId ?? applicantId,
+        });
+        setAutoSaveState('saved');
+        setDraftNotice('已自動還原您上次離開時尚未送出的填寫進度（支援即時自動儲存）。');
+      }
+    } catch {
+      // ignore localStorage read errors
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Real-time auto-save: immediately persist to localStorage and debounce sync to server form_drafts
+  useEffect(() => {
+    if (mode.kind !== 'create') return;
+    if (isFirstRenderRef.current) {
+      isFirstRenderRef.current = false;
+      return;
+    }
+    const currentSnapshot = JSON.stringify({ values, applicantId });
+    if (currentSnapshot === lastSavedSnapshotRef.current) return;
+
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(
+          localStorageKey,
+          JSON.stringify({
+            draftId: activeDraftIdRef.current,
+            applicantId,
+            values,
+            savedAt: Date.now(),
+          })
+        );
+      } catch {
+        // ignore storage quota errors
+      }
+    }
+
+    setAutoSaveState('saving');
+    const timer = window.setTimeout(async () => {
+      try {
+        const res = await saveFormDraftAction({
+          draftId: activeDraftIdRef.current,
+          formType: 'custom',
+          formKey,
+          formLabel: name,
+          applicantEmployeeId: pickApplicant && applicantId ? applicantId : (currentEmployeeId ?? null),
+          data: values,
+        });
+        if (res.ok) {
+          lastSavedSnapshotRef.current = currentSnapshot;
+          activeDraftIdRef.current = res.draft.id;
+          setActiveDraftId(res.draft.id);
+          setDraftList((prev) => [res.draft, ...prev.filter((d) => d.id !== res.draft.id)]);
+          const nowStr = new Date(res.draft.updatedAt).toLocaleTimeString('zh-TW', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false,
+          });
+          setLastAutoSavedTime(nowStr);
+          setAutoSaveState('saved');
+          if (typeof window !== 'undefined') {
+            try {
+              window.localStorage.setItem(
+                localStorageKey,
+                JSON.stringify({
+                  draftId: res.draft.id,
+                  applicantId,
+                  values,
+                  savedAt: new Date(res.draft.updatedAt).getTime(),
+                })
+              );
+            } catch {
+              // ignore
+            }
+          }
+        } else {
+          setAutoSaveState('error');
+        }
+      } catch {
+        setAutoSaveState('error');
+      }
+    }, 900);
+
+    return () => window.clearTimeout(timer);
+  }, [values, applicantId, mode.kind, formKey, name, pickApplicant, currentEmployeeId, localStorageKey]);
+
   const onSubmit = async () => {
     setError(null);
     const check = validateSubmission(schema, values, today);
     if (!check.ok) {
       setErrors(check.errors);
-      setError('請修正標示的欄位');
+      setError(`請修正標示的欄位：${summarizeErrors(check.errors)}`);
       return;
     }
     setErrors({});
@@ -635,8 +983,108 @@ export function CustomForm({
       setError(result.error);
       return;
     }
+    if (mode.kind === 'create' && activeDraftId) {
+      await deleteFormDraftAction(activeDraftId).catch(() => null);
+    }
+    if (mode.kind === 'create' && typeof window !== 'undefined') {
+      try {
+        window.localStorage.removeItem(localStorageKey);
+      } catch {
+        // ignore
+      }
+    }
     const failed = result.attachmentErrors.length;
     router.push(`/f/${formKey}/${result.submissionId}${failed > 0 ? `?uploadFailed=${failed}` : ''}`);
+  };
+
+  const onSaveUserDraft = async () => {
+    if (mode.kind !== 'create') return;
+    setError(null);
+    setDraftNotice(null);
+    setSavingDraft(true);
+    try {
+      const res = await saveFormDraftAction({
+        draftId: activeDraftId,
+        formType: 'custom',
+        formKey,
+        formLabel: name,
+        applicantEmployeeId: pickApplicant && applicantId ? applicantId : (currentEmployeeId ?? null),
+        data: values,
+      });
+      setSavingDraft(false);
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      setActiveDraftId(res.draft.id);
+      activeDraftIdRef.current = res.draft.id;
+      lastSavedSnapshotRef.current = JSON.stringify({ values, applicantId });
+      setDraftList((prev) => [res.draft, ...prev.filter((d) => d.id !== res.draft.id)]);
+      const nowStr = new Date(res.draft.updatedAt).toLocaleTimeString('zh-TW', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      });
+      setLastAutoSavedTime(nowStr);
+      setAutoSaveState('saved');
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(
+            localStorageKey,
+            JSON.stringify({
+              draftId: res.draft.id,
+              applicantId,
+              values,
+              savedAt: new Date(res.draft.updatedAt).getTime(),
+            })
+          );
+        } catch {
+          // ignore
+        }
+      }
+      setDraftNotice(`草稿「${res.draft.title}」已於 ${nowStr} 暫存！可隨時於「我的申請紀錄 > 草稿」繼續編輯。`);
+    } catch (err) {
+      setSavingDraft(false);
+      setError(err instanceof Error ? err.message : '草稿儲存失敗');
+    }
+  };
+
+  const onLoadUserDraft = (d: SavedFormDraft) => {
+    const restored = initialValues(schema, d.data);
+    setValues(restored);
+    if (d.applicantEmployeeId) setApplicantId(d.applicantEmployeeId);
+    setActiveDraftId(d.id);
+    activeDraftIdRef.current = d.id;
+    lastSavedSnapshotRef.current = JSON.stringify({
+      values: restored,
+      applicantId: d.applicantEmployeeId ?? applicantId,
+    });
+    setErrors({});
+    setError(null);
+    setAutoSaveState('saved');
+    setDraftNotice(`已載入草稿「${d.title}」。`);
+  };
+
+  const onDeleteUserDraft = async (draftIdToDelete: string) => {
+    const res = await deleteFormDraftAction(draftIdToDelete);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    setDraftList((prev) => prev.filter((d) => d.id !== draftIdToDelete));
+    if (activeDraftId === draftIdToDelete) {
+      setActiveDraftId(null);
+      activeDraftIdRef.current = null;
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.removeItem(localStorageKey);
+        } catch {
+          // ignore
+        }
+      }
+      setDraftNotice('已刪除暫存草稿。');
+    }
   };
 
   const onAiDraftSave = async () => {
@@ -649,40 +1097,335 @@ export function CustomForm({
     }
   };
 
+  const budgetHeaderSummary = useMemo(() => {
+    if (formKey !== 'budget-request') return null;
+    const fyStr = String(values.fiscalYear ?? '116').trim();
+    const fyNum = Number(fyStr);
+    const west = Number.isFinite(fyNum) && fyNum > 0 && fyNum < 1911 ? fyNum + 1911 : fyNum;
+    const fyLabel = Number.isFinite(west) && west > 1911 ? `${fyStr} 年度 (${west})` : `${fyStr} 年度`;
+    const isProject = values.budgetScope === 'project';
+    const scopeLabel = isProject ? '專案預算表' : '部門預算表';
+    const targetLabel = isProject
+      ? options.projects.find((p) => p.id === String(values.targetProjectId ?? ''))?.label || '—'
+      : options.departments.find((d) => d.id === String(values.targetDepartmentId ?? ''))?.label || '—';
+    const ownerLabel =
+      options.employees.find((e) => e.id === String(values.ownerEmployeeId ?? ''))?.label || '—';
+    return {
+      fyLabel,
+      isProject,
+      scopeLabel,
+      targetLabel,
+      ownerLabel,
+    };
+  }, [
+    formKey,
+    values.fiscalYear,
+    values.budgetScope,
+    values.targetDepartmentId,
+    values.targetProjectId,
+    values.ownerEmployeeId,
+    options.departments,
+    options.projects,
+    options.employees,
+  ]);
+
   return (
     <div className="card !p-0">
-      <div className="px-5 py-4">
-        <h1 className="text-xl font-bold text-td-blue-dark">{name}</h1>
-        {description && <p className="mt-1 text-sm text-td-muted">{description}</p>}
-      </div>
-      {pickApplicant && (
-        <section className="border-t border-dashed border-td-border px-5 py-5">
-          <label htmlFor="applicant" className="text-sm font-semibold text-td-blue-dark">
-            申請人
-            <Req />
-          </label>
-          <p className="mt-1 text-xs text-td-muted">以經辦身分替其他同仁申請時請改選申請人；申請人需先在系統確認，才會送主管簽核。</p>
-          <select id="applicant" value={applicantId} onChange={(e) => setApplicantId(e.target.value)} className={`${white} mt-2 md:w-1/2`}>
-            {options.employees.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </section>
-      )}
-      {schema.sections.map((section) => (
-        <section key={section.id} className="border-t border-dashed border-td-border">
-          {(section.title || section.description) && (
-            <div className="px-5 pt-4">
-              {section.title && <h2 className="font-semibold text-td-blue-dark">{section.title}</h2>}
-              {section.description && <p className="mt-1 text-xs text-td-muted">{section.description}</p>}
+      {formKey === 'budget-request' && budgetHeaderSummary ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50/70 px-4 py-2.5">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <h1 className="mr-1.5 text-base font-bold text-td-blue-dark">{name}</h1>
+            <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-0.5 font-medium text-slate-700">
+              <span className="text-slate-400">年度</span>
+              <span>{budgetHeaderSummary.fyLabel}</span>
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-0.5 font-medium text-slate-700">
+              <span className="text-slate-400">類型</span>
+              <span>{budgetHeaderSummary.scopeLabel}</span>
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-0.5 font-medium text-slate-700">
+              <span className="text-slate-400">{budgetHeaderSummary.isProject ? '專案' : '部門'}</span>
+              <span className="max-w-[16rem] truncate">{budgetHeaderSummary.targetLabel}</span>
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-0.5 font-medium text-slate-700">
+              <span className="text-slate-400">負責人</span>
+              <span>{budgetHeaderSummary.ownerLabel}</span>
+            </span>
+            <span
+              className="rounded bg-slate-200/70 px-1.5 py-0.5 text-[11px] font-medium text-slate-500"
+              title="基本歸屬資訊由財會部門派發時核定鎖定"
+            >
+              🔒 財會核定
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {mode.kind === 'create' && (
+              <div
+                role="status"
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${
+                  autoSaveState === 'saving'
+                    ? 'border-blue-200 bg-blue-50 text-td-blue'
+                    : autoSaveState === 'saved'
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                      : autoSaveState === 'error'
+                        ? 'border-amber-200 bg-amber-50 text-amber-800'
+                        : 'border-slate-200 bg-white text-slate-600'
+                }`}
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    autoSaveState === 'saving'
+                      ? 'animate-pulse bg-td-blue'
+                      : autoSaveState === 'saved'
+                        ? 'bg-emerald-500'
+                        : autoSaveState === 'error'
+                          ? 'bg-amber-500'
+                          : 'bg-slate-400'
+                  }`}
+                />
+                {autoSaveState === 'saving'
+                  ? '自動儲存中…'
+                  : autoSaveState === 'saved'
+                    ? `已自動儲存${lastAutoSavedTime ? ` (${lastAutoSavedTime})` : ''}`
+                    : autoSaveState === 'error'
+                      ? '已暫存本機'
+                      : '即時自動儲存'}
+              </div>
+            )}
+            <a
+              href="/my-tasks/budget"
+              className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-td-blue hover:bg-blue-50"
+            >
+              ← 返回待辦
+            </a>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-start justify-between gap-3 px-5 py-4">
+          <div>
+            <h1 className="text-xl font-bold text-td-blue-dark">{name}</h1>
+            {description && <p className="mt-1 text-sm text-td-muted">{description}</p>}
+          </div>
+          {mode.kind === 'create' && (
+            <div
+              role="status"
+              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium ${
+                autoSaveState === 'saving'
+                  ? 'border-blue-200 bg-blue-50 text-td-blue'
+                  : autoSaveState === 'saved'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                    : autoSaveState === 'error'
+                      ? 'border-amber-200 bg-amber-50 text-amber-800'
+                      : 'border-slate-200 bg-slate-50 text-slate-600'
+              }`}
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  autoSaveState === 'saving'
+                    ? 'animate-pulse bg-td-blue'
+                    : autoSaveState === 'saved'
+                      ? 'bg-emerald-500'
+                      : autoSaveState === 'error'
+                        ? 'bg-amber-500'
+                        : 'bg-slate-400'
+                }`}
+              />
+              {autoSaveState === 'saving'
+                ? '正在即時自動儲存…'
+                : autoSaveState === 'saved'
+                  ? `已即時儲存${lastAutoSavedTime ? ` (${lastAutoSavedTime})` : ''} · 關閉後重開可繼續填寫`
+                  : autoSaveState === 'error'
+                    ? '已暫存於本機（待連線同步）'
+                    : '支援即時自動儲存 · 關閉視窗不遺失'}
             </div>
           )}
-          <div className="grid gap-x-6 gap-y-5 px-5 py-5 md:grid-cols-4">
+        </div>
+      )}
+      {clonedFromFormNumber && (
+        <div className="mx-5 mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50/80 px-4 py-2.5 text-xs text-td-blue-dark">
+          <span>
+            📋 已從舊單據 <strong className="mono-case font-semibold">{clonedFromFormNumber}</strong> 複製表單內容，請確認並修改需要調整的欄位後再送出或暫存草稿。
+          </span>
+        </div>
+      )}
+      {draftNotice && (
+        <div className="mx-5 mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs text-emerald-900">
+          <span>✓ {draftNotice}</span>
+          <button type="button" onClick={() => setDraftNotice(null)} className="text-emerald-700 hover:underline">
+            關閉
+          </button>
+        </div>
+      )}
+      {mode.kind === 'create' && draftList.length > 0 && formKey !== 'budget-request' && (
+        <section className="border-t border-dashed border-td-border bg-amber-50/40 px-5 py-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold text-amber-900">
+              📝 您在此表單有 {draftList.length} 筆已暫存草稿（點擊即可載入繼續編輯，送出後自動清除）：
+            </p>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {draftList.map((d) => {
+              const isCurrent = activeDraftId === d.id;
+              return (
+                <div
+                  key={d.id}
+                  className={`inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-xs ${
+                    isCurrent
+                      ? 'border-td-blue bg-blue-50 font-semibold text-td-blue-dark'
+                      : 'border-amber-200 bg-white text-slate-700'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => onLoadUserDraft(d)}
+                    className="hover:text-td-blue hover:underline"
+                  >
+                    {isCurrent ? '● 編輯中：' : ''}
+                    {d.title}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDeleteUserDraft(d.id)}
+                    className="text-slate-400 hover:text-red-600"
+                    title="刪除此草稿"
+                    aria-label={`刪除草稿 ${d.title}`}
+                  >
+                    ✕
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+      {pickApplicant && (
+        <section className="border-t border-dashed border-td-border px-5 py-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <label htmlFor="applicant" className="text-sm font-semibold text-td-blue-dark">
+              申請人（經辦人代為申請）
+              <Req />
+            </label>
+            {filingScope?.hasAssignments && (
+              <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-td-blue">
+                已授權經辦人
+              </span>
+            )}
+          </div>
+          <p className="mt-1 text-xs text-td-muted">
+            以經辦人身分替其他同仁或部門申請時，請先篩選部門或直接改選申請人；代填送出後，系統會先送交「申請人本人簽核確認」，再依序送交部門主管、預算負責人、總經理、董事長（逾 10 萬）簽核。
+          </p>
+          <div className="mt-2 grid gap-3 md:grid-cols-2">
+            {filingScope && selectableDepartments.length > 1 && (
+              <div>
+                <label htmlFor="applicant-dept-filter" className="block text-xs font-medium text-td-muted">
+                  依部門篩選申請人
+                </label>
+                <select
+                  id="applicant-dept-filter"
+                  value={selectedDeptFilter}
+                  onChange={(e) => {
+                    const deptId = e.target.value;
+                    setSelectedDeptFilter(deptId);
+                    if (deptId !== 'ALL') {
+                      const firstInDept = filingScope.applicants.find((a) => a.departmentId === deptId);
+                      if (firstInDept) setApplicantId(firstInDept.id);
+                    }
+                  }}
+                  className={`${white} mt-1`}
+                >
+                  <option value="ALL">全部可代填部門（{filingScope.applicants.length} 人）</option>
+                  {selectableDepartments.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div>
+              {filingScope && selectableDepartments.length > 1 && (
+                <label htmlFor="applicant" className="block text-xs font-medium text-td-muted">
+                  選擇申請人
+                </label>
+              )}
+              <select
+                id="applicant"
+                value={applicantId}
+                onChange={(e) => setApplicantId(e.target.value)}
+                className={`${white} mt-1`}
+              >
+                {applicantChoices.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </section>
+      )}
+      {schema.sections
+        .filter((section) => !(formKey === 'budget-request' && section.id === 'basic'))
+        .map((section) => {
+          const isBudgetItemsSection = formKey === 'budget-request' && section.id === 'itemsSection';
+          return (
+        <section
+          key={section.id}
+          className={isBudgetItemsSection ? '' : 'border-t border-dashed border-td-border'}
+        >
+          {!isBudgetItemsSection && (section.title || section.description) && (
+            <div className="px-5 pt-4">
+              {section.title && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="font-semibold text-td-blue-dark">{section.title}</h2>
+                </div>
+              )}
+              {section.description && (
+                <p className="mt-1 text-xs text-td-muted">{section.description}</p>
+              )}
+            </div>
+          )}
+          <div className={`grid gap-x-6 gap-y-5 px-5 ${isBudgetItemsSection ? 'py-3' : 'py-5'} md:grid-cols-4`}>
             {section.fields
-              .filter((f) => visible.has(f.id))
-              .map((f) => (
+              .filter((f) => visible.has(f.id) && !(formKey === 'budget-request' && f.id === 'reason'))
+              .map((f) => {
+                const isLockedBudgetHeaderField =
+                  formKey === 'budget-request' &&
+                  (f.id === 'fiscalYear' ||
+                    f.id === 'budgetScope' ||
+                    f.id === 'targetDepartmentId' ||
+                    f.id === 'targetProjectId' ||
+                    f.id === 'ownerEmployeeId');
+                const hideBudgetTableLabel = formKey === 'budget-request' && f.type === 'table' && f.id === 'items';
+
+                let lockedBudgetDisplay = '';
+                if (isLockedBudgetHeaderField) {
+                  if (f.id === 'fiscalYear') {
+                    const fyStr = String(values.fiscalYear ?? '116').trim();
+                    const fyNum = Number(fyStr);
+                    const west = Number.isFinite(fyNum) && fyNum > 0 && fyNum < 1911 ? fyNum + 1911 : fyNum;
+                    lockedBudgetDisplay = Number.isFinite(west) && west > 1911 ? `${fyStr} 年度（${west} 年度）` : `${fyStr} 年度`;
+                  } else if (f.id === 'budgetScope') {
+                    lockedBudgetDisplay =
+                      values.budgetScope === 'project'
+                        ? '專案預算表（營收／產品專案預算表）'
+                        : '部門預算表（年度部門預算表）';
+                  } else if (f.id === 'targetDepartmentId') {
+                    lockedBudgetDisplay =
+                      options.departments.find((d) => d.id === String(values.targetDepartmentId ?? ''))?.label ||
+                      '—';
+                  } else if (f.id === 'targetProjectId') {
+                    lockedBudgetDisplay =
+                      options.projects.find((p) => p.id === String(values.targetProjectId ?? ''))?.label ||
+                      '—';
+                  } else if (f.id === 'ownerEmployeeId') {
+                    lockedBudgetDisplay =
+                      options.employees.find((e) => e.id === String(values.ownerEmployeeId ?? ''))?.label ||
+                      '—';
+                  }
+                }
+
+                return (
                 <div key={f.id} className={SPAN[f.width]}>
                   {f.type === 'notice' ? (
                     <div className="rounded border border-td-border bg-slate-50 px-4 py-3">
@@ -693,17 +1436,31 @@ export function CustomForm({
                     </div>
                   ) : (
                     <>
-                      <p id={`field-${f.id}`} className="text-sm font-semibold text-td-blue-dark">
-                        {f.type === 'attachments'
-                          ? attachmentFieldLabel(
-                              normalizeAttachmentFieldLabel(f.label).replace(/[（(].*$/, '').trim() || '附件'
-                            )
-                          : f.label}
-                        {required.has(f.id) && <Req />}
-                      </p>
-                      {f.help && <p className="mt-1 text-xs text-td-muted">{f.help}</p>}
-                      <div className="mt-2">
-                        {f.type === 'attachments' ? (
+                      {!hideBudgetTableLabel && (
+                        <p id={`field-${f.id}`} className="text-sm font-semibold text-td-blue-dark">
+                          {f.type === 'attachments'
+                            ? attachmentFieldLabel(
+                                normalizeAttachmentFieldLabel(f.label).replace(/[（(].*$/, '').trim() || '附件'
+                              )
+                            : f.label}
+                          {!isLockedBudgetHeaderField && required.has(f.id) && <Req />}
+                        </p>
+                      )}
+                      {!isLockedBudgetHeaderField && !hideBudgetTableLabel && f.help && (
+                        <p className="mt-1 text-xs text-td-muted">{f.help}</p>
+                      )}
+                      <div className={hideBudgetTableLabel ? '' : 'mt-2'}>
+                        {isLockedBudgetHeaderField ? (
+                          <div
+                            className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-100/90 px-3 py-2 text-sm font-semibold text-slate-800 select-none"
+                            title="此欄位由財會部門派發預算編列單時核定，填報人不可更動"
+                          >
+                            <span className="truncate">{lockedBudgetDisplay}</span>
+                            <span className="shrink-0 rounded bg-slate-200/90 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                              🔒 財會核定
+                            </span>
+                          </div>
+                        ) : f.type === 'attachments' ? (
                           <div className="space-y-3">
                             {mode.kind === 'ai_draft' && (
                               <DraftAttachedFiles
@@ -721,6 +1478,18 @@ export function CustomForm({
                               maxFiles={f.maxFiles ?? undefined}
                             />
                           </div>
+                        ) : formKey === 'budget-request' && f.type === 'table' && f.id === 'items' ? (
+                          <BudgetRequestItemsEditor
+                            field={f}
+                            value={(values[f.id] as TableValue) ?? { rows: [] }}
+                            onChange={(v) => set(f.id)(v)}
+                            errors={errors}
+                            options={options}
+                            fiscalYear={String(values.fiscalYear ?? '')}
+                            budgetScope={String(values.budgetScope ?? 'department')}
+                            targetDepartmentId={String(values.targetDepartmentId ?? '')}
+                            targetProjectId={String(values.targetProjectId ?? '')}
+                          />
                         ) : (
                           <FieldInput
                             field={f}
@@ -741,10 +1510,12 @@ export function CustomForm({
                     </>
                   )}
                 </div>
-              ))}
+                );
+              })}
           </div>
         </section>
-      ))}
+          );
+        })}
       {mode.kind === 'ai_draft' && (
         <div className="flex flex-wrap items-center justify-end gap-3 border-t border-td-border px-5 py-4">
           {error && <p className="mr-auto text-sm text-red-600">{error}</p>}
@@ -768,10 +1539,20 @@ export function CustomForm({
       {mode.kind !== 'preview' && mode.kind !== 'ai_draft' && (
         <div className="flex flex-wrap items-center justify-end gap-3 border-t border-td-border px-5 py-4">
           {error && <p className="mr-auto text-sm text-red-600">{error}</p>}
-          <button type="button" onClick={() => router.back()} className="btn-secondary" disabled={submitting}>
+          <button type="button" onClick={() => router.back()} className="btn-secondary" disabled={submitting || savingDraft}>
             取消
           </button>
-          <button type="button" onClick={onSubmit} className="btn-primary" disabled={submitting}>
+          {mode.kind === 'create' && (
+            <button
+              type="button"
+              onClick={onSaveUserDraft}
+              className="btn-secondary"
+              disabled={submitting || savingDraft}
+            >
+              {savingDraft ? '暫存中…' : activeDraftId ? '更新草稿' : '暫存草稿'}
+            </button>
+          )}
+          <button type="button" onClick={onSubmit} className="btn-primary" disabled={submitting || savingDraft}>
             {submitting ? '送出中…' : { create: '送出申請', update: '儲存修改', resubmit: '重新送出' }[mode.kind]}
           </button>
         </div>

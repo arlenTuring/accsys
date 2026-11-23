@@ -8,8 +8,11 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { getSubmissionPanelAction } from '@/lib/ai-chat/actions';
-import { approveCustomFormStep, returnCustomFormStep } from '@/lib/custom-forms/actions';
+import {
+  approveSubmissionFromChatAction,
+  getSubmissionPanelAction,
+  returnSubmissionFromChatAction,
+} from '@/lib/ai-chat/actions';
 
 export type SubmissionActionPhase =
   | 'idle'
@@ -75,7 +78,7 @@ export function SubmissionActionsProvider({ children }: { children: ReactNode })
         patch(submissionId, { phase: 'idle', error: resolved.error });
         return resolved;
       }
-      const result = await approveCustomFormStep(submissionId, resolved.version);
+      const result = await approveSubmissionFromChatAction(submissionId, resolved.version);
       if (!result.ok) {
         patch(submissionId, { phase: 'idle', error: result.error });
         return { ok: false as const, error: result.error };
@@ -96,7 +99,7 @@ export function SubmissionActionsProvider({ children }: { children: ReactNode })
         patch(submissionId, { phase: 'idle', error: resolved.error });
         return resolved;
       }
-      const result = await returnCustomFormStep(submissionId, trimmed, resolved.version);
+      const result = await returnSubmissionFromChatAction(submissionId, trimmed, resolved.version);
       if (!result.ok) {
         patch(submissionId, { phase: 'idle', error: result.error });
         return { ok: false as const, error: result.error };

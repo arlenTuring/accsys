@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState, useTransition } from 'react';
+import { confirmDialog } from '@/app/components/dialog';
 import {
   abandonDraftAction,
   duplicateDraftAction,
@@ -117,14 +118,20 @@ export function ApplicationsDraftLibrary() {
                   <button
                     type="button"
                     className="text-xs underline"
-                    onClick={() =>
+                    onClick={async () => {
+                      const ok = await confirmDialog({
+                        title: `放棄草稿「${item.title}」？`,
+                        message: '確定放棄此草稿？',
+                        confirmLabel: '放棄',
+                        tone: 'danger',
+                      });
+                      if (!ok) return;
                       start(async () => {
-                        if (!window.confirm('確定放棄此草稿？')) return;
                         const res = await abandonDraftAction({ draftId: item.id });
                         if (!res.ok) setError(res.error);
                         else reload(0);
-                      })
-                    }
+                      });
+                    }}
                   >
                     放棄
                   </button>

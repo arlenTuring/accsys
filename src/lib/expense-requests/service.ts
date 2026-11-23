@@ -15,7 +15,7 @@ import {
 } from '@/lib/db/schema';
 import { STANDALONE_EXPENSE_REQUEST_LIMIT } from '@/lib/expense-requests/constants';
 import { validateExpenseRequestInput } from '@/lib/expense-requests/validate';
-import { addCents, centsToDecimal, MoneyError, toCents, type Cents } from '@/lib/money';
+import { addCents, centsToDecimal, MoneyError, multiplyCents, toCents, type Cents } from '@/lib/money';
 import { computeDefaultExpectedPaymentDate, computePaymentBatchDate } from '@/lib/procurement/payment-batch';
 import { taipeiToday } from '@/lib/taipei-date';
 import { isIsoDate } from '@/lib/travel-expenses/validate';
@@ -59,7 +59,7 @@ export type CreateExpenseRequestInput = PaymentInput & {
 };
 export type CreateStandaloneExpenseRequestInput = PaymentInput & {
   budgetCodeId: string;
-  items: { description: string; amount: number | string }[];
+  items: { description: string; quantity?: number | string; amount: number | string }[];
   idempotencyKey: string;
 };
 export type EditExpenseRequestInput = PaymentInput & { includedSourceItemIds: string[]; expectedVersion: number };
@@ -267,13 +267,24 @@ export function createStandaloneExpenseRequest(
         if (typeof i.description !== 'string' || i.description.trim() === '' || i.description.length > 500) {
           abort('validation', `第 ${idx + 1} 項的說明不正確`);
         }
-        let amount: Cents;
+        const rawQty = i.quantity === undefined || i.quantity === null || String(i.quantity).trim() === '' ? '1' : String(i.quantity).trim();
+        const qty = Number(rawQty);
+        if (!Number.isInteger(qty) || qty < 1) {
+          abort('validation', `第 ${idx + 1} 項的數量必須是大於 0 的整數`);
+        }
+        let unitAmount: Cents;
         try {
-          amount = toCents(i.amount);
+          unitAmount = toCents(i.amount);
         } catch (err) {
           abort('validation', `第 ${idx + 1} 項的金額：${(err as MoneyError).message}`);
         }
-        if (amount! <= 0) abort('validation', `第 ${idx + 1} 項的金額必須大於 0`);
+        if (unitAmount! <= 0) abort('validation', `第 ${idx + 1} 項的金額必須大於 0`);
+        let amount: Cents;
+        try {
+          amount = multiplyCents(unitAmount!, qty);
+        } catch (err) {
+          abort('validation', `第 ${idx + 1} 項的小計：${(err as MoneyError).message}`);
+        }
         return { id: String(idx), purchaseOrderItemId: null, description: i.description, amount: amount! };
       });
       const total = addCents(...lines.map((l) => l.amount));

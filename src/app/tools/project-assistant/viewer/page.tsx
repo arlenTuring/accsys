@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { getSystemFeatureFlags } from '@/lib/feature-flags/service';
 import { TrackpadZoomFrame } from '../trackpad-zoom-frame';
 
 export default async function FullPageFileViewerPage({
@@ -7,9 +8,15 @@ export default async function FullPageFileViewerPage({
 }: {
   searchParams: Promise<{ src?: string; title?: string; mode?: string }>;
 }) {
-  const employee = await getCurrentEmployee();
+  const [employee, featureFlags] = await Promise.all([
+    getCurrentEmployee(),
+    getSystemFeatureFlags(),
+  ]);
   if (!employee) {
     redirect('/login?returnTo=/tools/project-assistant');
+  }
+  if (!featureFlags.project_assistant) {
+    redirect('/tools/project-assistant');
   }
 
   const params = await searchParams;

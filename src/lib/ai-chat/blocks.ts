@@ -265,6 +265,135 @@ export function dedupeDraftReferenceBlocks(blocks: AiMessageBlock[]): AiMessageB
   return out;
 }
 
+/**
+ * Same assistant turn may invoke multiple tools (e.g. list_my_approval_queue +
+ * get_case_overview + get_form_approval_status) that each emit a submission_card
+ * for the exact same formId / formNumber. Coalesce them into a single canonical
+ * submission_card with the richest available metadata so a document never renders
+ * multiple times or in degraded form.
+ */
+export function dedupeSubmissionCardBlocks(blocks: AiMessageBlock[]): AiMessageBlock[] {
+  type SubCard = Extract<AiMessageBlock, { kind: 'submission_card' }>;
+  const isGenericName = (s: string | undefined) =>
+    !s || s === '申請單' || s === '單據' || s === '表單';
+
+  const pickBetterFormName = (a: string, b: string): string => {
+    if (isGenericName(a) && !isGenericName(b)) return b;
+    if (!isGenericName(a) && isGenericName(b)) return a;
+    return b.length > a.length ? b : a;
+  };
+
+  const pickBetterSummary = (a: SubCard, b: SubCard, resolvedName: string): string => {
+    const aIsEcho = isGenericName(a.summary) || a.summary === a.formName || a.summary === resolvedName;
+    const bIsEcho = isGenericName(b.summary) || b.summary === b.formName || b.summary === resolvedName;
+    if (aIsEcho && !bIsEcho) return b.summary;
+    if (!aIsEcho && bIsEcho) return a.summary;
+    return b.summary.length > a.summary.length ? b.summary : a.summary;
+  };
+
+  const mergeTwoCards = (a: SubCard, b: SubCard): SubCard => {
+    const formName = pickBetterFormName(a.formName, b.formName);
+    const summary = pickBetterSummary(a, b, formName);
+    const applicantName = a.applicantName || b.applicantName;
+    const canApprove = Boolean(a.canApprove || b.canApprove);
+    const mode = canApprove ? 'approve' : a.mode === 'approve' || b.mode === 'approve' ? 'approve' : a.mode;
+    const formKey =
+      a.formKey && a.formKey !== 'custom'
+        ? a.formKey
+        : b.formKey && b.formKey !== 'custom'
+          ? b.formKey
+          : a.formKey || b.formKey;
+    const href =
+      a.href && !a.href.startsWith('/f/_/') && !a.href.startsWith('/f/custom/')
+        ? a.href
+        : b.href && !b.href.startsWith('/f/_/') && !b.href.startsWith('/f/custom/')
+          ? b.href
+          : a.href || b.href;
+
+    const lineMap = new Map<string, string>();
+    for (const l of [...a.lines, ...b.lines]) {
+      const existing = lineMap.get(l.label);
+      if (!existing) {
+        lineMap.set(l.label, l.value);
+      } else if (l.label === '摘要') {
+        const existingIsEcho = isGenericName(existing) || existing === a.formName || existing === b.formName || existing === formName;
+        const nextIsEcho = isGenericName(l.value) || l.value === a.formName || l.value === b.formName || l.value === formName;
+        if (existingIsEcho && !nextIsEcho) {
+          lineMap.set(l.label, l.value);
+        } else if (!existingIsEcho && !nextIsEcho && l.value.length > existing.length) {
+          lineMap.set(l.label, l.value);
+        }
+      } else if (l.value.length > existing.length) {
+        lineMap.set(l.label, l.value);
+      }
+    }
+    if (applicantName && !lineMap.has('申請人')) {
+      lineMap.set('申請人', applicantName);
+    }
+    if (summary) {
+      lineMap.set('摘要', summary);
+    }
+
+    const orderedLabels = ['申請人', '摘要', '狀態', '目前關卡', '已等待', '金額', '退回原因', '核准時間'];
+    const mergedLines: Array<{ label: string; value: string }> = [];
+    for (const lbl of orderedLabels) {
+      const val = lineMap.get(lbl);
+      if (val) {
+        mergedLines.push({ label: lbl, value: val });
+        lineMap.delete(lbl);
+      }
+    }
+    for (const [lbl, val] of lineMap.entries()) {
+      mergedLines.push({ label: lbl, value: val });
+    }
+
+    const progress =
+      a.progress?.steps?.length
+        ? a.progress
+        : b.progress?.steps?.length
+          ? b.progress
+          : a.progress ?? b.progress;
+
+    return {
+      ...a,
+      formKey,
+      formName,
+      summary,
+      applicantName,
+      canApprove,
+      mode,
+      href,
+      lines: mergedLines,
+      progress,
+    };
+  };
+
+  const mergedByKey = new Map<string, SubCard>();
+  const keyOf = (b: SubCard) => b.formId || b.formNumber;
+
+  for (const b of blocks) {
+    if (b.kind !== 'submission_card') continue;
+    const k = keyOf(b);
+    const prev = mergedByKey.get(k);
+    mergedByKey.set(k, prev ? mergeTwoCards(prev, b) : b);
+  }
+  if (mergedByKey.size === 0) return blocks;
+
+  const placed = new Set<string>();
+  const out: AiMessageBlock[] = [];
+  for (const b of blocks) {
+    if (b.kind !== 'submission_card') {
+      out.push(b);
+      continue;
+    }
+    const k = keyOf(b);
+    if (placed.has(k)) continue;
+    placed.add(k);
+    out.push(mergedByKey.get(k)!);
+  }
+  return out;
+}
+
 /** Validate and normalize blocks from tool output or stored JSON. Drops invalid entries. */
 export function sanitizeBlocks(raw: unknown, conversationId: string): AiMessageBlock[] {
   if (!Array.isArray(raw)) return [];
@@ -659,7 +788,7 @@ export function sanitizeBlocks(raw: unknown, conversationId: string): AiMessageB
         break;
     }
   }
-  return dedupeDraftReferenceBlocks(out).slice(0, 20);
+  return dedupeSubmissionCardBlocks(dedupeDraftReferenceBlocks(out)).slice(0, 20);
 }
 
 function cryptoRandomId(): string {

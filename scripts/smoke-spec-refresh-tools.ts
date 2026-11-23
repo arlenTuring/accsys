@@ -25,9 +25,9 @@ async function main() {
 
   const db = getDb();
 
-  // Prefer the logged-in GM used in browser smoke (呂孟耿).
+  // Prefer an admin employee used in browser smoke.
   let emp =
-    (await db.select().from(employees).where(eq(employees.name, '呂孟耿')).limit(1))[0] ?? null;
+    (await db.select().from(employees).where(eq(employees.role, 'admin')).limit(1))[0] ?? null;
   if (!emp) {
     const [any] = await db
       .select({ id: aiApplicationDrafts.ownerEmployeeId })

@@ -1,21 +1,21 @@
 import Link from 'next/link';
 import { STATUS_BADGE, STATUS_LABELS } from '@/app/components/form-labels';
 import { SubmissionList } from '@/app/f/submission-list';
-import { replacementFor } from '@/lib/custom-forms/legacy';
+import { UNIFIED_EXPENSE_CLAIM_KEY } from '@/lib/custom-forms/migrated/expense-claims';
+import { TRAVEL_EXPENSE_FORM } from '@/lib/custom-forms/migrated/travel';
 import { getMySubmissions } from '@/lib/custom-forms/queries';
-import { EDITIONS, EXPENSE_EDITIONS } from '@/lib/expense-claims/editions';
+import { EDITIONS } from '@/lib/expense-claims/editions';
 import { getMyExpenseClaims } from '@/lib/expense-claims/queries';
 import { FORM_ROUTE_PREFIX } from '@/lib/procurement/form-registry';
 
 const routeOf = (edition: keyof typeof EDITIONS) => FORM_ROUTE_PREFIX[EDITIONS[edition].formType];
 
 export default async function ExpenseClaimsPage() {
-  const [items, newItems, replacements] = await Promise.all([
+  const [items, expenseSubmissions] = await Promise.all([
     getMyExpenseClaims(),
-    getMySubmissions({ legacyFormType: EXPENSE_EDITIONS.map((e) => EDITIONS[e].formType) }),
-    Promise.all(EXPENSE_EDITIONS.map((e) => replacementFor(EDITIONS[e].formType))),
+    getMySubmissions({ categoryKey: 'expense' }),
   ]);
-  const newHref = (i: number) => (replacements[i] ? `/f/${replacements[i]}/new` : `${routeOf(EXPENSE_EDITIONS[i])}/new`);
+  const newItems = expenseSubmissions.filter((s) => s.key !== TRAVEL_EXPENSE_FORM.key);
   return (
     <main className="page-shell">
       <section className="mb-6 flex flex-wrap items-end justify-between gap-4">
@@ -23,15 +23,13 @@ export default async function ExpenseClaimsPage() {
           <p className="section-title">費用報支</p>
           <h1 className="page-title">我的費用申請</h1>
           <p className="page-subtitle">
-            部門版以部門預算報支（單筆一萬元以下的小額支出用「部門版_單筆一萬元以下」），產品／營收專案版以對應的專案預算報支；上傳憑證後依預算來源跑線上簽核。
+            已整併為單一《費用申請單》：以兩層式選單選擇「部門預算、產品專案或營收專案」與「預算科目（自動帶出預算負責人）」。採購／購置類單筆 NT$ 30,000（三萬元）以下可直接報支，超過三萬元才提示請先開立請購單。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {EXPENSE_EDITIONS.map((e, i) => (
-            <Link key={e} href={newHref(i)} className="btn-primary">
-              + {EDITIONS[e].label}
-            </Link>
-          ))}
+          <Link href={`/f/${UNIFIED_EXPENSE_CLAIM_KEY}/new`} className="btn-primary">
+            + 新增費用申請單
+          </Link>
         </div>
       </section>
 

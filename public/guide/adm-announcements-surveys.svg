@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" fill="none">
+  <rect width="960" height="540" rx="16" fill="#F8FAFC"/>
+  <rect width="64" height="540" fill="#0F172A"/>
+  <rect x="10" y="290" width="44" height="44" rx="12" fill="#7C3AED"/>
+  <text x="32" y="317" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="12" font-weight="bold">管理</text>
+  <rect x="64" y="0" width="196" height="540" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="82" y="42" fill="#0F172A" font-family="sans-serif" font-size="15" font-weight="bold">系統管理 · 資訊發布</text>
+  <rect x="76" y="68" width="172" height="36" rx="8" fill="#EFF6FF" stroke="#3B82F6"/>
+  <text x="90" y="91" fill="#1D4ED8" font-family="sans-serif" font-size="13" font-weight="bold">公告管理 (/admin/announcements)</text>
+  <rect x="76" y="112" width="172" height="36" rx="8" fill="#ECFDF5" stroke="#10B981"/>
+  <text x="90" y="135" fill="#065F46" font-family="sans-serif" font-size="13" font-weight="bold">規章管理 (/admin/regulations)</text>
+  <rect x="76" y="156" width="172" height="36" rx="8" fill="#FEF3C7" stroke="#F59E0B"/>
+  <text x="90" y="179" fill="#B45309" font-family="sans-serif" font-size="13" font-weight="bold">問卷管理 (/admin/surveys)</text>
+  <rect x="286" y="32" width="644" height="148" rx="14" fill="#FFFFFF" stroke="#CBD5E1"/>
+  <text x="310" y="64" fill="#0F172A" font-family="sans-serif" font-size="16" font-weight="bold">公告管理（/admin/announcements）：發布置頂公告與必讀通知</text>
+  <rect x="310" y="82" width="180" height="40" rx="8" fill="#2563EB"/>
+  <text x="400" y="107" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="13" font-weight="bold">＋ 新增公司公告</text>
+  <text x="510" y="107" fill="#334155" font-family="sans-serif" font-size="13">支援設定「置頂」、「分類標籤」、上傳附件與排程上架</text>
+  <text x="310" y="152" fill="#64748B" font-family="sans-serif" font-size="12">• 發布後全體同仁點擊左上角公司 Logo 或詢問 AI 助手即可即時查閱。</text>
+  <rect x="286" y="196" width="644" height="148" rx="14" fill="#FFFFFF" stroke="#CBD5E1"/>
+  <text x="310" y="228" fill="#0F172A" font-family="sans-serif" font-size="16" font-weight="bold">規章管理（/admin/regulations）：維護管理辦法或從 Google Drive 批次匯入</text>
+  <rect x="310" y="246" width="220" height="40" rx="8" fill="#059669"/>
+  <text x="420" y="271" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="13" font-weight="bold">從 Google Drive 匯入規章</text>
+  <text x="548" y="271" fill="#334155" font-family="sans-serif" font-size="13">更新後自動同步至 AI 助手規章知識庫</text>
+  <text x="310" y="316" fill="#64748B" font-family="sans-serif" font-size="12">• 同仁詢問 AI「出差住宿費上限多少？」時，AI 會直接引用此處最新發布的規章條文。</text>
+  <rect x="286" y="360" width="644" height="152" rx="14" fill="#FFFFFF" stroke="#CBD5E1"/>
+  <text x="310" y="392" fill="#0F172A" font-family="sans-serif" font-size="16" font-weight="bold">問卷管理（/admin/surveys）：建立內部具名問卷、追蹤未填名單與匯出統計</text>
+  <rect x="310" y="410" width="180" height="40" rx="8" fill="#D97706"/>
+  <text x="400" y="435" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="13" font-weight="bold">＋ 建立內部問卷</text>
+  <rect x="506" y="410" width="190" height="40" rx="8" fill="#F8FAFC" stroke="#64748B"/>
+  <text x="601" y="435" text-anchor="middle" fill="#334155" font-family="sans-serif" font-size="13" font-weight="bold">檢視統計／匯出 CSV</text>
+  <text x="310" y="482" fill="#64748B" font-family="sans-serif" font-size="12">• 發布後未填同仁的「我的待辦」會亮起紅點提醒，管理員可即時查看填答率。</text>
+  <circle cx="310" cy="82" r="16" fill="#DC2626" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="310" y="87" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="bold">1</text>
+  <circle cx="310" cy="246" r="16" fill="#DC2626" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="310" y="251" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="bold">2</text>
+  <circle cx="310" cy="410" r="16" fill="#DC2626" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="310" y="415" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="bold">3</text>
+</svg>

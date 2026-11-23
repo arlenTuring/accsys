@@ -106,9 +106,19 @@ async function listChildFolders(
  * - Returns the list of subfolders inside `browseFolderId` (defaults to the file's current parent folder or `root`)
  */
 export async function GET(request: NextRequest) {
-  const employee = await getCurrentEmployee();
+  const { getSystemFeatureFlags } = await import('@/lib/feature-flags/service');
+  const [employee, featureFlags] = await Promise.all([
+    getCurrentEmployee(),
+    getSystemFeatureFlags(),
+  ]);
   if (!employee) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+  if (!featureFlags.project_assistant) {
+    return NextResponse.json(
+      { error: '專案助手功能目前於全公司系統授權中為未開放／已關閉狀態' },
+      { status: 403 }
+    );
   }
 
   const { searchParams } = new URL(request.url);
@@ -199,9 +209,19 @@ export async function GET(request: NextRequest) {
  *    Moves the file to `targetFolderId` in the user's Google Drive.
  */
 export async function POST(request: NextRequest) {
-  const employee = await getCurrentEmployee();
+  const { getSystemFeatureFlags } = await import('@/lib/feature-flags/service');
+  const [employee, featureFlags] = await Promise.all([
+    getCurrentEmployee(),
+    getSystemFeatureFlags(),
+  ]);
   if (!employee) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+  if (!featureFlags.project_assistant) {
+    return NextResponse.json(
+      { ok: false, error: '專案助手功能目前於全公司系統授權中為未開放／已關閉狀態' },
+      { status: 403 }
+    );
   }
 
   const tokens = await getCandidateDriveWriteTokens(employee.email);

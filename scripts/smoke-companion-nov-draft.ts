@@ -17,7 +17,7 @@ async function main() {
   const { desc, and } = await import('drizzle-orm');
 
   const db = getDb();
-  const emp = (await db.select().from(employees).where(eq(employees.name, '呂孟耿')).limit(1))[0];
+  const emp = (await db.select().from(employees).where(eq(employees.role, 'admin')).limit(1))[0];
   if (!emp) throw new Error('employee missing');
   const [row] = await db
     .select()

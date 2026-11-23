@@ -12,7 +12,9 @@ import { getTravelExpenseDetail } from '@/lib/travel-expenses/queries';
 import { ROLE_LABELS, STATUS_BADGE, STATUS_LABELS } from '@/app/components/form-labels';
 import { ApprovalActions } from '@/app/components/approval-actions';
 import { ApprovalTimeline } from '@/app/components/approval-timeline';
+import { DetailQueueNav } from '@/app/components/detail-queue-nav';
 import { PrintButton } from '@/app/components/print-button';
+import { getDetailQueueNavigation } from '@/lib/applications/my-applications';
 
 const money = (v: string | number) => Number(v).toLocaleString('zh-TW', { maximumFractionDigits: 2 });
 const day = (iso: string) => iso.replaceAll('-', '/');
@@ -40,7 +42,11 @@ export default async function TravelExpenseDetailPage({
   const uploadFailed = parseUploadFailed((await searchParams).uploadFailed);
   const detail = await getTravelExpenseDetail(id);
   if (!detail) notFound();
-  const [employee, attachments] = await Promise.all([getCurrentEmployee(), getAttachments('travel_expense', id)]);
+  const [employee, attachments, queueNav] = await Promise.all([
+    getCurrentEmployee(),
+    getAttachments('travel_expense', id),
+    getDetailQueueNavigation(id),
+  ]);
   const attachmentExtras = await loadAttachmentPanelExtras(attachments.map((a) => a.id));
 
   const currentStep =
@@ -56,13 +62,12 @@ export default async function TravelExpenseDetailPage({
 
   return (
     <main className="page-shell space-y-5">
-      <nav className="text-sm text-td-muted print:hidden">
-        <Link href="/travel-expenses" className="hover:text-td-blue">
-          出差報支
-        </Link>
-        <span className="mx-2">/</span>
-        <span className="text-td-blue-dark">{detail.caseNumber}</span>
-      </nav>
+      <DetailQueueNav
+        currentId={detail.id}
+        currentCaseNumber={detail.caseNumber}
+        currentFormLabel="出差報告暨旅費報支單"
+        preloadedNav={queueNav}
+      />
 
       <section className="flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -73,7 +78,7 @@ export default async function TravelExpenseDetailPage({
           </p>
         </div>
         <div className="flex flex-wrap gap-2 print:hidden">
-          {detail.status === 'approved' && <PrintButton label="列印報支單" />}
+          <PrintButton label="列印報支單 / PDF" />
           {canSelfEdit && (
             <Link href={`/travel-expenses/${detail.id}/edit`} className="btn-secondary">
               編輯
@@ -160,7 +165,7 @@ export default async function TravelExpenseDetailPage({
                 <th className={th}>起站</th>
                 <th className={th}>迄站</th>
                 <th className={`${th} w-16`}>里程</th>
-                <th className={th}>摘要</th>
+                <th className={th}>備註說明(起-迄點、油資補助公里數等)</th>
                 <th className={`${th} w-20`}>幣別</th>
                 <th className={`${th} w-24`}>金額</th>
                 <th className={`${th} w-20`}>匯率</th>
@@ -226,6 +231,12 @@ export default async function TravelExpenseDetailPage({
           version={detail.version}
           onApprove={approveTravelExpenseStep}
           onReturn={returnTravelExpenseStep}
+          nextHref={queueNav.nextItem?.href ?? null}
+          nextLabel={
+            queueNav.nextItem
+              ? `${queueNav.nextItem.formLabel} ${queueNav.nextItem.caseNumber}`
+              : null
+          }
         />
       )}
     </main>

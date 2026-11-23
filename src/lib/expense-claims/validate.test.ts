@@ -14,7 +14,7 @@ const base = (patch: Partial<ExpenseClaimInput> = {}): ExpenseClaimInput => ({
   payeeSupplierId: '',
   expectedPaymentDate: '2026-10-30',
   paymentMethod: 'transfer',
-  remittanceInfo: '台灣銀行 林小明 012345678901',
+  remittanceInfo: '台灣銀行 阮振瑋 012345678901',
   ...patch,
 });
 const parse = (patch: Partial<ExpenseClaimInput> = {}) => parseExpenseClaimInput('department', base(patch), TODAY);

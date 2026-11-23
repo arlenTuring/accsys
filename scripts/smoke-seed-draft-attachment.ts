@@ -1,5 +1,5 @@
 /**
- * Ensure the latest travel-expense draft for 呂孟耿 has one tiny PNG attachment.
+ * Ensure the latest travel-expense draft for admin employee has one tiny PNG attachment.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
@@ -21,7 +21,7 @@ async function main() {
   const { listDraftFiles } = await import('../src/lib/ai-chat/attach-staged');
 
   const db = getDb();
-  const emp = (await db.select().from(employees).where(eq(employees.name, '呂孟耿')).limit(1))[0];
+  const emp = (await db.select().from(employees).where(eq(employees.role, 'admin')).limit(1))[0];
   if (!emp) throw new Error('employee missing');
   const [draft] = await db
     .select()

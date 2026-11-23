@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, or } from 'drizzle-orm';
 import { getMyAcceptances } from '@/lib/acceptances/queries';
 import { getMyApprovalQueueAll, type ApprovalQueueItem } from '@/lib/approvals/queue';
 import { getMyAssetTransfers } from '@/lib/asset-transfers/queries';
@@ -44,10 +44,20 @@ export type InboxItem = {
   snapshot?: import('./approval-snapshot').ApprovalSnapshot | null;
 };
 
+export type ApprovedNoticeItem = {
+  id: string;
+  formType: string;
+  formId: string;
+  caseNumber: string;
+  message: string;
+  createdAt: string;
+};
+
 export type AssistantInbox = {
   fetchedAt: string;
   pendingApprovals: InboxItem[];
   myInProgress: InboxItem[];
+  recentlyApproved?: ApprovedNoticeItem[];
   loadError: string | null;
   hasMorePending: boolean;
   hasMoreMine: boolean;
@@ -76,9 +86,12 @@ function asQueueItem(q: ApprovalQueueItem): InboxItem {
 }
 
 /** Forms of mine an approver acted on today, finished ones included. */
-async function countProgressToday(mine: InboxItem[]): Promise<number> {
+async function countProgressToday(mine: InboxItem[]): Promise<{
+  progressToday: number;
+  recentlyApproved: ApprovedNoticeItem[];
+}> {
   const employee = await getCurrentEmployee();
-  if (!employee) return 0;
+  if (!employee) return { progressToday: 0, recentlyApproved: [] };
   const dayStart = new Date(`${taipeiToday()}T00:00:00+08:00`);
   const db = getDb();
   const touched = new Set<string>();
@@ -91,17 +104,38 @@ async function countProgressToday(mine: InboxItem[]): Promise<number> {
     for (const a of acted) touched.add(`${a.formType}:${a.formId}`);
   }
   const outcomes = await db
-    .select({ formType: notifications.formType, formId: notifications.formId })
+    .select({
+      id: notifications.id,
+      type: notifications.type,
+      formType: notifications.formType,
+      formId: notifications.formId,
+      caseNumber: notifications.caseNumber,
+      message: notifications.message,
+      createdAt: notifications.createdAt,
+    })
     .from(notifications)
     .where(
       and(
         eq(notifications.recipientEmployeeId, employee.id),
         inArray(notifications.type, ['request_returned', 'request_approved']),
-        gte(notifications.createdAt, dayStart)
+        or(gte(notifications.createdAt, dayStart), eq(notifications.isRead, false))
       )
-    );
+    )
+    .orderBy(desc(notifications.createdAt))
+    .limit(20);
   for (const o of outcomes) touched.add(`${o.formType}:${o.formId}`);
-  return touched.size;
+  const recentlyApproved: ApprovedNoticeItem[] = outcomes
+    .filter((o) => o.type === 'request_approved')
+    .slice(0, 8)
+    .map((o) => ({
+      id: o.id,
+      formType: o.formType,
+      formId: o.formId,
+      caseNumber: o.caseNumber,
+      message: o.message,
+      createdAt: o.createdAt instanceof Date ? o.createdAt.toISOString() : String(o.createdAt),
+    }));
+  return { progressToday: touched.size, recentlyApproved };
 }
 
 function applySnapshot(item: InboxItem, snapshot: ApprovalSnapshot | null): InboxItem {
@@ -268,7 +302,7 @@ export async function loadAssistantInbox(limitPerSection = 20): Promise<Assistan
     const pendingSlice = pendingAll.slice(0, limitPerSection);
     const mineSlice = mineAll.slice(0, limitPerSection);
 
-    const [pendingEnriched, mineEnriched, progressToday, facts] = await Promise.all([
+    const [pendingEnriched, mineEnriched, progressInfo, facts] = await Promise.all([
       enrichWithSnapshots(pendingSlice),
       enrichWithSnapshots(mineSlice),
       countProgressToday(mineAll),
@@ -283,13 +317,14 @@ export async function loadAssistantInbox(limitPerSection = 20): Promise<Assistan
       fetchedAt,
       pendingApprovals: pendingEnriched.map((p) => withSummary(applySnapshot(p, p.snapshot))),
       myInProgress: mineEnriched.map((p) => withSummary(applySnapshot(p, p.snapshot))),
+      recentlyApproved: progressInfo.recentlyApproved,
       loadError: null,
       hasMorePending: pendingAll.length > limitPerSection,
       hasMoreMine: mineAll.length > limitPerSection,
       pendingTotal: pendingAll.length,
       mineTotal: mineAll.length,
       returnedTotal: mineAll.filter((m) => m.status === 'returned').length,
-      progressToday,
+      progressToday: progressInfo.progressToday,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'inbox_load_failed';
@@ -297,6 +332,7 @@ export async function loadAssistantInbox(limitPerSection = 20): Promise<Assistan
       fetchedAt,
       pendingApprovals: [],
       myInProgress: [],
+      recentlyApproved: [],
       loadError: message.slice(0, 200),
       hasMorePending: false,
       hasMoreMine: false,

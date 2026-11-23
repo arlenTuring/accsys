@@ -14,6 +14,7 @@ import {
   employeeGroups,
   employeeJobRoles,
   employees,
+  filingAgents,
   formDefinitions,
   jobRoles,
   orgLevels,
@@ -25,6 +26,7 @@ import {
   delegationsOverlap,
   parseDelegation,
   parseDepartment,
+  parseFilingAgent,
   parseGroup,
   parseJobRole,
   parseLevel,
@@ -635,3 +637,78 @@ export function revokeDelegation(actor: OrgActor, id: unknown) {
     return {};
   });
 }
+
+// ---------------------------------------------------------------------------
+// Filing Agents (經辦人設定：指定某人為特定人員或特定部門的經辦人)
+// ---------------------------------------------------------------------------
+
+export function createFilingAgent(actor: OrgActor, raw: unknown) {
+  return run(actor, 'filing_agent.create', async (tx, actorId) => {
+    const v = need(parseFilingAgent(raw));
+    await activeEmployee(tx, v.agentEmployeeId, '經辦人');
+    if (v.targetType === 'employee' && v.targetEmployeeId) {
+      await activeEmployee(tx, v.targetEmployeeId, '被代辦人員');
+      const [dup] = await tx
+        .select({ id: filingAgents.id })
+        .from(filingAgents)
+        .where(
+          and(
+            eq(filingAgents.agentEmployeeId, v.agentEmployeeId),
+            eq(filingAgents.targetType, 'employee'),
+            eq(filingAgents.targetEmployeeId, v.targetEmployeeId)
+          )
+        );
+      if (dup) abort('conflict', '此人員已設定過相同的經辦人');
+    } else if (v.targetType === 'department' && v.targetDepartmentId) {
+      const [dept] = await tx
+        .select({ id: departments.id, active: departments.active })
+        .from(departments)
+        .where(eq(departments.id, v.targetDepartmentId));
+      if (!dept || !dept.active) abort('validation', '選擇的被代辦部門不存在或已停用');
+      const [dup] = await tx
+        .select({ id: filingAgents.id })
+        .from(filingAgents)
+        .where(
+          and(
+            eq(filingAgents.agentEmployeeId, v.agentEmployeeId),
+            eq(filingAgents.targetType, 'department'),
+            eq(filingAgents.targetDepartmentId, v.targetDepartmentId)
+          )
+        );
+      if (dup) abort('conflict', '此部門已設定過相同的經辦人');
+    }
+    const [row] = await tx
+      .insert(filingAgents)
+      .values({
+        agentEmployeeId: v.agentEmployeeId,
+        targetType: v.targetType,
+        targetEmployeeId: v.targetEmployeeId,
+        targetDepartmentId: v.targetDepartmentId,
+        note: v.note || null,
+        createdByEmployeeId: actorId,
+      })
+      .returning({ id: filingAgents.id });
+    await audit(tx, actorId, 'org.filing_agent.created', 'filing_agent', row.id, { ...v });
+    return { id: row.id };
+  });
+}
+
+export function deleteFilingAgent(actor: OrgActor, id: unknown) {
+  return run(actor, 'filing_agent.delete', async (tx, actorId) => {
+    const [existing] = await tx
+      .select()
+      .from(filingAgents)
+      .where(eq(filingAgents.id, needId(id)))
+      .for('update');
+    if (!existing) abort('not_found', '找不到這筆經辦人設定');
+    await tx.delete(filingAgents).where(eq(filingAgents.id, existing.id));
+    await audit(tx, actorId, 'org.filing_agent.deleted', 'filing_agent', existing.id, {
+      agentEmployeeId: existing.agentEmployeeId,
+      targetType: existing.targetType,
+      targetEmployeeId: existing.targetEmployeeId,
+      targetDepartmentId: existing.targetDepartmentId,
+    });
+    return {};
+  });
+}
+

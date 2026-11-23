@@ -9,7 +9,8 @@ import { parseDefinition } from '../definition';
 import { allFields } from '../schema';
 import { validateSubmission, type TableValue } from '../validate';
 import { MIGRATION_BATCHES } from '.';
-import { EXPENSE_CLAIM_FORMS } from './expense-claims';
+import { EXPENSE_CLAIM_FORMS, UNIFIED_EXPENSE_CLAIM_FORM, UNIFIED_EXPENSE_CLAIM_KEY } from './expense-claims';
+import { UNIFIED_CAPPED_CATEGORIES, UNIFIED_UNCAPPED_CATEGORIES } from '@/lib/expense-claims/editions';
 
 // Parity checklist for batch 3: each designer definition accepts and rejects
 // the same submissions as parseExpenseClaimInput for its edition, converts
@@ -212,3 +213,84 @@ describe('批次 3 approval chain matches buildChain', () => {
     });
   }
 });
+
+describe('第 13、15 條：五合一通用《費用申請單》(expense-claim) 與三萬元以下直開規則（超過三萬元才提示）', () => {
+  const r = parseDefinition(UNIFIED_EXPENSE_CLAIM_FORM.schema, UNIFIED_EXPENSE_CLAIM_FORM.flow);
+  if (!r.ok) throw new Error(r.errors.join('；'));
+  const { schema } = r;
+
+  it('uses key expense-claim, does not lock budgetScope (supports 2-tier picker across dept/product/revenue)', () => {
+    expect(UNIFIED_EXPENSE_CLAIM_FORM.key).toBe(UNIFIED_EXPENSE_CLAIM_KEY);
+    expect(UNIFIED_EXPENSE_CLAIM_FORM.name).toBe('費用申請單');
+    const budgetField = allFields(schema).find((f) => f.id === 'budgetCodeId');
+    expect(budgetField?.type === 'budget_code' && budgetField.budgetScope).toBeUndefined();
+  });
+
+  it('enforces NT$ 30,000 cap on purchase/equipment/material categories (allows 10,000 ~ 30,000 without prompt, blocks > 30,000) and allows > 30,000 on general operational categories', () => {
+    for (const cat of UNIFIED_CAPPED_CATEGORIES) {
+      const okAt15k = validateSubmission(
+        schema,
+        {
+          budgetCodeId: BUDGET,
+          items: { rows: [{ category: cat, description: '小額採購（一萬五）', quantity: 1, currency: 'TWD', exchangeRate: '1', amount: '15000' }], total: null },
+          remark: '',
+          payeeType: 'applicant',
+          expectedPaymentDate: TODAY,
+          paymentMethod: 'transfer',
+          remittanceInfo: '台銀 0123456789',
+        },
+        TODAY
+      );
+      expect(okAt15k.ok, `${cat} at 15,000 should pass`).toBe(true);
+
+      const okAt30k = validateSubmission(
+        schema,
+        {
+          budgetCodeId: BUDGET,
+          items: { rows: [{ category: cat, description: '三萬以內採購', quantity: 1, currency: 'TWD', exchangeRate: '1', amount: '30000' }], total: null },
+          remark: '',
+          payeeType: 'applicant',
+          expectedPaymentDate: TODAY,
+          paymentMethod: 'transfer',
+          remittanceInfo: '台銀 0123456789',
+        },
+        TODAY
+      );
+      expect(okAt30k.ok, `${cat} at 30,000 should pass`).toBe(true);
+
+      const failOver30k = validateSubmission(
+        schema,
+        {
+          budgetCodeId: BUDGET,
+          items: { rows: [{ category: cat, description: '超過三萬採購', quantity: 2, currency: 'TWD', exchangeRate: '1', amount: '18000' }], total: null },
+          remark: '',
+          payeeType: 'applicant',
+          expectedPaymentDate: TODAY,
+          paymentMethod: 'transfer',
+          remittanceInfo: '台銀 0123456789',
+        },
+        TODAY
+      );
+      expect(failOver30k.ok, `${cat} over 30,000 should be blocked and prompt`).toBe(false);
+    }
+
+    for (const cat of UNIFIED_UNCAPPED_CATEGORIES.slice(0, 6)) {
+      const okOver30k = validateSubmission(
+        schema,
+        {
+          budgetCodeId: BUDGET,
+          items: { rows: [{ category: cat, description: '一般日常營業費用', quantity: 1, currency: 'TWD', exchangeRate: '1', amount: '85000' }], total: null },
+          remark: '',
+          payeeType: 'supplier',
+          payeeSupplierId: SUPPLIER,
+          expectedPaymentDate: TODAY,
+          paymentMethod: 'transfer',
+          remittanceInfo: '台銀 0123456789',
+        },
+        TODAY
+      );
+      expect(okOver30k.ok, `${cat} at 85,000 should pass`).toBe(true);
+    }
+  });
+});
+

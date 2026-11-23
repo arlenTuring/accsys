@@ -1,13 +1,23 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { getSystemFeatureFlags } from '@/lib/feature-flags/service';
 import { syncProjectFilesFromDrive } from '@/lib/projects/live-drive-sync';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
-  const employee = await getCurrentEmployee();
+  const [employee, featureFlags] = await Promise.all([
+    getCurrentEmployee(),
+    getSystemFeatureFlags(),
+  ]);
   if (!employee) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+  if (!featureFlags.project_assistant) {
+    return NextResponse.json(
+      { error: '專案助手功能目前未獲授權或已關閉，禁止存取。' },
+      { status: 403 }
+    );
   }
 
   const projectId = request.nextUrl.searchParams.get('projectId')?.trim();

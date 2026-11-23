@@ -1,6 +1,14 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getVertexAccessToken } from '@/lib/ai-chat/auth';
+import {
+  compactConversationHistory,
+  computeBackoffDelayMs,
+  estimateTokensFromText,
+  isRetryableHttpStatus,
+  sleepWithAbort,
+} from '@/lib/ai-chat/harness';
+import { TurnTrace } from '@/lib/ai-chat/trace';
 import type { DocAnchor } from '@/lib/projects/doc-selection';
 import { writeAnchoredDocument } from '@/lib/projects/anchored-doc-write';
 import { loadAiChatConfig } from '@/lib/ai-chat/config';
@@ -126,6 +134,20 @@ export type CoAuthorOperation =
       renumberSections?: boolean;
     };
 
+export type HistoricalNavigationTarget = {
+  kind: 'project' | 'file' | 'folder';
+  year: number;
+  yearGroupLabel: string;
+  projectId: string;
+  projectCode: string;
+  projectName: string;
+  fileId?: string;
+  fileName?: string;
+  fileKind?: string;
+  historyPath: string;
+  summary?: string;
+};
+
 export type CoAuthorResponse = {
   intent?: 'edit' | 'discuss';
   /** One-line description of an applied paragraph edit, shown instead of repeating the full text. */
@@ -151,6 +173,12 @@ export type CoAuthorResponse = {
     matchedProjectCodes: string[];
     autoOptimized: boolean;
   };
+  historicalLocations?: HistoricalNavigationTarget[];
+  exactHistoricalMatchFound?: boolean;
+  matchedProjectCodes?: string[];
+  suggestedOptions?: string[];
+  /** Concise conversation title (8–20 chars) summarized from the conversation content. */
+  conversationTitle?: string;
 };
 
 const COMPANY_ADMIN_KEYWORDS = [
@@ -397,6 +425,341 @@ function formatGraphRetrievalContextForPrompt(graphResult: GraphQueryResult): st
   return lines.join('\n\n');
 }
 
+function buildHistoricalLocationsFromGraph(
+  graphResult: GraphQueryResult,
+  groups: HistoricalYearGroup[],
+  preferMediaOrLocation = false
+): HistoricalNavigationTarget[] {
+  const targets: HistoricalNavigationTarget[] = [];
+  const seenKeys = new Set<string>();
+
+  const projectLookup = new Map<
+    string,
+    { proj: HistoricalProject; year: number; yearGroupLabel: string }
+  >();
+  for (const g of groups) {
+    for (const p of g.projects) {
+      projectLookup.set(p.id, { proj: p, year: g.year, yearGroupLabel: g.label });
+    }
+  }
+
+  for (const f of graphResult.matchedFiles) {
+    const projId = f.node.projectId;
+    if (!projId) continue;
+    const found = projectLookup.get(projId);
+    if (!found) continue;
+    const rawFileId = f.node.id.startsWith('file:') ? f.node.id.slice(5) : undefined;
+    if (!rawFileId) continue;
+    const key = `file:${projId}:${rawFileId}`;
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+
+    const historyPath =
+      f.node.historyPathTrail && f.node.historyPathTrail.length > 0
+        ? f.node.historyPathTrail.join(' > ')
+        : `歷史文件 > ${found.yearGroupLabel} > [${found.proj.code}] ${found.proj.name} > ${f.node.label}`;
+
+    targets.push({
+      kind: f.node.kind === 'folder' ? 'folder' : 'file',
+      year: found.year,
+      yearGroupLabel: found.yearGroupLabel,
+      projectId: found.proj.id,
+      projectCode: found.proj.code,
+      projectName: found.proj.name,
+      fileId: rawFileId,
+      fileName: f.node.label,
+      fileKind: f.node.fileKind,
+      historyPath,
+      summary: f.node.summary,
+    });
+  }
+
+  for (const p of graphResult.matchedProjects) {
+    const projId = p.node.projectId ?? (p.node.id.startsWith('project:') ? p.node.id.slice(8) : undefined);
+    if (!projId) continue;
+    const found = projectLookup.get(projId);
+    if (!found) continue;
+    const key = `proj:${projId}`;
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+
+    targets.push({
+      kind: 'project',
+      year: found.year,
+      yearGroupLabel: found.yearGroupLabel,
+      projectId: found.proj.id,
+      projectCode: found.proj.code,
+      projectName: found.proj.name,
+      historyPath: `歷史文件 > ${found.yearGroupLabel} > [${found.proj.code}] ${found.proj.name}`,
+      summary: found.proj.summary,
+    });
+  }
+
+  if (preferMediaOrLocation) {
+    targets.sort((a, b) => {
+      const scoreItem = (t: HistoricalNavigationTarget) => {
+        let s = 0;
+        if (t.fileKind === 'image') s += 5;
+        if (t.fileName && /照片|圖片|圖面|影片|點交|架構圖|img_|vid_|\.jpg|\.png/i.test(t.fileName)) s += 4;
+        if (t.kind === 'file' || t.kind === 'folder') s += 2;
+        return s;
+      };
+      return scoreItem(b) - scoreItem(a);
+    });
+  }
+
+  return targets.slice(0, 6);
+}
+
+/**
+ * Resolves the most relevant historical file/folder/project navigation targets for a matched project
+ * by recursively scoring every node in `p.files` against the user prompt, AI reply, and knowledge graph.
+ * Never blindly picks `p.files[0]`!
+ */
+function resolveProjectHistoricalNavigationTargets(params: {
+  group: HistoricalYearGroup;
+  project: HistoricalProject;
+  promptText: string;
+  replyText: string;
+  graphResult: GraphQueryResult;
+}): HistoricalNavigationTarget[] {
+  const { group, project, promptText, replyText, graphResult } = params;
+  const promptLower = promptText.toLowerCase();
+  const replyLower = replyText.toLowerCase();
+  const combinedLower = `${promptLower}\n${replyLower}`;
+
+  type FlattenedNode = {
+    item: import('@/lib/projects/historical-projects-data').HistoricalDriveItem;
+    ancestorNames: string[];
+    historyPath: string;
+    score: number;
+  };
+
+  const candidates: FlattenedNode[] = [];
+  const graphScoreByFileId = new Map<string, number>();
+  const graphScoreByName = new Map<string, number>();
+  for (const mf of graphResult.matchedFiles) {
+    if (mf.node.projectId && mf.node.projectId !== project.id) continue;
+    const rawId = mf.node.id.startsWith('file:') ? mf.node.id.slice(5) : mf.node.id;
+    graphScoreByFileId.set(rawId, mf.score);
+    graphScoreByName.set(mf.node.label.toLowerCase(), mf.score);
+  }
+
+  const genericIgnoreTokens = new Set([
+    project.code.toLowerCase(),
+    'tpe',
+    'adrts',
+    'turing',
+    'drive',
+    'docx',
+    'doc',
+    'pdf',
+    'xlsx',
+    'xls',
+    'pptx',
+    'ppt',
+    'jpg',
+    'png',
+    'final',
+    'mod',
+  ]);
+
+  const walk = (
+    items: import('@/lib/projects/historical-projects-data').HistoricalDriveItem[],
+    ancestors: string[]
+  ) => {
+    for (const item of items) {
+      const historyPath = [
+        '歷史文件',
+        group.label,
+        `[${project.code}] ${project.name}`,
+        ...ancestors,
+        item.name,
+      ].join(' > ');
+
+      const nameLower = item.name.toLowerCase();
+      const stemLower = nameLower.replace(/\.[a-z0-9]{2,5}$/i, '').trim();
+      const noteLower = (item.sizeOrNote ?? '').toLowerCase();
+      const takeawaysLower = (item.keyTakeaways ?? []).join(' ').toLowerCase();
+      const ancestorsLower = ancestors.join(' ').toLowerCase();
+      const itemCorpus = `${nameLower} ${noteLower} ${takeawaysLower} ${ancestorsLower}`;
+
+      let score = 0;
+
+      // 1. Direct filename or stem match in user prompt or AI reply
+      if (promptLower.includes(nameLower)) {
+        score += 180;
+      } else if (replyLower.includes(nameLower)) {
+        score += 150;
+      } else if (stemLower.length >= 4 && promptLower.includes(stemLower)) {
+        score += 140;
+      } else if (stemLower.length >= 4 && replyLower.includes(stemLower)) {
+        score += 115;
+      }
+
+      // 2. Knowledge Graph file score
+      const gScore =
+        graphScoreByFileId.get(item.id) ?? graphScoreByName.get(nameLower) ?? 0;
+      if (gScore > 0) {
+        score += Math.min(45, Math.round(gScore * 2.5));
+      }
+
+      // 3. Domain & document-type intent matching
+      if (
+        /計畫書|計劃書|創新實驗計畫|實證運行計畫|正式計畫名稱|申請計畫|申請書/.test(
+          combinedLower
+        )
+      ) {
+        if (/創新實驗計畫書|計畫書|計劃書|申請書/.test(nameLower)) {
+          score += 75;
+        }
+        if (/申請計劃書|申請計畫書/.test(ancestorsLower)) {
+          score += 35;
+        }
+        if (
+          combinedLower.includes('台北市信義路雙向公車專用道夜間自駕巴士實證運行計畫') &&
+          itemCorpus.includes('台北市信義路雙向公車專用道夜間自駕巴士實證運行計畫')
+        ) {
+          score += 70;
+        }
+      }
+
+      if (/展延/.test(combinedLower)) {
+        if (/展延計畫書/.test(nameLower) && /計畫書|計劃書/.test(combinedLower)) {
+          score += 85;
+        } else if (/同意展延公函|展延公文/.test(nameLower) && /公函|公文|核准|同意/.test(combinedLower)) {
+          score += 85;
+        } else if (/展延/.test(nameLower) && promptLower.includes('展延')) {
+          score += 45;
+        }
+      }
+
+      if (/合作意向書|mou/i.test(combinedLower) && /合作意向書|mou/i.test(nameLower)) {
+        score += 90;
+      }
+      if (/核定函|備查|公函|公文/.test(combinedLower) && /核定函|備查|公函|公文/.test(nameLower)) {
+        score += 80;
+      }
+      if (/簡報|投影片|ppt/i.test(combinedLower) && (item.kind === 'presentation' || /簡報|\.pptx?$/i.test(nameLower))) {
+        score += 60;
+      }
+      if (/經費|預算|分工|報價|試算表/.test(combinedLower) && (item.kind === 'spreadsheet' || /經費|預算|分工|報價|\.xlsx?$/i.test(nameLower))) {
+        score += 65;
+      }
+      if (/sop|標準作業程序|規範|全景圖台/i.test(combinedLower) && /sop|標準作業程序|規範|全景圖台/i.test(nameLower)) {
+        score += 80;
+      }
+      if (/照片|圖片|施工照|完工照|車牌照片/.test(combinedLower) && (item.kind === 'image' || /照片|圖片|完工照/.test(nameLower))) {
+        score += 75;
+      }
+      if (/紅綠燈|號誌|tsp|spat/i.test(combinedLower) && /紅綠燈|號誌|tsp|spat/i.test(itemCorpus)) {
+        score += 80;
+      }
+      if (/mqtt|websocket|ros\s*bridge|車聯網|雙層通訊|訂閱|v2x|02584k|行車管理系統/i.test(combinedLower)) {
+        if (/mqtt|websocket|ros\s*bridge|車聯網|雙層通訊|02584k|行車管理系統|營運全景圖台|紅綠燈檢測模組/i.test(itemCorpus)) {
+          score += 85;
+        }
+      }
+      if (/保險|保單/.test(combinedLower) && /保險|保單/.test(nameLower)) {
+        score += 75;
+      }
+      if (/通報單|人工介入/.test(combinedLower) && /通報|人工介入/.test(itemCorpus)) {
+        score += 75;
+      }
+
+      // 4. Token overlap between stem and prompt/reply
+      const tokens = stemLower
+        .split(/[\s_\-()（）「」『』、，。：:·.+0-9]+/)
+        .map((t) => t.trim())
+        .filter((t) => t.length >= 2 && !genericIgnoreTokens.has(t));
+      for (const tok of tokens) {
+        if (promptLower.includes(tok)) {
+          score += 28;
+        } else if (replyLower.includes(tok)) {
+          score += 12;
+        }
+      }
+
+      // 5. Prefer previewable files over folders when matched
+      if (item.kind !== 'folder' && score > 0) {
+        score += 22;
+      }
+
+      candidates.push({
+        item,
+        ancestorNames: ancestors,
+        historyPath,
+        score,
+      });
+
+      if (item.children && item.children.length > 0) {
+        walk(item.children, [...ancestors, item.name]);
+      }
+    }
+  };
+
+  walk(project.files, []);
+  candidates.sort((a, b) => b.score - a.score);
+
+  const best = candidates[0];
+  if (best && best.score >= 35) {
+    const results: HistoricalNavigationTarget[] = [
+      {
+        kind: best.item.kind === 'folder' ? 'folder' : 'file',
+        year: group.year,
+        yearGroupLabel: group.label,
+        projectId: project.id,
+        projectCode: project.code,
+        projectName: project.name,
+        fileId: best.item.id,
+        fileName: best.item.name,
+        fileKind: best.item.kind,
+        historyPath: best.historyPath,
+        summary: best.item.sizeOrNote ?? project.summary,
+      },
+    ];
+
+    // If a second distinct previewable file was also strongly matched, include it too
+    const second = candidates.find(
+      (c) =>
+        c.item.id !== best.item.id &&
+        c.item.kind !== 'folder' &&
+        c.score >= 110
+    );
+    if (second) {
+      results.push({
+        kind: 'file',
+        year: group.year,
+        yearGroupLabel: group.label,
+        projectId: project.id,
+        projectCode: project.code,
+        projectName: project.name,
+        fileId: second.item.id,
+        fileName: second.item.name,
+        fileKind: second.item.kind,
+        historyPath: second.historyPath,
+        summary: second.item.sizeOrNote ?? project.summary,
+      });
+    }
+    return results;
+  }
+
+  // Fallback: if no specific file matched (general project overview inquiry),
+  // return the project root rather than blindly picking `p.files[0]`.
+  return [
+    {
+      kind: 'project',
+      year: group.year,
+      yearGroupLabel: group.label,
+      projectId: project.id,
+      projectCode: project.code,
+      projectName: project.name,
+      historyPath: `歷史文件 > ${group.label} > [${project.code}] ${project.name}`,
+      summary: project.summary,
+    },
+  ];
+}
+
 function buildAuthorizedProjectsDigest(groups: HistoricalYearGroup[]): {
   digestText: string;
   allProjects: HistoricalProject[];
@@ -406,19 +769,36 @@ function buildAuthorizedProjectsDigest(groups: HistoricalYearGroup[]): {
     '【公司基本資料：台灣智慧駕駛股份有限公司 (Turing Drive Inc.)】',
     '- 核心定位：專注於 L4 低速與特定場域自動駕駛系統研發、軟硬體系統整合、車隊遠端監控與行控平台（OCC / FMS）之台灣領先自駕技術公司。',
     '- 核心技術：Autoware 多感測器融合定位（3D LiDAR NDT + RTK-GNSS + 車輪里程計 + IMU）、底盤線控（Drive-by-Wire）雙迴路安全連鎖、5G 低延遲遠端接管（Teleoperation / NSC Remote）、月台門（PSD）與智慧號誌 V2X 連動、ISO 26262 / ISO 21434 / ISO 21448 安全合規架構。',
-    '- 2019–2026 歷年專案實績庫（已依當前使用者權限過濾）：',
+    '- ACCSYS 專案助手「歷史文件」分頁完整歸檔索引（已依當前使用者權限過濾；當使用者詢問專案、檔案或照片位置時，必須嚴格依據以下「歷史文件 > 年份群組 > 專案名稱 > 資料夾/檔案名稱」回答，嚴禁捏造不存在的雲端硬碟路徑或檔名！）：',
   ];
 
+  const collectNestedFilePaths = (
+    items: import('@/lib/projects/historical-projects-data').HistoricalDriveItem[],
+    trail: string[]
+  ): string[] => {
+    const out: string[] = [];
+    for (const item of items) {
+      const currentPath = [...trail, item.name].join(' > ');
+      const note = item.sizeOrNote ? `（${item.sizeOrNote}）` : '';
+      out.push(`      - ${currentPath}${note}`);
+      if (item.children && item.children.length > 0) {
+        out.push(...collectNestedFilePaths(item.children, [...trail, item.name]));
+      }
+    }
+    return out;
+  };
+
   for (const g of groups) {
-    const projSummaries = g.projects
-      .map(
-        (p) =>
-          `  * [${g.year} | ${p.code}] ${p.name}（${p.period}）：${p.summary}（代表檔案：${p.highlights
-            .slice(0, 2)
-            .join('、')}）`
-      )
-      .join('\n');
-    lines.push(projSummaries);
+    lines.push(`\n  ■ 歷史文件 > ${g.label}（${g.tagline}）：`);
+    for (const p of g.projects) {
+      lines.push(
+        `    * 歷史文件 > ${g.label} > [${p.code}] ${p.name}（期間：${p.period}｜部門：${p.department}）：${p.summary}`
+      );
+      const fileLines = collectNestedFilePaths(p.files, []);
+      if (fileLines.length > 0) {
+        lines.push(...fileLines.slice(0, 14));
+      }
+    }
   }
 
   return {
@@ -574,6 +954,28 @@ const COAUTHOR_RESPONSE_SCHEMA = {
     reply: {
       type: 'STRING',
     },
+    exactHistoricalMatchFound: {
+      type: 'BOOLEAN',
+      description:
+        '當使用者詢問某張照片、檔案或專案在歷史文件中的位置時：若歷史文件索引中確實收錄了「同一張照片／同一個檔案／同一個專案」則設為 true；若沒有收錄該特定照片或檔案，必須設為 false。',
+    },
+    matchedProjectCodes: {
+      type: 'ARRAY',
+      items: { type: 'STRING' },
+      description:
+        '僅當 exactHistoricalMatchFound 為 true（或使用者明確點選查詢特定歷史專案）時，填入確切命中的專案代碼（如 GF-15MASS、T3-2026）；若未找到完全相符的照片或檔案，必須回傳空陣列 []。',
+    },
+    suggestedOptions: {
+      type: 'ARRAY',
+      items: { type: 'STRING' },
+      description:
+        '當歷史文件中找不到該特定照片／檔案，或回答完畢後，提供 2 到 3 個讓使用者直接點擊提問的後續建議選項（每個選項 10～28 字，例如「查詢公司其他高爾夫球車相關歷史專案」、「依此圖片風格生成一張專案概念圖」、「將此圖片的設計重點整理成技術規格段落」）。',
+    },
+    conversationTitle: {
+      type: 'STRING',
+      description:
+        '根據本次對話內容與使用者意圖，產生一個 8～18 字的精簡對話標題（例如「高爾夫球車概念圖歸檔查詢」、「第一章淨零轉型政策依據強化」、「新增資安檢查時程項目」）。',
+    },
     operations: {
       type: 'ARRAY',
       items: {
@@ -648,6 +1050,10 @@ const COAUTHOR_WORD_EDIT_RESPONSE_SCHEMA = {
       type: 'STRING',
       description: '一句話（40 字內）說明這次對框選段落做了哪些修改，例如「新增 2050 淨零路徑與數位韌性政策依據」。intent 為 discuss 時留空。',
     },
+    conversationTitle: {
+      type: 'STRING',
+      description: '根據本次對話內容與修改主題，產生一個 8～18 字的精簡對話標題。',
+    },
     operations: {
       type: 'ARRAY',
       items: {
@@ -673,7 +1079,9 @@ async function tryVertexStructuredCoAuthor(
   projectsDigest: string,
   graphResult: GraphQueryResult,
   followUp: FollowUpResolution,
-  retryConstraintText?: string
+  retryConstraintText?: string,
+  outerSignal?: AbortSignal,
+  trace?: TurnTrace
 ): Promise<{ response: CoAuthorResponse | null; errorReason?: string }> {
   try {
     const cfg = loadAiChatConfig();
@@ -699,16 +1107,37 @@ async function tryVertexStructuredCoAuthor(
       req.activeDoc?.selectionAnchor?.paragraphs?.length && !isWholeDocMode
     );
 
+    const rawHistoryTurns = (req.history ?? []).map((h) => ({
+      role: (h.role === 'user' ? 'user' : 'model') as 'user' | 'model',
+      text: h.text,
+    }));
+    const compactedHistory = compactConversationHistory(rawHistoryTurns, {
+      maxContextTokens: 28_000,
+      compactionThresholdRatio: 0.7,
+      currentTurnTokens: estimateTokensFromText(req.prompt),
+    });
+
     const recentHistoryText =
-      req.history && req.history.length > 0 && !isTargetedParagraphEdit
-        ? `【近期對話脈絡】\n${req.history
+      compactedHistory.compacted.length > 0 && !isTargetedParagraphEdit
+        ? `【近期對話脈絡】\n${compactedHistory.compacted
             .map((h) => `${h.role === 'user' ? '使用者' : '專案助手'}：${h.text}`)
             .join('\n')}\n\n`
         : '';
 
+    const combinedHistoryAndPrompt = `${req.prompt} ${(req.history ?? []).map((h) => h.text).join(' ')}`;
+    const isHistoricalOrLocationLookup =
+      /位置|在哪|哪裡|路徑|資料夾|歷史文件|找.*檔|找.*照|找.*圖|哪個專案|哪一份|放在哪|歸檔|球車|高爾夫|golface|揚昇|綠通|青埔|信義|高雄港|htc|宮古島|新加坡|t3|桃機|照片|圖片|圖檔/i.test(
+        combinedHistoryAndPrompt
+      ) ||
+      (req.referenceFiles ?? []).some((f) => f.mimeType.startsWith('image/'));
+
     const isTuringDriveRelated =
       !isTargetedParagraphEdit &&
-      (/台灣智慧駕駛|台智駕|turing\s*drive|歷年專案|歷史專案|公司實績|過去實績/i.test(req.prompt) ||
+      (!req.activeDoc ||
+        isHistoricalOrLocationLookup ||
+        /台灣智慧駕駛|台智駕|turing\s*drive|歷年專案|歷史專案|公司實績|過去實績/i.test(
+          combinedHistoryAndPrompt
+        ) ||
         /T3-2026|桃園.*機場|自駕|VTMS|AITS/i.test(
           `${req.activeDoc?.projectCode ?? ''} ${req.activeDoc?.projectName ?? ''} ${req.activeDoc?.title ?? ''}`
         ));
@@ -805,10 +1234,14 @@ async function tryVertexStructuredCoAuthor(
             .join('\n')
         : '';
 
+    // KV Cache Prefix Protection (M2):
+    // Keep systemInstruction 100% static across turns and sessions so Vertex AI
+    // prefix cache hits at the top of the prompt. Dynamic project digests & target labels
+    // are placed inside userParts below.
     const systemInstruction = `你是專業的「專案協作助手」，專門協助團隊共同撰寫、查證與修改 Word 計畫書／技術文件、Excel 時程與預算表、PPT 專案簡報。
-只用繁體中文，語氣清楚精簡。
+請依使用者提問的語言（繁體中文、English 或 日本語）回覆與撰寫內容；若為中文請一律使用繁體中文，語氣清楚精簡。
 
-${effectiveProjectsDigest}【重要規則】：
+【重要規則】：
 0. 【提問／查證／討論模式 vs. 改稿寫入模式（極重要，嚴禁問 A 答 B）】：
    - 當使用者是在「詢問問題、詢問資料來源／新聞出處、討論方向、請求分析或檢視」（例如：「請告訴我剛剛那些段落你是引用了哪裡的新聞」、「請問資料來源是什麼」、「為什麼這樣寫」、「你覺得還有什麼可以優化的」）時：
      * 請務必針對使用者的問題本身直接、精準回答！若使用者詢問新聞或資料出處，請透過 Google Search 查證並明確列出真實的新聞媒體名稱、發布日期、事件內容或公開年報／法說會資訊（若原文中提及的對象在公開網路上查無正式合作新聞，也請據實向使用者說明查證結果）。
@@ -820,15 +1253,24 @@ ${effectiveProjectsDigest}【重要規則】：
 1. 若使用者上傳了「參考資料」（圖片、照片、影片、PDF、Word、Excel、CSV、TXT 等）：
    - 你必須在 reply 的開頭先明確註記已收到的參考檔案名稱，並大致分析該來源資料的「內容大綱／重點摘要」跟使用者報告。
    - 接著依照使用者的指令（或該參考資料與目前開啟檔案的關聯），自動產生對應的 operations 更新目前正在編輯的區域（Word 章節、Excel 表格列或 PPT 投影片）。
-   - 若使用者只拖拉了參考資料而未輸入長指令（例如只傳檔或說「請分析此參考資料」），請先報告該參考檔案的內容大綱，並說明可如何將其重點整合進目前的「${
-     req.activeDoc?.selectedTargetLabel ?? '專案文件'
-   }」中（若合適也可直接替使用者把大綱重點寫入該區域）。
+   - 若使用者只拖拉了參考資料而未輸入長指令（例如只傳檔或說「請分析此參考資料」），請先報告該參考檔案的內容大綱，並說明可如何將其重點整合進目前的目標專案文件區域中（若合適也可直接替使用者把大綱重點寫入該區域）。
 2. 當使用者要求在 Excel 新增、修改或刪除項目（例如「請幫我加入一個資安檢查的項目 時間是2026/10/30~2028/11/15」）時：
    - 必須嚴格依照使用者指定的「項目名稱」（如：資安檢查）、「預計開始日期」（如：2026-10-30）、「預計完成日期」（如：2028-11-15）、負責模組與進度，對齊該工作表的欄位順序（columns）產生對應的 rows！絕對禁止塞入與使用者指令無關的假資料！
    - 若使用者說「加入一個...」，rows 就只放那 1 列（mode 設為 "append_rows"）。
    - 若使用者要求修改特定列（例如「把第 7 列的名稱改成...」或「修改目前這一列」），請將 mode 設為 "update_selected_row" 並指定 rowIndex（0-based，例如第 7 列為 6），rows 放修改後的那 1 列完整欄位值。
    - 若使用者要求刪除某幾列，請將 mode 設為 "replace_rows"，rows 放刪除後的完整剩餘列。
-3. 當使用者詢問或要求加入台灣智慧駕駛的「公司簡介」、「公司歷年專案實績」時，才引用上方【公司基本資料與歷年專案實績庫】寫入文件或回答。
+3. 當使用者詢問「某張照片／某個檔案／某個參考資料在系統中的位置、路徑、在哪裡」，或詢問台灣智慧駕駛的歷年專案實績時：
+   - 【有就有、沒有就直說沒有（極重要，嚴禁硬湊無關檔案）】：
+     * 請先比對下方提供的【ACCSYS 專案助手「歷史文件」分頁完整歸檔索引】。
+     * 若使用者詢問的特定照片或檔案（例如外部「柏成設計 J.C. ARCHITECTURE」概念渲染圖，或其他未列於歷史文件索引中的圖檔／文件）並未收錄在「歷史文件」中：
+       1) 請直接、清楚、簡短回答：「經查證，目前專案助手的『歷史文件』中沒有收錄這張照片（或該專案檔案）。」（若有上傳圖片，僅需先簡短說明圖片內容，接著直接告知歷史文件中沒有收錄即可）。
+       2) 【絕對禁止】在找不到該特定照片或檔案時，自己列出一堆其他專案或無關檔案的路徑（例如不要因為看到高爾夫球車，就擅自把 GF-15MASS、PROD-GOLF、揚昇球場等其他檔案路徑列在回覆中充數，否則會讓使用者誤以為裡面有一模一樣的照片）！
+       3) 此時必須將 exactHistoricalMatchFound 設為 false，並將 matchedProjectCodes 設為空陣列 []。
+       4) 請改用 suggestedOptions 陣列提供 2～3 個簡短可點擊的後續提問選項（每個選項 10～26 字，例如：["查詢公司其他高爾夫球車相關歷史專案", "依此照片風格幫我生成一張概念示意圖", "將此照片的外觀與結構重點整理成文字說明"]），讓使用者自己決定是否點擊追問。
+     * 只有當使用者詢問的專案或檔案「確實存在」於「歷史文件」索引中（或者使用者已經明確點選／要求「查詢公司其他高爾夫球車相關歷史專案」等延伸問題）時：
+       1) 才將 exactHistoricalMatchFound 設為 true，並在 matchedProjectCodes 填入確切命中的專案代碼（如 ["GF-15MASS"]）。
+       2) 在 reply 中列出確切的「歷史文件 > 年份群組 > [專案代碼] 專案名稱 > 資料夾/檔案名稱」位置，並引導使用者點擊訊息下方的導引按鈕前往。
+   - 【嚴禁憑空捏造路徑】：絕對禁止自行編造不存在的「共用雲端硬碟 / 02_商務拓展...」或「05_設計與品牌識別...」等未列於索引中的路徑與假檔名！
 4. 只有日常無關閒聊（如天氣、星座、笑話）才拒絕並回覆：「這不屬於我的工作範圍，我只協助處理專案文件撰寫、技術規範、時程表與簡報相關的工作。」；只有個人行政表單（如請假、差旅報支、用印、簽核）才引導至左側「AI 助手」。
 5. 嚴禁在回覆或文件內使用 ** 星號或裝飾性 Emoji 圖示。
 6. 【嚴禁加上輔助詞與客套開場白（極重要）】：
@@ -843,6 +1285,10 @@ ${effectiveProjectsDigest}【重要規則】：
   "intent": "edit" | "discuss",
   "reply": "直接輸出修改後的正式內文，或針對使用者提問的完整查證回覆（嚴禁加上『已為您強化…段落。』等輔助詞）",
   "changeSummary": "intent 為 edit 時，用一句話（40 字內）說明這次修改了什麼，例如「新增 2050 淨零路徑與數位韌性政策依據」；discuss 時留空字串",
+  "exactHistoricalMatchFound": true | false,
+  "matchedProjectCodes": ["確切命中的專案代碼，若無則為空陣列"],
+  "suggestedOptions": ["可點擊的後續提問選項1", "可點擊的後續提問選項2", "可點擊的後續提問選項3"],
+  "conversationTitle": "根據對話內容產生的 8～18 字精簡對話標題",
   "operations": [
     { "kind": "write_word_section", "sectionId": "目標sectionId", "sectionTitle": "章節標題", "content": "正式文件段落內文", "mode": "replace" | "append" | "add_section", "newSectionCode": "5.0" },
     { "kind": "format_word_document", "fontFamily": "Noto Serif TC" | "Noto Sans TC" | "Times New Roman" | "Calibri", "fontSizePt": 12, "lineSpacing": 1.75, "paragraphIndentEm": 2, "showTableOfContents": true, "showPageNumbers": true, "showHeaderFooter": true, "headerText": "頁首文字", "footerText": "頁尾文字", "pageNumberStyle": "page_x_of_y" | "numeric" | "roman", "renumberSections": true },
@@ -858,7 +1304,7 @@ ${effectiveProjectsDigest}【重要規則】：
       | { inlineData: { mimeType: string; data: string } }
     > = [
       {
-        text: `${recentHistoryText}${graphContextText}${docContext}${refFilesText}\n\n【使用者指令】：${req.prompt}${retrySuffix}`,
+        text: `${effectiveProjectsDigest}${recentHistoryText}${graphContextText}${docContext}${refFilesText}\n\n【使用者指令】：${req.prompt}${retrySuffix}`,
       },
     ];
 
@@ -895,15 +1341,27 @@ ${effectiveProjectsDigest}【重要規則】：
           }>;
         };
       }>;
+      usageMetadata?: {
+        promptTokenCount?: number;
+        candidatesTokenCount?: number;
+        thoughtsTokenCount?: number;
+        cachedContentTokenCount?: number;
+        totalTokenCount?: number;
+      };
     };
 
     const webQueries: string[] = [];
     const webSourcesMap = new Map<string, { title: string; uri: string }>();
 
+    const phaseAbort = new AbortController();
+    const onReqAbort = () => phaseAbort.abort();
+    outerSignal?.addEventListener('abort', onReqAbort, { once: true });
+
     // Phase 1 (if Google Search is needed): Perform grounded search to gather real-time facts and sources
     let groundedSearchContext = '';
     if (needsWebSearch) {
       try {
+        const searchSignal = AbortSignal.any([phaseAbort.signal, AbortSignal.timeout(18_000)]);
         const searchRes = await fetch(endpoint, {
           method: 'POST',
           headers: {
@@ -929,7 +1387,7 @@ ${effectiveProjectsDigest}【重要規則】：
               thinkingConfig: { thinkingLevel: 'LOW' },
             },
           }),
-          signal: AbortSignal.timeout(18_000),
+          signal: searchSignal,
         });
         if (searchRes.ok) {
           const searchRaw = (await searchRes.json()) as VertexRawResponse;
@@ -965,43 +1423,81 @@ ${effectiveProjectsDigest}【重要規則】：
       userParts[0] = { text: `${userParts[0].text}${groundedSearchContext}` };
     }
 
-    // Phase 2: Generate final structured JSON with responseSchema enforced
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'x-goog-user-project': cfg.projectId,
-      },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemInstruction }] },
-        contents: [
-          {
-            role: 'user',
-            parts: userParts,
-          },
-        ],
-        generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens: 8192,
-          responseMimeType: 'application/json',
-          responseSchema: isTargetedParagraphEdit
-            ? COAUTHOR_WORD_EDIT_RESPONSE_SCHEMA
-            : COAUTHOR_RESPONSE_SCHEMA,
-          thinkingConfig: { thinkingLevel: 'LOW' },
+    // Phase 2: Generate final structured JSON with responseSchema enforced + exponential backoff retry (M4)
+    const phase2Payload = JSON.stringify({
+      systemInstruction: { parts: [{ text: systemInstruction }] },
+      contents: [
+        {
+          role: 'user',
+          parts: userParts,
         },
-      }),
-      signal: AbortSignal.timeout(60_000),
+      ],
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 8192,
+        responseMimeType: 'application/json',
+        responseSchema: isTargetedParagraphEdit
+          ? COAUTHOR_WORD_EDIT_RESPONSE_SCHEMA
+          : COAUTHOR_RESPONSE_SCHEMA,
+        thinkingConfig: { thinkingLevel: 'LOW' },
+      },
     });
 
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      return {
-        response: null,
-        errorReason: `Vertex AI HTTP ${res.status}${errText ? `: ${errText.slice(0, 120)}` : ''}`,
-      };
+    let raw: VertexRawResponse | null = null;
+    const maxAttempts = 3;
+    try {
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const callSignal = AbortSignal.any([phaseAbort.signal, AbortSignal.timeout(60_000)]);
+        trace?.emit('model.request', {
+          attempt: attempt + 1,
+          isTargetedParagraphEdit,
+          didCompactHistory: compactedHistory.didCompact,
+        });
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'x-goog-user-project': cfg.projectId,
+          },
+          body: phase2Payload,
+          signal: callSignal,
+        });
+
+        if (res.ok) {
+          raw = (await res.json()) as VertexRawResponse;
+          trace?.emit('model.response', {
+            attempt: attempt + 1,
+            promptTokens: raw.usageMetadata?.promptTokenCount ?? 0,
+            cachedTokens: raw.usageMetadata?.cachedContentTokenCount ?? 0,
+            candidatesTokens: raw.usageMetadata?.candidatesTokenCount ?? 0,
+          });
+          break;
+        }
+
+        const errText = await res.text().catch(() => '');
+        if (
+          attempt < maxAttempts - 1 &&
+          isRetryableHttpStatus(res.status, errText) &&
+          !phaseAbort.signal.aborted
+        ) {
+          const delayMs = computeBackoffDelayMs(attempt);
+          await sleepWithAbort(delayMs, phaseAbort.signal);
+          continue;
+        }
+
+        return {
+          response: null,
+          errorReason: `Vertex AI HTTP ${res.status}${errText ? `: ${errText.slice(0, 120)}` : ''}`,
+        };
+      }
+    } finally {
+      outerSignal?.removeEventListener('abort', onReqAbort);
     }
-    const raw = (await res.json()) as VertexRawResponse;
+
+    if (!raw) {
+      return { response: null, errorReason: 'Vertex AI 連線重試後仍未取得回應' };
+    }
 
     const candidate = raw.candidates?.[0];
     const gm = candidate?.groundingMetadata;
@@ -1043,6 +1539,10 @@ ${effectiveProjectsDigest}【重要規則】：
       intent?: 'edit' | 'discuss';
       reply?: string;
       changeSummary?: string;
+      conversationTitle?: string;
+      exactHistoricalMatchFound?: boolean;
+      matchedProjectCodes?: string[];
+      suggestedOptions?: string[];
       operations?: Array<Record<string, unknown>>;
     } | null = null;
 
@@ -1221,10 +1721,37 @@ ${effectiveProjectsDigest}【重要規則】：
     }
 
     const wordWriteOp = ops.find((o) => o.kind === 'write_word_section');
-    const cleanReply =
+    let cleanReply =
       wordWriteOp && wordWriteOp.kind === 'write_word_section' && refFiles.length === 0
         ? wordWriteOp.content
         : stripAuxiliaryMetaPhrases(parsed.reply);
+
+    const isExplicitNotFoundReply =
+      /並未收錄|沒有收錄|未收錄|查無此|找不到這張|沒有這張|不在歷史文件/.test(cleanReply);
+
+    if (isExplicitNotFoundReply) {
+      // Strip any trailing "但歷史文件中完整收錄了..." if the model accidentally appended unrelated projects after saying not found
+      cleanReply = cleanReply
+        .replace(/但歷史文件中[\s\S]*$/m, '')
+        .replace(/不過歷史文件中[\s\S]*$/m, '')
+        .trim();
+    }
+
+    const parsedMatchedCodes = Array.isArray(parsed.matchedProjectCodes)
+      ? parsed.matchedProjectCodes.map((c) => String(c).trim()).filter(Boolean)
+      : [];
+
+    const parsedSuggestedOptions = Array.isArray(parsed.suggestedOptions)
+      ? parsed.suggestedOptions
+          .map((s) => stripMarkdownAsterisks(String(s)).trim())
+          .filter((s) => s.length >= 4 && s.length <= 45)
+          .slice(0, 4)
+      : [];
+
+    const parsedConversationTitle =
+      typeof parsed.conversationTitle === 'string'
+        ? stripMarkdownAsterisks(parsed.conversationTitle).trim().slice(0, 26)
+        : '';
 
     return {
       response: {
@@ -1234,6 +1761,21 @@ ${effectiveProjectsDigest}【重要規則】：
           parsed.intent === 'edit' && typeof parsed.changeSummary === 'string'
             ? stripMarkdownAsterisks(parsed.changeSummary).trim().slice(0, 120) || undefined
             : undefined,
+        conversationTitle: parsedConversationTitle || undefined,
+        exactHistoricalMatchFound: isExplicitNotFoundReply
+          ? false
+          : parsed.exactHistoricalMatchFound,
+        matchedProjectCodes: isExplicitNotFoundReply ? [] : parsedMatchedCodes,
+        suggestedOptions:
+          parsedSuggestedOptions.length > 0
+            ? parsedSuggestedOptions
+            : isExplicitNotFoundReply
+              ? [
+                  '查詢公司其他高爾夫球車相關歷史專案',
+                  '依此圖片風格幫我生成一張概念示意圖',
+                  '將此圖片的設計與結構重點整理成文字說明',
+                ]
+              : undefined,
         operations: ops,
         webSearch: webSearchMeta,
       },
@@ -2163,9 +2705,19 @@ async function buildSmartProjectCoAuthorResponse(
 
 export async function POST(request: NextRequest) {
   const correlationId = crypto.randomUUID();
-  const employee = await getCurrentEmployee();
+  const { getSystemFeatureFlags } = await import('@/lib/feature-flags/service');
+  const [employee, featureFlags] = await Promise.all([
+    getCurrentEmployee(),
+    getSystemFeatureFlags(),
+  ]);
   if (!employee) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+  if (!featureFlags.project_assistant) {
+    return NextResponse.json(
+      { error: '專案助手功能目前於全公司系統授權中為未開放／已關閉狀態' },
+      { status: 403 }
+    );
   }
 
   let body: CoAuthorRequest;
@@ -2226,15 +2778,33 @@ export async function POST(request: NextRequest) {
 
   // 2. Resolve multi-turn follow-up context & query the Graphify Company Knowledge Graph
   const followUp = resolveFollowUpFromHistory(prompt, body.history);
-  const graphResult = searchCompanyKnowledgeGraph(followUp.expandedQuery, viewer, {
+  const recentHistorySnippet = (body.history ?? [])
+    .slice(-4)
+    .map((h) => h.text)
+    .join(' ');
+  const isAskingLocationOrHistorical =
+    /位置|在哪|哪裡|路徑|資料夾|歷史文件|找.*檔|找.*照|找.*圖|哪個專案|哪一份|放在哪|歸檔|照片|圖片|圖檔/i.test(
+      prompt
+    ) ||
+    refFiles.some((f) => f.mimeType.startsWith('image/'));
+  const graphQueryText = isAskingLocationOrHistorical
+    ? `${followUp.expandedQuery} ${recentHistorySnippet}`
+    : followUp.expandedQuery;
+
+  const graphResult = searchCompanyKnowledgeGraph(graphQueryText, viewer, {
     activeProjectCode: body.activeDoc?.projectCode,
-    topKFiles: 6,
+    topKFiles: 8,
     topKProjects: 5,
     autoOptimizedOnNewFiles: ingestReport.addedOrUpdated > 0,
   });
 
+  const combinedTurnText = `${prompt} ${recentHistorySnippet}`;
   const isTuringDriveTurn =
-    /台灣智慧駕駛|台智駕|turing\s*drive|歷年專案|歷史專案|公司實績|過去實績/i.test(prompt) ||
+    !body.activeDoc ||
+    isAskingLocationOrHistorical ||
+    /台灣智慧駕駛|台智駕|turing\s*drive|歷年專案|歷史專案|公司實績|過去實績|球車|高爾夫|golface|揚昇|綠通|青埔|信義|高雄港|htc|宮古島|新加坡|t3|桃機/i.test(
+      combinedTurnText
+    ) ||
     /T3-2026|桃園.*機場|自駕|VTMS|AITS/i.test(
       `${body.activeDoc?.projectCode ?? ''} ${body.activeDoc?.projectName ?? ''} ${body.activeDoc?.title ?? ''}`
     );
@@ -2254,6 +2824,19 @@ export async function POST(request: NextRequest) {
         }
       : undefined;
 
+  const historicalLocations =
+    isTuringDriveTurn &&
+    (isAskingLocationOrHistorical ||
+      /歷史|歷年|專案|實績|檔案|文件|簡報|照片|圖片|規範|架構|技術|細節|mqtt|websocket|ros|v2x|tsp|號誌|紅綠燈|行控|fms|occ|lidar|光達|定位/i.test(
+        combinedTurnText
+      ))
+      ? buildHistoricalLocationsFromGraph(
+          graphResult,
+          authorizedGroups,
+          isAskingLocationOrHistorical
+        )
+      : undefined;
+
   if (isCompanyAdminRequest(prompt) || isIrrelevantNonProjectQuery(prompt)) {
     const refusal = await buildSmartProjectCoAuthorResponse(
       body,
@@ -2264,16 +2847,36 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(refusal);
   }
 
+  const coauthorTrace = new TurnTrace(
+    correlationId,
+    null,
+    employee.id,
+    process.env.NODE_ENV !== 'test'
+  );
+  coauthorTrace.emit('turn.start', {
+    assistant: 'project_coauthor',
+    employeeId: employee.id,
+    docType: body.activeDoc?.docType ?? null,
+    projectCode: body.activeDoc?.projectCode ?? null,
+    promptChars: prompt.length,
+  });
+
   const vertexOutcome = await tryVertexStructuredCoAuthor(
     body,
     digestText,
     graphResult,
-    followUp
+    followUp,
+    undefined,
+    request.signal,
+    coauthorTrace
   );
 
   // NEVER fall back to preset/hardcoded Turing Drive text when Vertex AI fails!
   // Always report an explicit error message and leave the document untouched.
   if (!vertexOutcome.response) {
+    coauthorTrace.emit('turn.error', {
+      errorReason: vertexOutcome.errorReason ?? 'unknown',
+    });
     return NextResponse.json({
       reply: `⚠️ 系統目前無法完成您的指令（AI 模型回應異常或連線逾時：${
         vertexOutcome.errorReason || '請稍後再試'
@@ -2284,10 +2887,102 @@ export async function POST(request: NextRequest) {
 
   const vertexResult = vertexOutcome.response;
   const ops = [...vertexResult.operations];
+
+  const isNoHistoricalMatch =
+    /並未收錄|沒有收錄|未收錄|查無此|找不到這張|沒有這張|不在歷史文件/.test(
+      vertexResult.reply
+    );
+
+  // Extract explicit project codes mentioned by AI (either in matchedProjectCodes or in reply text or turn context)
+  const explicitCodes = new Set<string>(
+    (vertexResult.matchedProjectCodes ?? []).map((c) => c.toUpperCase())
+  );
+  const fullContextForCodeMatch = `${prompt}\n${recentHistorySnippet}\n${vertexResult.reply}`;
+  for (const grp of authorizedGroups) {
+    for (const p of grp.projects) {
+      if (
+        fullContextForCodeMatch.includes(p.code) ||
+        fullContextForCodeMatch.includes(p.name)
+      ) {
+        explicitCodes.add(p.code.toUpperCase());
+      }
+    }
+  }
+
+  // If discussing Turing Drive technical details (e.g. MQTT, WebSocket, ROS Bridge, V2X, TSP, FMS, LiDAR)
+  // without an explicit project code string in text, include top matched project codes from Knowledge Graph
+  if (
+    explicitCodes.size === 0 &&
+    isTuringDriveTurn &&
+    !isNoHistoricalMatch &&
+    vertexResult.intent !== 'edit'
+  ) {
+    for (const mf of graphResult.matchedFiles.slice(0, 3)) {
+      if (mf.projectContext?.code) {
+        explicitCodes.add(mf.projectContext.code.toUpperCase());
+      } else if (mf.node.projectCode) {
+        explicitCodes.add(mf.node.projectCode.toUpperCase());
+      }
+    }
+    for (const mp of graphResult.matchedProjects.slice(0, 2)) {
+      if (mp.projectContext?.code) {
+        explicitCodes.add(mp.projectContext.code.toUpperCase());
+      } else if (mp.node.projectCode) {
+        explicitCodes.add(mp.node.projectCode.toUpperCase());
+      }
+    }
+  }
+
+  let filteredLocations: HistoricalNavigationTarget[] | undefined;
+  let filteredGraphMeta: CoAuthorResponse['graphRetrieval'] | undefined;
+
+  if (!isNoHistoricalMatch && !vertexResult.webSearch) {
+    if (explicitCodes.size > 0) {
+      // Build navigation targets strictly for the projects matched/mentioned in the turn
+      const exactTargets: HistoricalNavigationTarget[] = [];
+      for (const grp of authorizedGroups) {
+        for (const p of grp.projects) {
+          if (explicitCodes.has(p.code.toUpperCase())) {
+            const resolvedTargets = resolveProjectHistoricalNavigationTargets({
+              group: grp,
+              project: p,
+              promptText: `${prompt} ${recentHistorySnippet}`,
+              replyText: vertexResult.reply,
+              graphResult,
+            });
+            exactTargets.push(...resolvedTargets);
+          }
+        }
+      }
+      filteredLocations = exactTargets.slice(0, 5);
+      filteredGraphMeta = graphRetrievalMeta
+        ? {
+            ...graphRetrievalMeta,
+            matchedProjectCodes: Array.from(explicitCodes).slice(0, 4),
+            matchedFileNames: graphResult.matchedFiles
+              .filter(
+                (f) =>
+                  f.projectContext &&
+                  explicitCodes.has(f.projectContext.code.toUpperCase())
+              )
+              .map((f) => f.node.label)
+              .slice(0, 4),
+          }
+        : undefined;
+    } else if (historicalLocations && historicalLocations.length > 0) {
+      filteredLocations = historicalLocations;
+      filteredGraphMeta = graphRetrievalMeta;
+    }
+  }
+
   const finalResult: CoAuthorResponse = {
     ...vertexResult,
     operations: ops,
-    graphRetrieval: vertexResult.webSearch ? undefined : graphRetrievalMeta,
+    graphRetrieval: filteredGraphMeta,
+    historicalLocations:
+      filteredLocations && filteredLocations.length > 0
+        ? filteredLocations
+        : undefined,
   };
 
   // Resolve the selection against the actual document before any write.
@@ -2308,7 +3003,9 @@ export async function POST(request: NextRequest) {
           digestText,
           graphResult,
           followUp,
-          `前一次輸出的段落數與框選範圍不符。使用者框選的範圍共有 ${expectedCount} 個段落，請務必讓 operations[0].content 與 reply 嚴格輸出剛好 ${expectedCount} 個段落（${expectedCount === 1 ? '合成單一段落，中間不可換行分段' : `以單一換行符號分隔為 ${expectedCount} 個段落`}）。`
+          `前一次輸出的段落數與框選範圍不符。使用者框選的範圍共有 ${expectedCount} 個段落，請務必讓 operations[0].content 與 reply 嚴格輸出剛好 ${expectedCount} 個段落（${expectedCount === 1 ? '合成單一段落，中間不可換行分段' : `以單一換行符號分隔為 ${expectedCount} 個段落`}）。`,
+          request.signal,
+          coauthorTrace
         );
         const retryOp = retryOutcome.response?.operations.find(
           (entry): entry is Extract<CoAuthorOperation, { kind: 'write_word_section' }> =>
@@ -2433,9 +3130,19 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
-  const employee = await getCurrentEmployee();
+  const { getSystemFeatureFlags } = await import('@/lib/feature-flags/service');
+  const [employee, featureFlags] = await Promise.all([
+    getCurrentEmployee(),
+    getSystemFeatureFlags(),
+  ]);
   if (!employee) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+  if (!featureFlags.project_assistant) {
+    return NextResponse.json(
+      { error: '專案助手功能目前於全公司系統授權中為未開放／已關閉狀態' },
+      { status: 403 }
+    );
   }
   const docId = request.nextUrl.searchParams.get('docId')?.trim();
   const targetDocIds = docId ? [docId] : [];

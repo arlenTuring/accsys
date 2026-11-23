@@ -41,6 +41,7 @@ export const FORM_CATEGORIES: FormCategory[] = [
       { title: FORM_LABELS.minor_expense, description: '部門預算的小額支出，每筆 NT$10,000 以下。', href: '/expense-claims/minor/new', legacyType: 'minor_expense' },
       { title: FORM_LABELS.project_expense, description: '以產品專案預算報支。', href: '/expense-claims/project/new', legacyType: 'project_expense' },
       { title: FORM_LABELS.revenue_expense, description: '以營收（客戶）專案預算報支。', href: '/expense-claims/revenue/new', legacyType: 'revenue_expense' },
+      { title: '費用申請單(免走採購)', description: '總金額低於 NT$10,000、免走請購／採購流程的付款申請。', href: '/expense-requests/new?mode=standalone', legacyType: 'standalone_expense_request' },
       { title: FORM_LABELS.travel_expense, description: '出差後填寫行程報告並報支旅費。', href: '/travel-expenses/new', legacyType: 'travel_expense' },
     ],
     records: [
@@ -67,9 +68,14 @@ export const FORM_CATEGORIES: FormCategory[] = [
   {
     id: 'asset',
     title: '資產管理',
-    description: '財產保管人異動、借出、合併、出售或報廢，核准後自動更新財產清冊。',
-    forms: [{ title: FORM_LABELS.asset_transfer, description: '保管人異動、借出、合併、出售、報廢。', href: '/asset-transfers/new', legacyType: 'asset_transfer' }],
-    records: [{ label: '我的資產異動', href: '/asset-transfers' }],
+    description: '保管人異動、借出、合併、出售、報廢；檢視名下保管資產與財產清點單請至「我的待辦 → 我的資產管理」。',
+    forms: [
+      { title: FORM_LABELS.asset_transfer, description: '保管人異動、借出、合併、出售、報廢。', href: '/asset-transfers/new', legacyType: 'asset_transfer' },
+    ],
+    records: [
+      { label: '我的資產管理', href: '/assets/mine' },
+      { label: '我的資產異動', href: '/asset-transfers' },
+    ],
   },
 ];
 
@@ -79,18 +85,27 @@ export const MY_APPLICATION_LINKS: RecordLink[] = [
   { label: '草稿庫', href: '/applications/drafts' },
 ];
 
+export const BUDGET_PLATFORM_SUB_LINKS: RecordLink[] = [
+  { label: '主檔管理', href: '/budget-codes/projects' },
+  { label: '建立預算', href: '/budget-codes/overview' },
+  { label: '預算管理', href: '/budget-codes/management' },
+  { label: '預算分析', href: '/budget-codes/analysis' },
+];
+
 export const FINANCE_LINKS: RecordLink[] = [
-  { label: '簽核追蹤', href: '/case-tracking' },
-  { label: '預算編號管理', href: '/budget-codes' },
+  { label: '預算管理平台', href: '/budget-codes/projects' },
   { label: '全公司財產清冊', href: '/assets' },
+  { label: '財產盤點', href: '/assets/inventory-forms' },
 ];
 
 export const ADMIN_LINKS: RecordLink[] = [
+  { label: '簽核追蹤', href: '/case-tracking' },
+  { label: '功能授權', href: '/admin/feature-flags' },
   { label: '公司資料', href: '/admin/company' },
-  { label: '主檔資料', href: '/admin/master-data' },
   { label: '帳號權限', href: '/admin/accounts' },
   { label: '組織簽核', href: '/admin/org' },
   { label: '表單設計', href: '/admin/form-builder' },
+  { label: '信箱設定', href: '/admin/email-settings' },
   { label: '系統日誌', href: '/admin/system-logs' },
   { label: '公告管理', href: '/admin/announcements' },
   { label: '規章管理', href: '/admin/regulations' },
@@ -136,7 +151,7 @@ export function mergeCatalog(designerForms: DesignerFormEntry[], base: FormCateg
       const key = entry.legacyType ? retired[entry.legacyType] : undefined;
       if (!key) return [entry];
       const f = byKey.get(key);
-      if (!f) return [];
+      if (!f || placed.has(f.key)) return [];
       placed.add(f.key);
       return [{ title: f.name, description: f.description, href: `/f/${f.key}/new` }];
     });

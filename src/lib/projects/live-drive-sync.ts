@@ -1,4 +1,5 @@
 import { GoogleAuth } from 'google-auth-library';
+import { getCandidateDriveWriteTokens } from './drive-doc-writer';
 import {
   filterDriveItemsForViewer,
   HISTORICAL_YEAR_GROUPS,
@@ -27,10 +28,23 @@ type RawDriveFile = {
 
 /**
  * Resolves a live Google Drive API access token using:
- * 1. Explicit Drive OAuth refresh token (`GWS_DRIVE_REFRESH_TOKEN` or `GOOGLE_DRIVE_REFRESH_TOKEN`)
- * 2. Application Default Credentials (`gcloud auth application-default login` or attached GCP Service Account)
+ * 1. Saved user OAuth token from `.drive-oauth-tokens.json` (`getCandidateDriveWriteTokens`)
+ * 2. Explicit Drive OAuth refresh token (`GWS_DRIVE_REFRESH_TOKEN` or `GOOGLE_DRIVE_REFRESH_TOKEN`)
+ * 3. Application Default Credentials (`gcloud auth application-default login` or attached GCP Service Account)
  */
-async function getDriveAccessToken(): Promise<string | null> {
+async function getDriveAccessToken(userEmail?: string): Promise<string | null> {
+  try {
+    const candidateTokens = await getCandidateDriveWriteTokens(userEmail, {
+      currentUserOnly: false,
+      includeSlowFallbacks: true,
+    });
+    if (candidateTokens.length > 0 && candidateTokens[0]) {
+      return candidateTokens[0];
+    }
+  } catch {
+    // Fall through to env refresh token / ADC
+  }
+
   const refreshToken =
     process.env.GWS_DRIVE_REFRESH_TOKEN?.trim() ||
     process.env.GOOGLE_DRIVE_REFRESH_TOKEN?.trim();
@@ -313,7 +327,7 @@ export async function syncProjectFilesFromDrive(
     allowedRoles: project.allowedRoles,
   };
 
-  const accessToken = await getDriveAccessToken();
+  const accessToken = await getDriveAccessToken(viewer.email);
   if (!accessToken) {
     return {
       synced: false,
@@ -323,13 +337,45 @@ export async function syncProjectFilesFromDrive(
   }
 
   const existingMap = indexExistingItemsById(project.files);
-  const liveFiles = await fetchDriveSubtreeRecursive(
+  const liveRootFiles = await fetchDriveSubtreeRecursive(
     project.driveFolderId,
     accessToken,
     existingMap,
     0,
     projectInherited
   );
+
+  // Also expand any curated top-level folders in `project.files` that live outside `project.driveFolderId`
+  const liveRootIds = new Set((liveRootFiles ?? []).map((f) => f.id));
+  const extraCuratedItems = await Promise.all(
+    project.files
+      .filter((item) => !liveRootIds.has(item.id))
+      .map(async (item) => {
+        if (item.kind !== 'folder') return item;
+        const subChildren = await fetchDriveSubtreeRecursive(
+          item.id,
+          accessToken,
+          existingMap,
+          1,
+          {
+            accessScope: item.accessScope ?? projectInherited.accessScope,
+            allowedDepartments: item.allowedDepartments ?? projectInherited.allowedDepartments,
+            allowedRoles: item.allowedRoles ?? projectInherited.allowedRoles,
+          }
+        );
+        if (subChildren && subChildren.length > 0) {
+          return { ...item, children: subChildren };
+        }
+        return item;
+      })
+  );
+
+  const liveFiles =
+    liveRootFiles && liveRootFiles.length > 0
+      ? [...liveRootFiles, ...extraCuratedItems]
+      : extraCuratedItems.length > 0
+      ? extraCuratedItems
+      : null;
 
   if (!liveFiles) {
     return {
@@ -349,3 +395,64 @@ export async function syncProjectFilesFromDrive(
     files: filterDriveItemsForViewer(liveFiles, viewer, projectInherited),
   };
 }
+
+/**
+ * Fetches immediate + nested children for a specific Drive folder ID on demand
+ * when a user clicks a folder whose children haven't been loaded yet.
+ */
+export async function syncSingleFolderFromDrive(
+  folderId: string,
+  viewer: ProjectViewerContext,
+  projectId?: string
+): Promise<{
+  synced: boolean;
+  children: HistoricalDriveItem[];
+}> {
+  const allProjects: HistoricalProject[] = HISTORICAL_YEAR_GROUPS.flatMap((g) => g.projects);
+  const project = projectId ? allProjects.find((p) => p.id === projectId) : undefined;
+  const existingMap = indexExistingItemsById(
+    project ? project.files : allProjects.flatMap((p) => p.files)
+  );
+  const existingFolder = existingMap.get(folderId);
+
+  const inherited = {
+    accessScope: existingFolder?.accessScope ?? project?.accessScope,
+    allowedDepartments: existingFolder?.allowedDepartments ?? project?.allowedDepartments,
+    allowedRoles: existingFolder?.allowedRoles ?? project?.allowedRoles,
+  };
+
+  const accessToken = await getDriveAccessToken(viewer.email);
+  if (!accessToken) {
+    return {
+      synced: false,
+      children: filterDriveItemsForViewer(existingFolder?.children ?? [], viewer, inherited),
+    };
+  }
+
+  const liveChildren = await fetchDriveSubtreeRecursive(
+    folderId,
+    accessToken,
+    existingMap,
+    MAX_DEPTH - 2,
+    inherited
+  );
+
+  if (!liveChildren) {
+    return {
+      synced: false,
+      children: filterDriveItemsForViewer(existingFolder?.children ?? [], viewer, inherited),
+    };
+  }
+
+  const liveIds = new Set(liveChildren.map((c) => c.id));
+  const preservedExisting = (existingFolder?.children ?? []).filter(
+    (ec) => !liveIds.has(ec.id)
+  );
+  const mergedChildren = [...liveChildren, ...preservedExisting];
+
+  return {
+    synced: true,
+    children: filterDriveItemsForViewer(mergedChildren, viewer, inherited),
+  };
+}
+

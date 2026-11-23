@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" fill="none">
+  <rect width="960" height="540" rx="16" fill="#F8FAFC"/>
+  <rect width="64" height="540" fill="#0F172A"/>
+  <rect x="10" y="290" width="44" height="44" rx="12" fill="#7C3AED"/>
+  <text x="32" y="317" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="12" font-weight="bold">管理</text>
+  <rect x="64" y="0" width="196" height="540" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="82" y="42" fill="#0F172A" font-family="sans-serif" font-size="15" font-weight="bold">系統管理</text>
+  <rect x="76" y="68" width="172" height="36" rx="8" fill="#F3E8FF" stroke="#8B5CF6"/>
+  <text x="90" y="91" fill="#5B21B6" font-family="sans-serif" font-size="13" font-weight="bold">簽核追蹤 (/case-tracking)</text>
+  <rect x="76" y="112" width="172" height="36" rx="8" fill="#EFF6FF" stroke="#3B82F6"/>
+  <text x="90" y="135" fill="#1D4ED8" font-family="sans-serif" font-size="13" font-weight="bold">功能授權 (/admin/feature-flags)</text>
+  <rect x="76" y="156" width="172" height="36" rx="8" fill="#F8FAFC"/>
+  <text x="90" y="179" fill="#334155" font-family="sans-serif" font-size="13">信箱設定 (/admin/email-settings)</text>
+  <rect x="76" y="200" width="172" height="36" rx="8" fill="#F8FAFC"/>
+  <text x="90" y="223" fill="#334155" font-family="sans-serif" font-size="13">系統日誌 (/admin/system-logs)</text>
+  <rect x="286" y="32" width="644" height="230" rx="14" fill="#FFFFFF" stroke="#CBD5E1"/>
+  <text x="310" y="66" fill="#0F172A" font-family="sans-serif" font-size="17" font-weight="bold">全公司簽核追蹤（/case-tracking）：全類型單據展開內文與關卡追蹤</text>
+  <text x="310" y="92" fill="#475569" font-family="sans-serif" font-size="13">不限請採驗，涵蓋全公司出差、用印、資產異動、預算等所有簽核單據（僅供系統追蹤，不在此代簽）：</text>
+  <rect x="310" y="108" width="596" height="132" rx="10" fill="#F8FAFC" stroke="#94A3B8"/>
+  <text x="328" y="136" fill="#0F172A" font-family="sans-serif" font-size="14" font-weight="bold">案號 #20261120BT0001｜公出差旅申請單｜申請人：阮振瑋｜目前卡關：部門主管</text>
+  <rect x="760" y="116" width="128" height="30" rx="6" fill="#EFF6FF" stroke="#2563EB"/>
+  <text x="824" y="136" text-anchor="middle" fill="#1D4ED8" font-family="sans-serif" font-size="12" font-weight="bold">展開單據內文</text>
+  <text x="328" y="172" fill="#334155" font-family="sans-serif" font-size="12">• 展開後可直接檢視完整表單欄位、明細列與每一關簽核人、簽核時間與退回意見。</text>
+  <text x="328" y="198" fill="#059669" font-family="sans-serif" font-size="12" font-weight="bold">• 支援依單據類型、狀態（簽核中／已退回／已核准）、部門與關鍵字快速過濾。</text>
+  <rect x="286" y="280" width="644" height="232" rx="14" fill="#FFFFFF" stroke="#8B5CF6" stroke-width="2"/>
+  <text x="310" y="314" fill="#5B21B6" font-family="sans-serif" font-size="17" font-weight="bold">功能授權（/admin/feature-flags）：輸入加密授權碼控管模組開關與效期</text>
+  <rect x="310" y="334" width="420" height="42" rx="8" fill="#F8FAFC" stroke="#64748B"/>
+  <text x="326" y="360" fill="#0F172A" font-family="monospace" font-size="13">TDL2-9F8A-7C2E-4B1D-X9Q2-M7P4-K3W8...</text>
+  <rect x="744" y="334" width="162" height="42" rx="8" fill="#7C3AED"/>
+  <text x="825" y="360" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="13" font-weight="bold">套用授權碼</text>
+  <rect x="310" y="392" width="596" height="96" rx="10" fill="#F3E8FF"/>
+  <text x="328" y="422" fill="#4C1D95" font-family="sans-serif" font-size="13" font-weight="bold">• 授權有效期限：永久授權（或顯示指定到期日）｜嚴格路由守衛防止輸入網址越權進入關閉模組</text>
+  <text x="328" y="450" fill="#5B21B6" font-family="sans-serif" font-size="13">• 可即時檢視目前已授權開啟／關閉的功能模組（如：專案助手預設關閉、AI 助手、預算平台等）</text>
+  <circle cx="760" cy="116" r="16" fill="#DC2626" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="760" y="121" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="bold">1</text>
+  <circle cx="744" cy="334" r="16" fill="#DC2626" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="744" y="339" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="bold">2</text>
+</svg>

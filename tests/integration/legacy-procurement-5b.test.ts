@@ -83,8 +83,8 @@ describe('batch 5b: acceptance / payment / standalone payment on the designer ru
         neededWithinDays: 30,
         items: {
           rows: [
-            { budgetCodeId: ids.budget, description: '筆電', quantity: 2, estimatedAmount: '50000' },
-            { budgetCodeId: ids.budget, description: '滑鼠', quantity: 1, estimatedAmount: '1000' },
+            { budgetCodeId: ids.budget, description: '筆電', quantity: 2, unitPrice: '25000', estimatedAmount: '50000' },
+            { budgetCodeId: ids.budget, description: '滑鼠', quantity: 1, unitPrice: '1000', estimatedAmount: '1000' },
           ],
         },
       })
@@ -243,7 +243,6 @@ describe('batch 5b: acceptance / payment / standalone payment on the designer ru
       where a.id = ${acceptance.submissionId}`;
     expect(stored).toMatchObject({ total_amount: '51000.00', same_case: true, case_type: 'standard' });
     expect(await approvers(acceptance.submissionId)).toEqual([ids.mgr, ids.owner, ids.gm]);
-    expect(await create(ids.applicant, ac.key, acceptanceData(orderId, ['pass', 'pass']))).toMatchObject({ ok: false, code: 'conflict' });
 
     // Payment before the acceptance is approved: the acceptance is not a source yet.
     expect(await create(ids.applicant, pp.key, paymentData(acceptance.submissionId, [{ _src: 0 }]))).toMatchObject({ ok: false, code: 'conflict' });
@@ -289,8 +288,8 @@ describe('batch 5b: acceptance / payment / standalone payment on the designer ru
     expect(await designerPaymentTermsCheck(order.procurement_case_id, '2026-10-25')).toEqual({ terms: '預付款', consistent: false });
     expect(await designerPaymentTermsCheck(order.procurement_case_id, '2026-10-04')).toEqual({ terms: '預付款', consistent: true });
     expect(await designerPaymentTermsCheck(order.procurement_case_id, null)).toEqual({ terms: '預付款', consistent: true });
-    // One payment per case.
-    expect(await create(ids.applicant, pp.key, paymentData(orderId, [{ _src: 0 }]))).toMatchObject({ ok: false, code: 'conflict' });
+    // 1-to-many (第 16、17 條): a second batch prepayment on the remaining line is supported before acceptance.
+    expect(await create(ids.applicant, pp.key, paymentData(orderId, [{ _src: 0, amount: '25000.00' }]))).toMatchObject({ ok: true });
 
     // Once a prepaid order's case has an approved acceptance, the payment must come from the acceptance.
     const accepted = await approvedOrder('預付款');

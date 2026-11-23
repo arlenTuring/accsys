@@ -73,19 +73,25 @@ async function main() {
   const { getSql } = await import('@/lib/db');
   const { runInTransaction } = await import('@/lib/workflow/tx');
   const { installMigratedForm } = await import('@/lib/custom-forms/migrated/install');
+  const { LEGACY_SPLIT_EXPENSE_KEYS } = await import('@/lib/custom-forms/queries');
+  const { UNIFIED_EXPENSE_CLAIM_FORM } = await import('@/lib/custom-forms/migrated/expense-claims');
   const { publishDraft } = await import('@/lib/form-builder/service');
   const sql = getSql();
   try {
     const [actor] = actorEmail
       ? await sql`select id from employees where lower(google_email) = lower(${actorEmail}) and access_enabled and role = 'admin'`
-      : await sql`select id from employees where id = ${LOCAL_DEV_ADMIN} and access_enabled`;
+      : await sql`select id from employees where access_enabled and role = 'admin' order by (employee_code = '0054') desc, employee_code asc limit 1`;
     if (!actor) {
       console.error(actorEmail ? 'No active admin account with that email' : 'Local dev admin (db/seed-local-dev.sql) is missing; run ./start.sh first');
       process.exit(1);
     }
     const mode = flag('publish') ? 'publish' : 'draft';
+    const formsToInstall =
+      batch === 3
+        ? [UNIFIED_EXPENSE_CLAIM_FORM]
+        : plan.forms.filter((f) => !LEGACY_SPLIT_EXPENSE_KEYS.has(f.key));
     console.log(`Batch ${batch}（${plan.title}）, mode: ${mode}`);
-    for (const form of plan.forms) {
+    for (const form of formsToInstall) {
       const result = await runInTransaction('forms.migrate', async (tx) => ({
         ok: true as const,
         ...(await installMigratedForm(tx, form, actor.id as string, mode)),

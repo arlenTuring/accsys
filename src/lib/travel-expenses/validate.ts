@@ -105,11 +105,11 @@ function lines<T>(value: unknown, label: string): T[] {
   return value as T[];
 }
 
-function costItem(raw: TravelCostItemInput, n: number): NormalizedCostItem {
+function costItem(raw: TravelCostItemInput, n: number, allowedCategories: Set<string> = CATEGORIES): NormalizedCostItem {
   const at = `旅費結算第 ${n} 列`;
   if (!raw || typeof raw !== 'object') invalid(`${at}格式不正確`);
   const category = raw.category;
-  if (!CATEGORIES.has(category)) invalid(`${at}的類別不正確`);
+  if (!allowedCategories.has(category)) invalid(`${at}的類別不正確`);
   const currency = raw.currency;
   if (!CURRENCY_CODES.has(currency)) invalid(`${at}的幣別不正確`);
 
@@ -148,7 +148,10 @@ function costItem(raw: TravelCostItemInput, n: number): NormalizedCostItem {
   };
 }
 
-export function parseTravelExpenseInput(input: TravelExpenseInput): ParseResult {
+export function parseTravelExpenseInput(
+  input: TravelExpenseInput,
+  allowedCategories?: readonly string[]
+): ParseResult {
   try {
     if (!input || typeof input !== 'object') invalid('表單內容不正確');
     const tripStartDate = date(input.tripStartDate, '出差起始日');
@@ -171,7 +174,10 @@ export function parseTravelExpenseInput(input: TravelExpenseInput): ParseResult 
         timeSlot: text(r.timeSlot, `${at}出差時間區段`, 100),
       };
     });
-    const costItems = lines<TravelCostItemInput>(input.costItems, '出差旅費結算').map((c, idx) => costItem(c, idx + 1));
+    const catSet = allowedCategories && allowedCategories.length > 0 ? new Set<string>(allowedCategories) : CATEGORIES;
+    const costItems = lines<TravelCostItemInput>(input.costItems, '出差旅費結算').map((c, idx) =>
+      costItem(c, idx + 1, catSet)
+    );
 
     let total: Cents;
     try {

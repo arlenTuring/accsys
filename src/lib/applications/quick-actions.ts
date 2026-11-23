@@ -1,19 +1,63 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { approveAcceptanceStep, returnAcceptanceStep } from '@/lib/acceptances/actions';
+import {
+  approveAcceptanceStep,
+  returnAcceptanceStep,
+  withdrawAcceptance,
+} from '@/lib/acceptances/actions';
 import { getFormApprovalSnapshot } from '@/lib/ai-chat/approval-snapshot';
-import { approveAssetTransferStep, returnAssetTransferStep } from '@/lib/asset-transfers/actions';
-import { approveContractSealStep, returnContractSealStep } from '@/lib/contract-seals/actions';
-import { approveCustomFormStep, returnCustomFormStep } from '@/lib/custom-forms/actions';
-import { approveExpenseClaimStep, returnExpenseClaimStep } from '@/lib/expense-claims/actions';
-import { approveExpenseRequestStep, returnExpenseRequestStep } from '@/lib/expense-requests/actions';
-import { approveGeneralSealStep, returnGeneralSealStep } from '@/lib/general-seals/actions';
-import { approveInvoiceSealStep, returnInvoiceSealStep } from '@/lib/invoice-seals/actions';
+import {
+  approveAssetTransferStep,
+  returnAssetTransferStep,
+  withdrawAssetTransfer,
+} from '@/lib/asset-transfers/actions';
+import {
+  approveContractSealStep,
+  returnContractSealStep,
+  withdrawContractSealRequest,
+} from '@/lib/contract-seals/actions';
+import {
+  approveCustomFormStep,
+  returnCustomFormStep,
+  withdrawCustomForm,
+} from '@/lib/custom-forms/actions';
+import {
+  approveExpenseClaimStep,
+  returnExpenseClaimStep,
+  withdrawExpenseClaim,
+} from '@/lib/expense-claims/actions';
+import {
+  approveExpenseRequestStep,
+  returnExpenseRequestStep,
+  withdrawExpenseRequest,
+} from '@/lib/expense-requests/actions';
+import {
+  approveGeneralSealStep,
+  returnGeneralSealStep,
+  withdrawGeneralSealRequest,
+} from '@/lib/general-seals/actions';
+import {
+  approveInvoiceSealStep,
+  returnInvoiceSealStep,
+  withdrawInvoiceSealRequest,
+} from '@/lib/invoice-seals/actions';
 import type { FormType } from '@/lib/procurement/form-registry';
-import { approvePurchaseOrderStep, returnPurchaseOrderStep } from '@/lib/purchase-orders/actions';
-import { approvePurchaseRequestStep, returnPurchaseRequestStep } from '@/lib/purchase-requests/actions';
-import { approveTravelExpenseStep, returnTravelExpenseStep } from '@/lib/travel-expenses/actions';
+import {
+  approvePurchaseOrderStep,
+  returnPurchaseOrderStep,
+  withdrawPurchaseOrder,
+} from '@/lib/purchase-orders/actions';
+import {
+  approvePurchaseRequestStep,
+  returnPurchaseRequestStep,
+  withdrawPurchaseRequest,
+} from '@/lib/purchase-requests/actions';
+import {
+  approveTravelExpenseStep,
+  returnTravelExpenseStep,
+  withdrawTravelExpense,
+} from '@/lib/travel-expenses/actions';
 import { fail, type ActionResult } from '@/lib/workflow/tx';
 
 function refreshHub() {
@@ -139,6 +183,62 @@ export async function quickReturnFormAction(
       break;
     case 'asset_transfer':
       result = await returnAssetTransferStep(formId, trimmed, version);
+      break;
+    default:
+      return fail('validation', '不支援的表單類型');
+  }
+
+  refreshHub();
+  return result;
+}
+
+export async function quickWithdrawFormAction(
+  formType: FormType,
+  formId: string
+): Promise<ActionResult> {
+  let result: ActionResult;
+  switch (formType) {
+    case 'custom':
+      result = await withdrawCustomForm(formId);
+      break;
+    case 'purchase_request':
+      result = await withdrawPurchaseRequest(formId);
+      break;
+    case 'purchase_order':
+      result = await withdrawPurchaseOrder(formId);
+      break;
+    case 'acceptance':
+      result = await withdrawAcceptance(formId);
+      break;
+    case 'expense_request':
+      result = await withdrawExpenseRequest(formId);
+      break;
+    case 'travel_expense':
+      result = await withdrawTravelExpense(formId);
+      break;
+    case 'department_expense':
+      result = await withdrawExpenseClaim('department', formId);
+      break;
+    case 'project_expense':
+      result = await withdrawExpenseClaim('project', formId);
+      break;
+    case 'revenue_expense':
+      result = await withdrawExpenseClaim('revenue', formId);
+      break;
+    case 'minor_expense':
+      result = await withdrawExpenseClaim('minor', formId);
+      break;
+    case 'contract_seal_request':
+      result = await withdrawContractSealRequest(formId);
+      break;
+    case 'general_seal_request':
+      result = await withdrawGeneralSealRequest(formId);
+      break;
+    case 'invoice_seal_request':
+      result = await withdrawInvoiceSealRequest(formId);
+      break;
+    case 'asset_transfer':
+      result = await withdrawAssetTransfer(formId);
       break;
     default:
       return fail('validation', '不支援的表單類型');

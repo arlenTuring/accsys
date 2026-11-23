@@ -7,6 +7,7 @@ import { loadAttachmentPanelExtras } from '@/lib/attachments/analysis-queries';
 import { getAttachments } from '@/lib/attachments/queries';
 import { ApprovalTimeline } from '@/app/components/approval-timeline';
 import { AttachmentsPanel } from '@/app/components/attachments-panel';
+import { DetailQueueNav } from '@/app/components/detail-queue-nav';
 import { PrintButton } from '@/app/components/print-button';
 import { withdrawPurchaseOrder } from '@/lib/purchase-orders/actions';
 import { WithdrawButton } from '@/app/requests/[id]/withdraw-button';
@@ -48,6 +49,11 @@ export default async function PurchaseOrderDetailPage({
 
   return (
     <main className="mx-auto max-w-4xl space-y-4 p-8">
+      <DetailQueueNav
+        currentId={detail.id}
+        currentCaseNumber={detail.caseNumber}
+        currentFormLabel="採購單"
+      />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="mb-1 text-2xl font-bold">採購單</h1>
@@ -58,7 +64,7 @@ export default async function PurchaseOrderDetailPage({
             （項次 B1）
           </p>
         </div>
-        {detail.status === 'approved' && <PrintButton label="列印採購單" />}
+        <PrintButton label="列印採購單 / PDF" />
       </div>
 
       <section className="rounded border p-4 text-sm">

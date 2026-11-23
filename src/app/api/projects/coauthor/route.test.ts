@@ -5,8 +5,8 @@ import { anchorDocumentSelection, type DocAnchor, type DocsDocument } from '@/li
 vi.mock('@/lib/auth/current-employee', () => ({
   getCurrentEmployee: vi.fn().mockResolvedValue({
     id: 'emp-1',
-    name: 'Arlen',
-    email: 'arlen@turing-drive.com',
+    name: 'Admin User',
+    email: 'admin@turing-drive.com',
     department: 'RD',
     role: 'admin',
   }),

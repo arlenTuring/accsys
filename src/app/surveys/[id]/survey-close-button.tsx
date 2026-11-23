@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
+import { confirmDialog } from '@/app/components/dialog';
 import { closeSurveyAction } from '@/lib/surveys/actions';
 
 export function SurveyCloseButton(props: { surveyId: string; version: number }) {
@@ -15,8 +16,14 @@ export function SurveyCloseButton(props: { surveyId: string; version: number }) 
         type="button"
         className="btn-secondary text-xs"
         disabled={pending}
-        onClick={() => {
-          if (!confirm('結束後將無法再填寫，確定？')) return;
+        onClick={async () => {
+          const ok = await confirmDialog({
+            title: '結束問卷？',
+            message: '結束後將無法再填寫，確定？',
+            confirmLabel: '結束問卷',
+            tone: 'danger',
+          });
+          if (!ok) return;
           start(async () => {
             setError(null);
             const res = await closeSurveyAction(props.surveyId, props.version);

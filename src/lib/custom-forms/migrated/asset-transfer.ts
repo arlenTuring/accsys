@@ -36,6 +36,10 @@ ${ASSET_REGISTER_LINK.url}
 const typeOptions = ASSET_TRANSFER_TYPES.map((t) => ({ value: t, label: ASSET_TRANSFER_TYPE_LABELS[t] }));
 const MANAGERS = ['original_manager', 'new_manager', 'other_manager'];
 const otherFilled = { field: 'otherCustodianEmployeeId', op: 'filled' as const };
+const NON_CUSTODIAN_TYPES = ['lend', 'merge', 'sell', 'scrap', 'other'] as const;
+const requiresGmCondition = {
+  any: NON_CUSTODIAN_TYPES.map((value) => ({ field: 'transferTypes', op: 'contains' as const, value })),
+};
 
 const approver = (id: string, label: string, source: ApproverBlock['source'], extra: Partial<ApproverBlock> = {}): ApproverBlock => ({
   id,
@@ -55,18 +59,52 @@ const onlyWithOther = (id: string, label: string, block: ApproverBlock): FlowDef
   otherwise: { label: '沒有其他保管人', blocks: [] },
 });
 
+/**
+ * 資產異動的兩種流程（第 36、37 條）：
+ * 1. 保管人異動（移轉／調撥）：原保管人 → 原保管單位主管 → 新保管人 → 新保管單位主管（若有其他保管人則一併簽核），若單位主管皆為申請人則自動升級至總經理／董事長。
+ * 2. 借出、合併、出售、報廢、其他（處分）：原保管人 → 新保管人 → 原保管單位主管 → 新保管單位主管 → 總經理（簽至總經理）。
+ */
 export const ASSET_TRANSFER_FLOW: FlowDef = {
   version: 1,
   options: { skipApplicant: true, skipFiler: true, collapseDuplicates: true, whenEmpty: 'block' },
   blocks: [
-    custodian('original_custodian', '原保管人', 'originalCustodianEmployeeId'),
-    custodian('new_custodian', '新保管人', 'newCustodianEmployeeId'),
-    onlyWithOther('has_other_custodian', '其他保管人', custodian('other_custodian', '其他保管人', 'otherCustodianEmployeeId')),
-    unitManager('original_manager', '原保管單位主管', 'originalCustodianEmployeeId'),
-    unitManager('new_manager', '新保管單位主管', 'newCustodianEmployeeId'),
-    onlyWithOther('has_other_manager', '其他保管單位主管', unitManager('other_manager', '其他保管單位主管', 'otherCustodianEmployeeId')),
-    approver('general_manager', '總經理', { kind: 'job_role', jobRole: 'general_manager', scope: 'company' }, { onUnresolved: 'skip', fallbackFor: MANAGERS }),
-    approver('chairman', '董事長', { kind: 'job_role', jobRole: 'chairman', scope: 'company' }, { fallbackFor: [...MANAGERS, 'general_manager'] }),
+    {
+      id: 'transfer_flow_mode',
+      type: 'condition',
+      label: '異動類型流程分流',
+      branches: [
+        {
+          id: 'disposal_or_lend_flow',
+          label: '借出／合併／出售／報廢／其他（需簽至總經理）',
+          when: requiresGmCondition,
+          blocks: [
+            custodian('disposal_original_custodian', '原保管人', 'originalCustodianEmployeeId'),
+            custodian('disposal_new_custodian', '新保管人', 'newCustodianEmployeeId'),
+            onlyWithOther('disposal_has_other_custodian', '其他保管人', custodian('disposal_other_custodian', '其他保管人', 'otherCustodianEmployeeId')),
+            unitManager('disposal_original_manager', '原保管單位主管', 'originalCustodianEmployeeId'),
+            unitManager('disposal_new_manager', '新保管單位主管', 'newCustodianEmployeeId'),
+            onlyWithOther('disposal_has_other_manager', '其他保管單位主管', unitManager('disposal_other_manager', '其他保管單位主管', 'otherCustodianEmployeeId')),
+            approver('disposal_general_manager', '總經理', { kind: 'job_role', jobRole: 'general_manager', scope: 'company' }),
+            approver('disposal_chairman', '董事長', { kind: 'job_role', jobRole: 'chairman', scope: 'company' }, {
+              fallbackFor: ['disposal_original_manager', 'disposal_new_manager', 'disposal_other_manager', 'disposal_general_manager'],
+            }),
+          ],
+        },
+      ],
+      otherwise: {
+        label: '單純保管人異動（移轉／調撥）',
+        blocks: [
+          custodian('original_custodian', '原保管人', 'originalCustodianEmployeeId'),
+          unitManager('original_manager', '原保管單位主管', 'originalCustodianEmployeeId'),
+          custodian('new_custodian', '新保管人', 'newCustodianEmployeeId'),
+          unitManager('new_manager', '新保管單位主管', 'newCustodianEmployeeId'),
+          onlyWithOther('has_other_custodian', '其他保管人', custodian('other_custodian', '其他保管人', 'otherCustodianEmployeeId')),
+          onlyWithOther('has_other_manager', '其他保管單位主管', unitManager('other_manager', '其他保管單位主管', 'otherCustodianEmployeeId')),
+          approver('general_manager', '總經理', { kind: 'job_role', jobRole: 'general_manager', scope: 'company' }, { onUnresolved: 'skip', fallbackFor: MANAGERS }),
+          approver('chairman', '董事長', { kind: 'job_role', jobRole: 'chairman', scope: 'company' }, { fallbackFor: [...MANAGERS, 'general_manager'] }),
+        ],
+      },
+    },
   ],
 };
 

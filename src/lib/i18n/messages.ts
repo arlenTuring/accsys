@@ -26,12 +26,22 @@ export function normalizeLocale(raw: string | null | undefined): Locale {
 export const PHRASE_TRANSLATIONS: Record<string, { en: string; ja: string }> = {
   // Primary & Secondary Nav
   'AI 助手': { en: 'AI Assistant', ja: 'AI アシスタント' },
+  '我的待辦': { en: 'My Tasks', ja: 'マイタスク' },
   '簽核管理': { en: 'Approvals', ja: '承認管理' },
   '公司資訊': { en: 'Company Info', ja: '会社情報' },
   '財會管理': { en: 'Finance', ja: '財務・会計' },
   '系統管理': { en: 'System Admin', ja: 'システム管理' },
   '工具區': { en: 'Tools', ja: 'ツール' },
   '簽核與進度': { en: 'Approvals & Progress', ja: '承認・進捗' },
+  '待辦與進度追蹤': { en: 'Tasks & Tracking', ja: 'タスク・進捗追跡' },
+  '我的待辦總覽': { en: 'My Tasks Overview', ja: 'マイタスク一覧' },
+  '簽核與單據追蹤': { en: 'Approvals & Form Tracking', ja: '承認・申請追跡' },
+  '互動填報與個人管理': { en: 'Interactive Tasks & Assets', ja: '回答・資産・予算管理' },
+  '年度預算表填報': { en: 'Annual Budget Filing', ja: '年度予算表の記入' },
+  '我的專屬問卷': { en: 'My Assigned Surveys', ja: 'マイアンケート' },
+  '表單申請入口': { en: 'Form Application Portal', ja: '各種申請フォーム' },
+  '申請表單總覽': { en: 'All Application Forms', ja: '申請フォーム一覧' },
+  '前往我的待辦與追蹤 →': { en: 'Go to My Tasks & Tracking →', ja: 'マイタスク・進捗へ →' },
   '我的草稿庫': { en: 'My Drafts', ja: '下書き一覧' },
   '草稿庫': { en: 'Drafts', ja: '下書き一覧' },
   '申請進度總覽': { en: 'Applications Overview', ja: '申請進捗一覧' },
@@ -49,8 +59,16 @@ export const PHRASE_TRANSLATIONS: Record<string, { en: string; ja: string }> = {
 
   // Finance Links
   '簽核追蹤': { en: 'Case Tracking', ja: '案件・承認追跡' },
+  '預算管理平台': { en: 'Budget Management Platform', ja: '予算管理プラットフォーム' },
+  '主檔管理': { en: 'Master Management', ja: 'マスタ管理' },
+  '建立預算': { en: 'Create Budget', ja: '予算作成' },
+  '預算管理': { en: 'Budget Management', ja: '予算管理' },
+  '預算分析': { en: 'Budget Analysis', ja: '予算分析' },
   '預算編號管理': { en: 'Budget Codes', ja: '予算コード管理' },
   '全公司財產清冊': { en: 'Corporate Asset Register', ja: '全社資産台帳' },
+  '財產盤點': { en: 'Asset Inventory', ja: '資産棚卸' },
+  '發送財產清點單': { en: 'Dispatch Asset Inventory', ja: '資産棚卸表の配信' },
+  '我的資產管理': { en: 'My Asset Management', ja: 'マイ資産管理' },
 
   // Admin Links
   '公司資料': { en: 'Company Profile', ja: '会社基本情報' },
@@ -95,25 +113,34 @@ export const PHRASE_TRANSLATIONS: Record<string, { en: string; ja: string }> = {
   '用印申請單(合約類)': { en: 'Seal Request (Contracts)', ja: '押印申請書（契約書）' },
   '用印申請單(非合約類)': { en: 'Seal Request (General Docs)', ja: '押印申請書（一般文書）' },
   '用印申請單(開立發票/Invoice)': { en: 'Seal Request (Invoices)', ja: '押印申請書（請求書・インボイス）' },
+  '用印申請單(開立發票)': { en: 'Seal Request (Invoices)', ja: '押印申請書（請求書・インボイス）' },
   '資產異動申請單': { en: 'Asset Transfer Request', ja: '資産異動申請書' },
+  '預算申請單': { en: 'Budget Request Form', ja: '予算申請書' },
+  '預算變更／追加申請單': { en: 'Budget Change / Supplement Form', ja: '予算変更・追加申請書' },
+  '採購付款單': { en: 'Procurement Payment Request', ja: '購買支払申請書' },
   '申請單': { en: 'Application Form', ja: '申請書' },
 
   // Status Labels
   '全部': { en: 'All', ja: 'すべて' },
   '待我簽核': { en: 'To Approve', ja: '承認待ち（自分）' },
+  '待您簽核': { en: 'Waiting for You', ja: '承認待ち' },
   '簽核中': { en: 'In Progress', ja: '承認中' },
   '已核准': { en: 'Approved', ja: '承認済' },
+  '已簽核': { en: 'Approved', ja: '承認済' },
   '已退回': { en: 'Returned', ja: '差戻し' },
   '已退回（待修改）': { en: 'Returned (Action Needed)', ja: '差戻し（修正待ち）' },
   '已撤回': { en: 'Withdrawn', ja: '取下げ済' },
-  '待簽核': { en: 'Pending', ja: '承認待ち' },
+  '待簽核': { en: 'Pending Approvals', ja: '承認待ち' },
+  '草稿': { en: 'Draft', ja: '下書き' },
   '由系統代簽': { en: 'Auto-Approved', ja: 'システム自動承認' },
   '略過': { en: 'Skipped', ja: 'スキップ' },
 
   // Approval Step Roles
   '申請單位主管': { en: 'Dept. Manager', ja: '申請部門長' },
+  '權責部門主管': { en: 'Responsible Dept. Manager', ja: '所管部門長' },
   '直屬主管': { en: 'Direct Manager', ja: '直属の上司' },
   '部門主管': { en: 'Dept. Manager', ja: '部門長' },
+  '專案負責人': { en: 'Project Manager', ja: 'プロジェクト責任者' },
   '預算負責人': { en: 'Budget Owner', ja: '予算責任者' },
   '總經理': { en: 'General Manager', ja: '総経理 (GM)' },
   '董事長': { en: 'Chairman', ja: '会長 (Chairman)' },
@@ -125,7 +152,71 @@ export const PHRASE_TRANSLATIONS: Record<string, { en: string; ja: string }> = {
   '新保管單位主管': { en: 'New Dept. Manager', ja: '新管理部門長' },
   '其他保管單位主管': { en: 'Other Dept. Manager', ja: '他管理部門長' },
   '財會審核': { en: 'Finance Review', ja: '財務審査' },
+  '財會主管': { en: 'Finance Manager', ja: '財務部門長' },
   '人資審核': { en: 'HR Review', ja: '人事審査' },
+  '法務審核': { en: 'Legal Review', ja: '法務審査' },
+  '用印保管人': { en: 'Seal Custodian', ja: '印章管理者' },
+
+  // AI Assistant Tool & Progress Step Labels
+  '整理問題與下一步': { en: 'Analyzing request & next steps', ja: '質問の整理と次のステップを計画中' },
+  '依工具結果繼續推理': { en: 'Reasoning from tool results', ja: 'ツール結果に基づき推論を継続中' },
+  '撰寫回覆': { en: 'Drafting response', ja: '回答を作成中' },
+  '彙整最終回覆': { en: 'Synthesizing final response', ja: '最終回答をまとめ中' },
+  '個人資料': { en: 'My Profile', ja: 'プロフィール照会' },
+  '近期專案': { en: 'Recent Projects', ja: '最近のプロジェクト' },
+  '專案搜尋': { en: 'Project Search', ja: 'プロジェクト検索' },
+  '預算科目': { en: 'Budget Codes', ja: '予算コード照会' },
+  '可填表單': { en: 'Available Forms', ja: '申請可能フォーム' },
+  '表單目錄': { en: 'Form Catalog', ja: 'フォーム一覧' },
+  '我的請購': { en: 'My Purchase Requests', ja: '自分の購買依頼' },
+  '我的採購': { en: 'My Purchase Orders', ja: '自分の発注書' },
+  '我的費用申請': { en: 'My Expense Claims', ja: '自分の経費精算' },
+  '通知': { en: 'Notifications', ja: '通知照会' },
+  '請購明細': { en: 'Purchase Request Detail', ja: '購買依頼詳細' },
+  '案件概況': { en: 'Case Overview', ja: '案件概要' },
+  '簽核進度': { en: 'Approval Progress', ja: '承認進捗' },
+  '表單欄位': { en: 'Form Fields', ja: 'フォーム項目仕様' },
+  '建立草稿': { en: 'Create Draft', ja: '下書き作成' },
+  '讀取草稿': { en: 'Read Draft', ja: '下書き読込' },
+  '更新草稿': { en: 'Update Draft', ja: '下書き更新' },
+  '選項': { en: 'Options', ja: '選択肢提示' },
+  '專案選取': { en: 'Project Picker', ja: 'プロジェクト選択' },
+  '修改確認': { en: 'Confirm Changes', ja: '変更確認' },
+  '催簽確認': { en: 'Confirm Reminder', ja: '催促確認' },
+  '查詢我的單據': { en: 'My Submissions', ja: '提出済申請の検索' },
+  '開補件草稿': { en: 'Open Resubmission Draft', ja: '再提出下書き作成' },
+  '選擇核准單據': { en: 'Approved Document Picker', ja: '承認済書類の選択' },
+  '附加核准 PDF': { en: 'Attach Approved PDF', ja: '承認済PDFを添付' },
+  '附加聊天附件到草稿': { en: 'Attach Files to Draft', ja: '添付ファイルを下書きに追加' },
+  '列出草稿附件': { en: 'List Draft Attachments', ja: '下書き添付一覧' },
+  '移除草稿附件': { en: 'Remove Draft Attachments', ja: '下書き添付削除' },
+  '複製草稿': { en: 'Duplicate Draft', ja: '下書き複製' },
+  '草稿改名': { en: 'Rename Draft', ja: '下書き名変更' },
+  '搜尋同行候選': { en: 'Search Trip Companions', ja: '同行候補検索' },
+  '查詢資產': { en: 'Search Assets', ja: '資産検索' },
+  '查詢財產清點單': { en: 'Asset Inventory Forms', ja: '資産棚卸表の照会' },
+  '派發財產清點單': { en: 'Dispatch Asset Inventory', ja: '資産棚卸表の配信' },
+  '確認財產點交明細': { en: 'Confirm Asset Handover', ja: '資産引継明細の確認' },
+  '查詢我的待辦總覽': { en: 'My Tasks Overview', ja: 'マイタスク概要照会' },
+  '查詢年度預算任務與歷年紀錄': { en: 'Budget Tasks & History', ja: '年度予算タスク・履歴照会' },
+  '派發年度預算編列單': { en: 'Dispatch Budget Notice', ja: '年度予算編成の配信' },
+  '年度預算財務與治理指標分析': { en: 'Budget Analytics Summary', ja: '年度予算財務・ガバナンス分析' },
+  '查詢公司規章': { en: 'Search Regulations', ja: '社内規程の検索' },
+  '查詢公司公告': { en: 'List Announcements', ja: '社内お知らせ照会' },
+  '查詢公司問卷': { en: 'List Surveys', ja: '社内アンケート照会' },
+  '代為簽核': { en: 'Approve Submission', ja: '代理承認' },
+  '代為退回': { en: 'Return Submission', ja: '代理差戻し' },
+  '批次簽核': { en: 'Batch Approve All', ja: '一括承認' },
+
+  // Card Line Labels
+  '申請人': { en: 'Applicant', ja: '申請者' },
+  '已等待': { en: 'Waiting', ja: '待機時間' },
+  '摘要': { en: 'Summary', ja: '概要' },
+  '金額': { en: 'Amount', ja: '金額' },
+  '狀態': { en: 'Status', ja: 'ステータス' },
+  '目前關卡': { en: 'Current Step', ja: '現在のステップ' },
+  '退回原因': { en: 'Return Reason', ja: '差戻し理由' },
+  '核准時間': { en: 'Approved At', ja: '承認日時' },
 
   // System Roles
   '一般員工': { en: 'Employee', ja: '一般社員' },
@@ -149,16 +240,26 @@ export const PHRASE_TRANSLATIONS: Record<string, { en: string; ja: string }> = {
   '已遺失': { en: 'Lost', ja: '紛失' },
 };
 
+const REVERSE_PHRASE_TO_ZH: Record<string, string> = (() => {
+  const map: Record<string, string> = {};
+  for (const [zhKey, val] of Object.entries(PHRASE_TRANSLATIONS)) {
+    if (val.en && !(val.en in map)) map[val.en] = zhKey;
+    if (val.ja && !(val.ja in map)) map[val.ja] = zhKey;
+  }
+  return map;
+})();
+
 export function translatePhrase(text: string | null | undefined, locale: Locale): string {
   if (!text) return '';
-  if (locale === 'zh-Hant') return text;
   const trimmed = text.trim();
-  const hit = PHRASE_TRANSLATIONS[trimmed];
+  const canonicalZh = REVERSE_PHRASE_TO_ZH[trimmed] ?? trimmed;
+  if (locale === 'zh-Hant') return canonicalZh;
+  const hit = PHRASE_TRANSLATIONS[canonicalZh];
   if (hit) return locale === 'en' ? hit.en : hit.ja;
 
   // Handle prefixed "新增 · XXX"
-  if (trimmed.startsWith('新增 · ')) {
-    const rest = trimmed.slice('新增 · '.length);
+  if (canonicalZh.startsWith('新增 · ')) {
+    const rest = canonicalZh.slice('新增 · '.length);
     const subHit = PHRASE_TRANSLATIONS[rest];
     const subText = subHit ? (locale === 'en' ? subHit.en : subHit.ja) : rest;
     return locale === 'en' ? `New · ${subText}` : `新規 · ${subText}`;
@@ -455,7 +556,7 @@ export const TRANSLATIONS: Record<Locale, TranslationShape> = {
         custodyAssetsTitle: '名下保管資產',
         noCustodyAssets: '目前名下無保管資產',
         copyTagTitle: '複製財產編號',
-        companyAssetShortcut: '全公司財產清冊 →',
+        companyAssetShortcut: '我的資產管理 →',
         logoutButton: '登出系統',
       },
     },
@@ -606,7 +707,7 @@ export const TRANSLATIONS: Record<Locale, TranslationShape> = {
       subtitle:
         '依職能領域分類彙整台灣智慧駕駛各項內控辦法、出勤差旅、採購核銷、薪酬考核與法務用印規範。您也可直接在 AI 助手詢問任何規章條文。',
       manageBtn: '管理公司規章 →',
-      searchPlaceholder: '搜尋規章名稱、文號、條文關鍵字（如：出差住宿、電動車里程、採購比價、特休、用印）…',
+      searchPlaceholder: '搜尋規章名稱、條文關鍵字（如：出差住宿、電動車里程、採購比價、特休、用印）…',
       searchBtn: '搜尋規章',
       clearFilterBtn: '清除篩選',
       allCategories: '全部分類總覽',
@@ -709,7 +810,7 @@ export const TRANSLATIONS: Record<Locale, TranslationShape> = {
         custodyAssetsTitle: 'Assigned Custody Assets',
         noCustodyAssets: 'No custody assets assigned to you',
         copyTagTitle: 'Copy Asset Tag',
-        companyAssetShortcut: 'Corporate Asset Register →',
+        companyAssetShortcut: 'My Asset Management →',
         logoutButton: 'Sign Out',
       },
     },
@@ -727,7 +828,7 @@ export const TRANSLATIONS: Record<Locale, TranslationShape> = {
       resubmit: 'Resubmit',
       view: 'View',
       later: 'Later',
-      inputPlaceholder: 'Ask a quick question… (Press Enter twice to send)',
+      inputPlaceholder: 'Ask a quick question… (Press Enter to send)',
       sendButton: 'Send',
       continueInFull: 'Continue in Full Assistant',
     },
@@ -748,7 +849,7 @@ export const TRANSLATIONS: Record<Locale, TranslationShape> = {
       briefingTitle: 'Get an instant briefing on pending approvals, announcements, and surveys',
       newFormButton: '+ New Form',
       draftsButton: 'Drafts',
-      composerPlaceholder: 'Type a message or drop files here… (Press Enter twice to send)',
+      composerPlaceholder: 'Type a message or drop files here… (Press Enter to send)',
       sendButton: 'Send',
       voiceStartTitle: 'Voice Input',
       voiceStopTitle: 'Click to finish voice input',
@@ -861,7 +962,7 @@ export const TRANSLATIONS: Record<Locale, TranslationShape> = {
       subtitle:
         'Internal control policies, attendance & travel rules, procurement & reimbursement guidelines, compensation, and seal governance. You can also ask the AI Assistant about any clause.',
       manageBtn: 'Manage Regulations →',
-      searchPlaceholder: 'Search regulation title, code, or keywords (e.g., travel lodging, EV mileage, quotation)…',
+      searchPlaceholder: 'Search regulation title or keywords (e.g., travel lodging, EV mileage, quotation)…',
       searchBtn: 'Search',
       clearFilterBtn: 'Clear Filter',
       allCategories: 'All Categories',
@@ -966,7 +1067,7 @@ export const TRANSLATIONS: Record<Locale, TranslationShape> = {
         custodyAssetsTitle: '保有・管理資産',
         noCustodyAssets: '現在保有している管理資産はありません',
         copyTagTitle: '資産番号をコピー',
-        companyAssetShortcut: '全社資産台帳へ →',
+        companyAssetShortcut: 'マイ資産管理へ →',
         logoutButton: 'ログアウト',
       },
     },
@@ -984,7 +1085,7 @@ export const TRANSLATIONS: Record<Locale, TranslationShape> = {
       resubmit: '再提出・補正',
       view: '表示',
       later: '後で',
-      inputPlaceholder: '簡単な質問を入力…（Enter 2回で送信）',
+      inputPlaceholder: '簡単な質問を入力…（Enter で送信）',
       sendButton: '送信',
       continueInFull: 'AI アシスタント全画面で開く',
     },
@@ -1005,7 +1106,7 @@ export const TRANSLATIONS: Record<Locale, TranslationShape> = {
       briefingTitle: '承認待ち案件、最新のお知らせ、未回答アンケートを今すぐ要約',
       newFormButton: '+ 新規申請',
       draftsButton: '下書き一覧',
-      composerPlaceholder: 'メッセージを入力、またはファイルをドロップ…（Enter 2回で送信）',
+      composerPlaceholder: 'メッセージを入力、またはファイルをドロップ…（Enter で送信）',
       sendButton: '送信',
       voiceStartTitle: '音声入力',
       voiceStopTitle: 'クリックして音声入力を完了',
@@ -1118,7 +1219,7 @@ export const TRANSLATIONS: Record<Locale, TranslationShape> = {
       subtitle:
         '内部統制、勤怠・出張、購買・経費精算、給与・評価、法務・押印に関する社内規程集です。AI アシスタントに直接条文を質問することも可能です。',
       manageBtn: '社内規程を管理 →',
-      searchPlaceholder: '規程名、文書番号、キーワードで検索（例：出張宿泊、マイレージ、相見積、有給休暇、押印）…',
+      searchPlaceholder: '規程名、キーワードで検索（例：出張宿泊、マイレージ、相見積、有給休暇、押印）…',
       searchBtn: '検索',
       clearFilterBtn: '条件クリア',
       allCategories: 'すべてのカテゴリ',

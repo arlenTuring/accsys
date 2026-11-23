@@ -242,3 +242,107 @@
   border-right: 2px solid currentColor;
   animation: ai-chat-caret 1s step-end infinite;
 }
+
+/* ==========================================================================
+   Single-Page A4 Print / PDF Layout Optimization (第 25、26 條：一張 A4 印完)
+   ========================================================================== */
+@page {
+  size: A4 portrait;
+  margin: 7mm 9mm;
+}
+
+@media print {
+  html,
+  body {
+    width: 100%;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #0f2d5c !important;
+    font-size: 11px !important;
+    line-height: 1.32 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .page-shell {
+    max-width: 100% !important;
+    width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .page-shell > * + * {
+    margin-top: 0.35rem !important;
+  }
+
+  .page-title {
+    font-size: 1.15rem !important;
+    line-height: 1.25 !important;
+  }
+
+  .page-subtitle {
+    font-size: 0.72rem !important;
+    margin-top: 0.1rem !important;
+  }
+
+  .card,
+  .card-muted {
+    padding: 0.4rem 0.6rem !important;
+    border-radius: 0.25rem !important;
+    box-shadow: none !important;
+    border: 1px solid #cbd5e1 !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Ensure metadata & form field grids stay 4-column side-by-side on A4 portrait */
+  dl.grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    column-gap: 0.75rem !important;
+    row-gap: 0.3rem !important;
+  }
+
+  dl.grid dt {
+    font-size: 0.68rem !important;
+    line-height: 1.2 !important;
+  }
+
+  dl.grid dd {
+    margin-top: 0.1rem !important;
+    font-size: 0.76rem !important;
+    line-height: 1.3 !important;
+  }
+
+  /* Compact all tables (line items, asset register, approval timeline) for 1-page A4 fit */
+  table {
+    font-size: 0.72rem !important;
+    line-height: 1.25 !important;
+    min-width: 0 !important;
+    width: 100% !important;
+  }
+
+  table th,
+  table td {
+    padding: 0.2rem 0.35rem !important;
+  }
+
+  .overflow-x-auto {
+    overflow: visible !important;
+  }
+
+  body.accsys-direct-printing > *:not(#accsys-direct-print-root) {
+    display: none !important;
+  }
+
+  body.accsys-direct-printing > #accsys-direct-print-root {
+    display: block !important;
+    width: 100% !important;
+  }
+}
+
+@media screen {
+  #accsys-direct-print-root {
+    display: none !important;
+  }
+}

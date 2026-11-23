@@ -10,6 +10,10 @@ describe('isPublicPath', () => {
     expect(isPublicPath('/login')).toBe(true);
   });
 
+  it('treats the email approval confirmation page as public (protected by HMAC token)', () => {
+    expect(isPublicPath('/email-approval')).toBe(true);
+  });
+
   it('treats the auth callback as public', () => {
     expect(isPublicPath('/auth/callback')).toBe(true);
   });

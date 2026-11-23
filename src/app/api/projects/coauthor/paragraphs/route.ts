@@ -11,8 +11,15 @@ import { getCandidateDriveWriteTokens } from '@/lib/projects/drive-doc-writer';
  * the server.
  */
 export async function GET(request: NextRequest) {
-  const employee = await getCurrentEmployee();
+  const { getSystemFeatureFlags } = await import('@/lib/feature-flags/service');
+  const [employee, featureFlags] = await Promise.all([
+    getCurrentEmployee(),
+    getSystemFeatureFlags(),
+  ]);
   if (!employee) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  if (!featureFlags.project_assistant) {
+    return NextResponse.json({ error: 'feature_disabled' }, { status: 403 });
+  }
 
   const driveFileId = request.nextUrl.searchParams.get('driveFileId')?.trim() ?? '';
   if (!/^[A-Za-z0-9_-]{10,200}$/.test(driveFileId)) {

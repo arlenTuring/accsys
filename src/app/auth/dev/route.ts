@@ -4,7 +4,9 @@ import { recordAudit } from '@/lib/audit/record';
 import { getAuthConfig } from '@/lib/auth/config';
 import { getDevPersonaEmail } from '@/lib/auth/dev-persona-emails';
 import { isDevLoginAllowed, isLoopbackHostHeader } from '@/lib/auth/dev-personas';
+import { ensureStageTestAccounts } from '@/lib/auth/ensure-stage-test-accounts';
 import { loginErrorRedirect, noStore, redirectTo, setSessionCookie } from '@/lib/auth/http';
+import { safeReturnTo } from '@/lib/auth/redirect';
 import { createSession } from '@/lib/auth/sessions';
 import { getDb } from '@/lib/db';
 import { employees } from '@/lib/db/schema';
@@ -19,6 +21,9 @@ export async function GET(request: NextRequest) {
   const cfg = getAuthConfig();
   const email = getDevPersonaEmail(request.nextUrl.searchParams.get('as')) ?? process.env.DEV_LOGIN_EMAIL?.trim();
   if (!email) return loginErrorRedirect(cfg, 'auth_failed');
+
+  // 第 39 條：確保 10 大關卡測試帳號皆已自動建置於資料庫
+  await ensureStageTestAccounts();
 
   const token = await getDb().transaction(async (tx) => {
     const [employee] = await tx
@@ -37,7 +42,8 @@ export async function GET(request: NextRequest) {
   });
   if (!token) return loginErrorRedirect(cfg, 'not_registered');
 
-  const res = redirectTo(cfg, '/tools/ai-chat');
+  const returnTo = safeReturnTo(request.nextUrl.searchParams.get('returnTo'), cfg.appOrigin);
+  const res = redirectTo(cfg, returnTo || '/applications');
   setSessionCookie(res, cfg, token);
   return noStore(res);
 }

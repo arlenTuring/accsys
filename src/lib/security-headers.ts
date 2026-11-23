@@ -11,6 +11,7 @@ export function buildCsp(nonce: string, dev: boolean): string {
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${dev ? " 'unsafe-eval'" : ''}`,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https://*.googleusercontent.com https://drive.google.com https://docs.google.com",
+    "media-src 'self' data: blob:",
     "font-src 'self' data:",
     `connect-src 'self' data: blob:${dev ? ' ws: wss:' : ''}`,
     "frame-src 'self' https://drive.google.com https://docs.google.com https://accounts.google.com https://*.googleusercontent.com",

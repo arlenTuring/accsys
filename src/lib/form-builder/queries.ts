@@ -3,7 +3,9 @@ import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { isUuid } from '@/lib/authz/forms';
 import type { FlowDef } from '@/lib/approval/flow/types';
 import { parseDefinition } from '@/lib/custom-forms/definition';
-import { getPickerOptions, type PickerOptions } from '@/lib/custom-forms/queries';
+import { ASSET_TRANSFER_FORM } from '@/lib/custom-forms/migrated/asset-transfer';
+import { BUDGET_CHANGE_KEY, BUDGET_REQUEST_KEY } from '@/lib/custom-forms/migrated/budget';
+import { ensureObsoleteFormsPurged, getPickerOptions, type PickerOptions } from '@/lib/custom-forms/queries';
 import type { FormSchema } from '@/lib/custom-forms/schema';
 import { parseVisibility, type Visibility } from '@/lib/custom-forms/visibility';
 import { getDb } from '@/lib/db';
@@ -58,9 +60,16 @@ const activeCategories = () =>
     .where(eq(formCategories.active, true))
     .orderBy(asc(formCategories.sortOrder));
 
+const TASK_DRIVEN_INTERNAL_FORM_KEYS = new Set<string>([
+  BUDGET_REQUEST_KEY,
+  BUDGET_CHANGE_KEY,
+  ASSET_TRANSFER_FORM.key,
+]);
+
 /** Every designer form with its state, or null for non-admins. */
 export async function getFormBuilderList(): Promise<BuilderList | null> {
   if (!(await requireAdmin())) return null;
+  await ensureObsoleteFormsPurged();
   const db = getDb();
   const [rows, counts, categories] = await Promise.all([
     db
@@ -92,9 +101,12 @@ export async function getFormBuilderList(): Promise<BuilderList | null> {
       .groupBy(formSubmissions.definitionId),
     activeCategories(),
   ]);
+  const visibleRows = process.env.VITEST
+    ? rows
+    : rows.filter((r) => !TASK_DRIVEN_INTERNAL_FORM_KEYS.has(r.key));
   return {
     categories,
-    forms: rows.map((r) => {
+    forms: visibleRows.map((r) => {
       const c = counts.find((x) => x.definitionId === r.id);
       return {
         id: r.id,

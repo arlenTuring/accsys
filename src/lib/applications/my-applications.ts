@@ -20,6 +20,7 @@ import { getMyPurchaseOrders } from '@/lib/purchase-orders/queries';
 import { getMyRequests } from '@/lib/purchase-requests/queries';
 import { getMySealRequests } from '@/lib/seal-requests/lists';
 import { getMyTravelExpenses } from '@/lib/travel-expenses/queries';
+import { listFormDraftsForOwner } from '@/lib/form-drafts/service';
 
 export type MyApplicationCategoryKey =
   | 'procurement'
@@ -51,6 +52,9 @@ export type MyApplicationItem = {
   sortTimestamp: number;
   href: string;
   editHref?: string;
+  cloneHref?: string;
+  draftId?: string;
+  canSelfEditBeforeFirstApproval?: boolean;
   summary: string;
   /** Approval progress details */
   progress: ApprovalProgress | null;
@@ -82,7 +86,10 @@ export type PendingApprovalRichItem = {
 };
 
 function mapCustomCategoryKey(rawKey: string | undefined, formKey: string): MyApplicationCategoryKey {
-  if (rawKey === 'procurement' || formKey.includes('purchase') || formKey === 'acceptance') {
+  if (formKey === 'standalone-payment') {
+    return 'expense';
+  }
+  if (rawKey === 'procurement' || formKey.includes('purchase') || formKey === 'acceptance' || formKey === 'procurement-payment') {
     return 'procurement';
   }
   if (
@@ -269,7 +276,8 @@ export async function getMyApplicationsAll(): Promise<MyApplicationItem[]> {
         dateLabel: fmtDate.format(s.createdAt),
         sortTimestamp: s.createdAt.getTime(),
         href: `/f/${s.key}/${s.id}`,
-        editHref: s.status === 'returned' ? `/f/${s.key}/${s.id}/edit` : undefined,
+        editHref: `/f/${s.key}/${s.id}/edit`,
+        cloneHref: `/f/${s.key}/new?copyFrom=${s.id}`,
       };
     }),
     ...requests.map((r, i) => ({
@@ -444,6 +452,12 @@ export async function getMyApplicationsAll(): Promise<MyApplicationItem[]> {
 
     const snap = item.snapshot;
     const ret = returnByKey.get(`${item.formType}:${item.id}`);
+    const canSelfEditBeforeFirstApproval =
+      item.status === 'pending_approval' && (snap?.progress?.done ?? 0) === 0;
+    const rawEditHref =
+      item.editHref ?? `${item.href}/edit`;
+    const effectiveEditHref =
+      item.status === 'returned' || canSelfEditBeforeFirstApproval ? rawEditHref : undefined;
 
     return {
       id: item.id,
@@ -459,7 +473,9 @@ export async function getMyApplicationsAll(): Promise<MyApplicationItem[]> {
       dateLabel: item.dateLabel,
       sortTimestamp: item.sortTimestamp,
       href: item.href,
-      editHref: item.editHref,
+      editHref: effectiveEditHref,
+      cloneHref: item.cloneHref,
+      canSelfEditBeforeFirstApproval,
       summary,
       progress: snap?.progress ?? null,
       currentNodeLabel: snap?.currentNodeLabel ?? null,
@@ -471,15 +487,176 @@ export async function getMyApplicationsAll(): Promise<MyApplicationItem[]> {
   });
 
   const statusRank = (s: string) => {
+    if (s === 'draft') return -1;
     if (s === 'returned') return 0;
     if (s === 'pending_approval') return 1;
     if (s === 'approved') return 2;
     return 3;
   };
 
-  return enriched.sort((a, b) => {
-    const rDiff = statusRank(a.status) - statusRank(b.status);
-    if (rDiff !== 0) return rDiff;
-    return b.sortTimestamp - a.sortTimestamp;
+  const { getSystemFeatureFlags } = await import('@/lib/feature-flags/service');
+  const { resolveFeatureFlagForFormKey } = await import('@/lib/feature-flags/definitions');
+  const featureFlags = await getSystemFeatureFlags();
+
+  return enriched
+    .filter((item) => {
+      const flag = resolveFeatureFlagForFormKey(
+        item.formKey ?? item.formType,
+        item.categoryKey
+      );
+      return !flag || Boolean(featureFlags[flag]);
+    })
+    .sort((a, b) => {
+      const rDiff = statusRank(a.status) - statusRank(b.status);
+      if (rDiff !== 0) return rDiff;
+      return b.sortTimestamp - a.sortTimestamp;
+    });
+}
+
+export type QueueNavEntry = {
+  id: string;
+  formLabel: string;
+  caseNumber: string;
+  href: string;
+  categoryLabel: string;
+  applicantName?: string;
+};
+
+export type DetailQueueNavigation = {
+  mode: 'to_approve' | 'mine' | 'just_processed' | 'general';
+  queueTitle: string;
+  currentIndex: number | null;
+  totalCount: number;
+  prevItem: QueueNavEntry | null;
+  nextItem: QueueNavEntry | null;
+  allItems: QueueNavEntry[];
+};
+
+const ORDERED_CATEGORY_KEYS: MyApplicationCategoryKey[] = [
+  'procurement',
+  'expense',
+  'seal',
+  'asset',
+  'other',
+];
+
+/**
+ * Resolves the user's current position, previous item, and next item in the
+ * 「簽核與單據追蹤」(/applications) list so detail pages can render intuitive
+ * "Back to list" and "Prev / Next" navigation controls.
+ */
+export async function getDetailQueueNavigation(
+  currentId: string
+): Promise<DetailQueueNavigation> {
+  const employee = await getCurrentEmployee();
+  if (!employee) {
+    return {
+      mode: 'general',
+      queueTitle: '簽核與單據追蹤',
+      currentIndex: null,
+      totalCount: 0,
+      prevItem: null,
+      nextItem: null,
+      allItems: [],
+    };
+  }
+
+  const db = getDb();
+  const [rawApprovalQueue, defCategories] = await Promise.all([
+    getMyApprovalQueueAll(),
+    db
+      .select({
+        key: formDefinitions.key,
+        catKey: formCategories.key,
+      })
+      .from(formDefinitions)
+      .innerJoin(formCategories, eq(formCategories.id, formDefinitions.categoryId)),
+  ]);
+
+  const catByFormKey = new Map(defCategories.map((d) => [d.key, d.catKey]));
+
+  const approvalWithCat = rawApprovalQueue.map((q) => {
+    const catKey = mapFormTypeCategoryKey(q.formType, q.formKey, catByFormKey);
+    return {
+      id: q.id,
+      formLabel: q.label,
+      caseNumber: q.caseNumber,
+      href: q.href,
+      categoryKey: catKey,
+      categoryLabel: APPLICATION_CATEGORY_LABELS[catKey],
+      applicantName: q.applicantName,
+    };
   });
+
+  // Order exactly as shown in /applications (grouped by ORDERED_CATEGORY_KEYS)
+  const orderedApprovals: QueueNavEntry[] = ORDERED_CATEGORY_KEYS.flatMap((catKey) =>
+    approvalWithCat.filter((item) => item.categoryKey === catKey)
+  );
+
+  const approvalIdx = orderedApprovals.findIndex((item) => item.id === currentId);
+  if (approvalIdx !== -1) {
+    return {
+      mode: 'to_approve',
+      queueTitle: '待我簽核佇列',
+      currentIndex: approvalIdx + 1,
+      totalCount: orderedApprovals.length,
+      prevItem: approvalIdx > 0 ? orderedApprovals[approvalIdx - 1]! : null,
+      nextItem:
+        approvalIdx < orderedApprovals.length - 1
+          ? orderedApprovals[approvalIdx + 1]!
+          : null,
+      allItems: orderedApprovals,
+    };
+  }
+
+  // Otherwise check the user's own submitted applications
+  const allMine = (await getMyApplicationsAll()).filter((i) => i.status !== 'draft');
+  const orderedMine: QueueNavEntry[] = ORDERED_CATEGORY_KEYS.flatMap((catKey) =>
+    allMine
+      .filter((item) => item.categoryKey === catKey)
+      .map((item) => ({
+        id: item.id,
+        formLabel: item.formLabel,
+        caseNumber: item.caseNumber,
+        href: item.href,
+        categoryLabel: item.categoryLabel,
+      }))
+  );
+
+  const mineIdx = orderedMine.findIndex((item) => item.id === currentId);
+  if (mineIdx !== -1) {
+    return {
+      mode: 'mine',
+      queueTitle: '我的申請單據',
+      currentIndex: mineIdx + 1,
+      totalCount: orderedMine.length,
+      prevItem: mineIdx > 0 ? orderedMine[mineIdx - 1]! : null,
+      nextItem:
+        mineIdx < orderedMine.length - 1 ? orderedMine[mineIdx + 1]! : null,
+      allItems: orderedMine,
+    };
+  }
+
+  // If the user just approved/returned this item and still has pending approvals left
+  if (orderedApprovals.length > 0) {
+    return {
+      mode: 'just_processed',
+      queueTitle: '待我簽核佇列',
+      currentIndex: null,
+      totalCount: orderedApprovals.length,
+      prevItem: null,
+      nextItem: orderedApprovals[0]!,
+      allItems: orderedApprovals,
+    };
+  }
+
+  return {
+    mode: 'general',
+    queueTitle: '簽核與單據追蹤',
+    currentIndex: null,
+    totalCount: orderedMine.length,
+    prevItem: null,
+    nextItem: orderedMine[0] ?? null,
+    allItems: orderedMine,
+  };
 }

@@ -54,9 +54,6 @@ export default async function RegulationDetailPage({
       <article className="card space-y-6 p-6 md:p-8">
         <header className="space-y-3 border-b border-td-border pb-5">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded bg-slate-100 px-2.5 py-0.5 font-mono text-xs font-semibold text-slate-700">
-              {reg.code}
-            </span>
             <span
               className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${catMeta.badgeClass}`}
             >

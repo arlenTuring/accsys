@@ -47,11 +47,23 @@ export function PurchaseOrderForm({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const total = items.reduce((sum, i) => sum + (Number(prices[i.id] ?? 0) || 0) * i.quantity, 0);
+  const total = items.reduce((sum, i) => {
+    const p = Number(prices[i.id] ?? 0);
+    return sum + (Number.isFinite(p) && p > 0 ? p * i.quantity : 0);
+  }, 0);
   const required = requiredQuoteCount(total);
 
   const onSubmit = async () => {
     setError(null);
+    for (let idx = 0; idx < items.length; idx += 1) {
+      const item = items[idx]!;
+      const rawPrice = (prices[item.id] ?? '').trim();
+      const numPrice = Number(rawPrice);
+      if (rawPrice !== '' && Number.isFinite(numPrice) && numPrice < 0) {
+        setError(`第 ${idx + 1} 項（${item.description}）的「單價」不可為負數（目前輸入：${rawPrice}），請修改為正數`);
+        return;
+      }
+    }
     setSubmitting(true);
     const itemsPayload = items.map((i) => ({
       purchaseOrderItemId: i.id,
@@ -136,15 +148,19 @@ export function PurchaseOrderForm({
         預計交貨天數：
         <input
           type="number"
+          min="1"
           value={expectedDeliveryDays}
-          onChange={(e) => setExpectedDeliveryDays(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === '-' || e.key === '－' || e.key === 'e' || e.key === 'E') e.preventDefault();
+          }}
+          onChange={(e) => setExpectedDeliveryDays(e.target.value.replace(/[-－]/g, ''))}
           className="ml-2 w-24 rounded border px-2 py-1"
         />
       </label>
 
       {items.map((item) => {
         const unitPrice = Number(prices[item.id] ?? 0) || 0;
-        const untaxedAmount = unitPrice * item.quantity;
+        const untaxedAmount = unitPrice > 0 ? unitPrice * item.quantity : 0;
         const category = classifyItemCategory({ untaxedAmount, soldWithVehicle: false });
         return (
           <div key={item.id} className="space-y-1 rounded border p-3">
@@ -153,8 +169,14 @@ export function PurchaseOrderForm({
             </p>
             <input
               type="number"
+              min="0"
               value={prices[item.id] ?? ''}
-              onChange={(e) => setPrices((prev) => ({ ...prev, [item.id]: e.target.value }))}
+              onKeyDown={(e) => {
+                if (e.key === '-' || e.key === '－' || e.key === 'e' || e.key === 'E') e.preventDefault();
+              }}
+              onChange={(e) =>
+                setPrices((prev) => ({ ...prev, [item.id]: e.target.value.replace(/[-－]/g, '') }))
+              }
               placeholder="單價"
               className="w-32 rounded border px-2 py-1"
             />
@@ -171,8 +193,12 @@ export function PurchaseOrderForm({
         報價單家數：
         <input
           type="number"
+          min="0"
           value={quoteCount}
-          onChange={(e) => setQuoteCount(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === '-' || e.key === '－' || e.key === 'e' || e.key === 'E') e.preventDefault();
+          }}
+          onChange={(e) => setQuoteCount(e.target.value.replace(/[-－]/g, ''))}
           className="ml-2 w-20 rounded border px-2 py-1"
         />
         <span className="ml-2 text-xs text-gray-500">

@@ -93,7 +93,7 @@ export default async function AdminRegulationsPage({
             type="text"
             name="q"
             defaultValue={query}
-            placeholder="搜尋規章編號、標題、條文關鍵字或適用表單…"
+            placeholder="搜尋規章名稱、條文關鍵字或適用表單…"
             className="min-w-[16rem] flex-1 rounded-lg border border-td-border px-3.5 py-2 text-sm"
           />
           <button type="submit" className="btn-secondary text-sm">
@@ -172,8 +172,7 @@ export default async function AdminRegulationsPage({
               <table className="w-full text-left text-sm">
                 <thead className="border-b border-slate-100 bg-white text-xs font-semibold text-td-muted">
                   <tr>
-                    <th className="w-36 px-5 py-2.5">編號</th>
-                    <th className="px-4 py-2.5">規章名稱與摘要</th>
+                    <th className="px-5 py-2.5">規章名稱與摘要</th>
                     <th className="w-40 px-4 py-2.5">權責單位</th>
                     <th className="w-36 px-4 py-2.5">版次／核定日</th>
                     <th className="w-24 px-4 py-2.5">狀態</th>
@@ -188,21 +187,20 @@ export default async function AdminRegulationsPage({
                     };
                     return (
                       <tr key={r.id} className="hover:bg-slate-50/70">
-                        <td className="whitespace-nowrap px-5 py-3 font-mono text-xs font-semibold text-slate-700">
-                          {r.code}
-                          {r.pinned && (
-                            <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 font-sans text-[11px] font-bold text-amber-800">
-                              必讀
-                            </span>
-                          )}
-                        </td>
-                        <td className="max-w-md px-4 py-3">
-                          <Link
-                            href={`/admin/regulations/${r.id}/edit`}
-                            className="font-semibold text-td-blue-dark hover:text-td-blue hover:underline"
-                          >
-                            {r.title}
-                          </Link>
+                        <td className="max-w-xl px-5 py-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Link
+                              href={`/admin/regulations/${r.id}/edit`}
+                              className="font-semibold text-td-blue-dark hover:text-td-blue hover:underline"
+                            >
+                              {r.title}
+                            </Link>
+                            {r.pinned && (
+                              <span className="rounded bg-amber-100 px-1.5 py-0.5 font-sans text-[11px] font-bold text-amber-800">
+                                必讀
+                              </span>
+                            )}
+                          </div>
                           <p className="mt-0.5 line-clamp-1 text-xs text-td-muted">{r.summary}</p>
                         </td>
                         <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-600">

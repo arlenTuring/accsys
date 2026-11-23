@@ -222,6 +222,10 @@ export async function executeNudge(input: {
           recipientEmployeeId,
           subject: `【催簽提醒】${caseNumber}`,
           text: message,
+          type: 'approval_requested',
+          formType: preview.formType,
+          formId: preview.formId,
+          caseNumber,
         });
       }
     }

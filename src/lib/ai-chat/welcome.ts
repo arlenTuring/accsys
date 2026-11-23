@@ -91,6 +91,7 @@ export async function buildWelcomeSummary(conversationId: string): Promise<Welco
   }
 
   const progressTodayCount = inbox.progressToday;
+  const recentlyApproved = inbox.recentlyApproved ?? [];
 
   const dateLocale = locale === 'zh-Hant' ? 'zh-TW' : locale;
   const timeLabel = new Date(fetchedAt).toLocaleString(dateLocale, {
@@ -105,6 +106,7 @@ export async function buildWelcomeSummary(conversationId: string): Promise<Welco
     pendingCount === 0 &&
     inProgressCount === 0 &&
     progressTodayCount === 0 &&
+    recentlyApproved.length === 0 &&
     unreadAnnouncements.length === 0 &&
     recentAnnouncements.length === 0 &&
     pendingSurveys.length === 0;
@@ -129,8 +131,12 @@ export async function buildWelcomeSummary(conversationId: string): Promise<Welco
           mine += `, ${inbox.returnedTotal} returned for revision`;
         parts.push(mine);
       }
-      if (progressTodayCount > 0)
+      if (recentlyApproved.length > 0) {
+        const summaryList = recentlyApproved.map((a) => `“${a.message}”`).join(', ');
+        parts.push(`Approved & Completed (${recentlyApproved.length}): ${summaryList}`);
+      } else if (progressTodayCount > 0) {
         parts.push(`${progressTodayCount} form(s) updated today`);
+      }
       if (unreadAnnouncements.length > 0) {
         const titles = unreadAnnouncements.map((a) => `“${a.title}”`).join(', ');
         parts.push(`Unread Announcements (${unreadAnnouncements.length}): ${titles}`);
@@ -183,8 +189,12 @@ export async function buildWelcomeSummary(conversationId: string): Promise<Welco
           mine += `、差戻し・再提出待ち ${inbox.returnedTotal} 件`;
         parts.push(mine);
       }
-      if (progressTodayCount > 0)
+      if (recentlyApproved.length > 0) {
+        const summaryList = recentlyApproved.map((a) => `「${a.message}」`).join('、');
+        parts.push(`承認完了通知（${recentlyApproved.length} 件）：${summaryList}`);
+      } else if (progressTodayCount > 0) {
         parts.push(`本日 ${progressTodayCount} 件の申請書に進捗がありました`);
+      }
       if (unreadAnnouncements.length > 0) {
         const titles = unreadAnnouncements.map((a) => `「${a.title}」`).join('、');
         parts.push(`未読のお知らせ（${unreadAnnouncements.length} 件）：${titles}`);
@@ -236,7 +246,12 @@ export async function buildWelcomeSummary(conversationId: string): Promise<Welco
         if (inbox.returnedTotal > 0) mine += `、${inbox.returnedTotal} 張已退回待補件`;
         parts.push(mine);
       }
-      if (progressTodayCount > 0) parts.push(`今天有 ${progressTodayCount} 張單據有新進度`);
+      if (recentlyApproved.length > 0) {
+        const summaryList = recentlyApproved.map((a) => `「${a.message}」`).join('、');
+        parts.push(`已回簽核准通知（${recentlyApproved.length} 張）：${summaryList}`);
+      } else if (progressTodayCount > 0) {
+        parts.push(`今天有 ${progressTodayCount} 張單據有新進度`);
+      }
       if (unreadAnnouncements.length > 0) {
         const titles = unreadAnnouncements.map((a) => `「${a.title}」`).join('、');
         parts.push(`未讀公告（${unreadAnnouncements.length} 則）：${titles}`);
@@ -277,6 +292,8 @@ export async function buildWelcomeSummary(conversationId: string): Promise<Welco
   const hasInboxWork =
     pendingCount > 0 ||
     inProgressCount > 0 ||
+    recentlyApproved.length > 0 ||
+    progressTodayCount > 0 ||
     unreadAnnouncements.length > 0 ||
     recentAnnouncements.length > 0 ||
     pendingSurveys.length > 0;

@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { BrandLogo } from '@/app/components/brand-logo';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { DEV_PERSONAS, isDevLoginAllowed } from '@/lib/auth/dev-personas';
 import { getLoginErrorMessage } from '@/lib/auth/login-errors';
 import { DEFAULT_AFTER_LOGIN, safeReturnTo } from '@/lib/auth/redirect';
 import { LanguageSwitcher } from '@/lib/i18n/context';
@@ -70,6 +71,38 @@ export default async function LoginPage({
             {t.loginPage.workspaceNotice}
           </p>
         </div>
+
+        {isDevLoginAllowed() && (
+          <div className="card mt-6 w-full space-y-3 border-amber-200 bg-amber-50/50">
+            <div>
+              <p className="text-xs font-bold text-amber-900">
+                🧪 全流程 10 大簽核關卡測試帳號（開發測試快速登入）
+              </p>
+              <p className="mt-0.5 text-[11px] text-slate-600">
+                點擊任一關卡測試帳號即可直接登入並測試該關卡的簽核／盤點確認功能：
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              {DEV_PERSONAS.map((p) => (
+                <a
+                  key={p.id}
+                  href={`/auth/dev?as=${p.id}`}
+                  className="rounded-lg border border-amber-200 bg-white p-2 transition hover:border-td-blue hover:bg-blue-50/40"
+                >
+                  <span className="block font-mono text-[10px] font-semibold text-amber-800">
+                    {p.stageBadge}
+                  </span>
+                  <span className="mt-0.5 block font-bold text-td-blue-dark">
+                    {p.name} ({p.employeeCode})
+                  </span>
+                  <span className="block text-[11px] text-td-muted">
+                    {p.department} · {p.roleLabel}
+                  </span>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
 
         <p className="mt-8 text-center text-xs text-td-muted">
           {t.loginPage.supportPrefix}{' '}

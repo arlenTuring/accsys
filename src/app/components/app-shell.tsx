@@ -11,9 +11,18 @@ import {
   FINANCE_NAV_PERMISSIONS,
   hasAnyPermission,
 } from '@/lib/authz/permissions';
+import type { MyTaskCounts } from '@/lib/approvals/pending-count';
+import { DEV_PERSONAS, isDevLoginEnabled } from '@/lib/auth/dev-personas';
 import type { SidebarEmployeeProfile } from '@/lib/auth/sidebar-profile';
 import {
+  DEFAULT_FEATURE_FLAGS,
+  getFeatureDefinition,
+  resolveFeatureFlagForPath,
+  type FeatureFlagMap,
+} from '@/lib/feature-flags/definitions';
+import {
   ADMIN_LINKS,
+  BUDGET_PLATFORM_SUB_LINKS,
   COMPANY_INFO_LINKS,
   FINANCE_LINKS,
   isNewFormPage,
@@ -27,11 +36,13 @@ import { LanguageSwitcher, useI18n } from '@/lib/i18n/context';
 type AppShellProps = {
   profile: SidebarEmployeeProfile;
   pendingApprovalCount: number;
+  taskCounts?: MyTaskCounts;
   categories: FormCategory[];
+  featureFlags?: FeatureFlagMap;
   children: React.ReactNode;
 };
 
-type PrimaryNavKey = 'ai' | 'project' | 'approvals' | 'company' | 'finance' | 'admin' | 'tools';
+type PrimaryNavKey = 'ai' | 'project' | 'tasks' | 'approvals' | 'company' | 'finance' | 'admin' | 'tools';
 
 const SYSTEM_ROLE_LABELS: Record<string, string> = {
   staff: '一般員工',
@@ -47,18 +58,30 @@ function resolveActiveSection(pathname: string): PrimaryNavKey {
     return 'project';
   }
   if (
-    isRecordPage(pathname) ||
-    isNewFormPage(pathname) ||
+    isUnder(pathname, '/my-tasks') ||
+    isUnder(pathname, '/f/budget-request') ||
+    isUnder(pathname, '/f/budget-change') ||
     isUnder(pathname, '/applications') ||
     isUnder(pathname, '/approvals') ||
-    isUnder(pathname, '/forms')
+    isUnder(pathname, '/assets/mine') ||
+    isUnder(pathname, '/asset-transfers') ||
+    isUnder(pathname, '/f/asset-transfer') ||
+    isUnder(pathname, '/surveys') ||
+    isRecordPage(pathname)
   ) {
+    return 'tasks';
+  }
+  if (isNewFormPage(pathname) || isUnder(pathname, '/forms')) {
     return 'approvals';
   }
   if (COMPANY_INFO_LINKS.some((l) => isUnder(pathname, l.href))) {
     return 'company';
   }
-  if (FINANCE_LINKS.some((l) => isUnder(pathname, l.href)) || isUnder(pathname, '/assets')) {
+  if (
+    FINANCE_LINKS.some((l) => isUnder(pathname, l.href)) ||
+    isUnder(pathname, '/budget-codes') ||
+    isUnder(pathname, '/assets')
+  ) {
     return 'finance';
   }
   if (ADMIN_LINKS.some((l) => isUnder(pathname, l.href)) || isUnder(pathname, '/admin')) {
@@ -94,6 +117,16 @@ function RailIcon({ name }: { name: PrimaryNavKey }) {
             strokeLinecap="round"
             strokeLinejoin="round"
             d="M9 13h6m-3-3v6"
+          />
+        </svg>
+      );
+    case 'tasks':
+      return (
+        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"
           />
         </svg>
       );
@@ -172,7 +205,13 @@ function CopyTagButton({ tag }: { tag: string }) {
   );
 }
 
-function EmployeeAccountPopover({ profile }: { profile: SidebarEmployeeProfile }) {
+function EmployeeAccountPopover({
+  profile,
+  featureFlags,
+}: {
+  profile: SidebarEmployeeProfile;
+  featureFlags: FeatureFlagMap;
+}) {
   const { t, tr } = useI18n();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -291,62 +330,96 @@ function EmployeeAccountPopover({ profile }: { profile: SidebarEmployeeProfile }
             </div>
           </dl>
 
-          {/* Custody Assets Section */}
-          <div className="border-b border-slate-100 px-4 py-3">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs font-bold text-td-blue-dark">
-                {t.shell.account.custodyAssetsTitle} ({profile.custodyAssets.length})
-              </span>
-              {profile.custodyAssets.length > 0 && (
-                <Link
-                  href="/asset-transfers/new"
-                  onClick={() => setOpen(false)}
-                  className="text-[11px] font-semibold text-td-blue hover:underline"
-                >
-                  + {tr('資產異動申請單')}
-                </Link>
+          {/* Custody Assets Section — only shown when company-wide asset_management_module is licensed & enabled */}
+          {featureFlags.asset_management_module && (
+            <div className="border-b border-slate-100 px-4 py-3">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-xs font-bold text-td-blue-dark">
+                  {t.shell.account.custodyAssetsTitle} ({profile.custodyAssets.length})
+                </span>
+                {profile.custodyAssets.length > 0 && (
+                  <Link
+                    href="/asset-transfers/new"
+                    onClick={() => setOpen(false)}
+                    className="text-[11px] font-semibold text-td-blue hover:underline"
+                  >
+                    + {tr('資產異動申請單')}
+                  </Link>
+                )}
+              </div>
+
+              {profile.custodyAssets.length === 0 ? (
+                <p className="rounded-lg bg-slate-50 px-3 py-2.5 text-center text-xs text-td-muted">
+                  {t.shell.account.noCustodyAssets}
+                </p>
+              ) : (
+                <ul className="max-h-48 space-y-1.5 overflow-y-auto pr-1">
+                  {profile.custodyAssets.map((asset) => (
+                    <li
+                      key={asset.id}
+                      className="flex items-center justify-between gap-2 rounded-lg border border-slate-100 bg-slate-50/70 px-2.5 py-2 text-xs"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <p className="truncate font-semibold text-td-blue-dark">{asset.name}</p>
+                          <span className="shrink-0 rounded bg-emerald-50 px-1.5 py-0.2 text-[10px] font-medium text-emerald-700">
+                            {tr(asset.statusLabel)}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-td-muted">
+                          <span className="font-mono text-slate-700">{asset.tag}</span>
+                          {asset.location && <span>· {asset.location}</span>}
+                        </div>
+                      </div>
+                      <CopyTagButton tag={asset.tag} />
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
+          )}
 
-            {profile.custodyAssets.length === 0 ? (
-              <p className="rounded-lg bg-slate-50 px-3 py-2.5 text-center text-xs text-td-muted">
-                {t.shell.account.noCustodyAssets}
+          {/* Footer: Quick Stage Account Switcher + Logout */}
+          {isDevLoginEnabled() && (
+            <div className="border-t border-slate-100 bg-amber-50/40 px-4 py-2.5">
+              <p className="mb-1.5 text-[11px] font-bold text-amber-900">
+                🧪 快速切換各關卡測試帳號：
               </p>
-            ) : (
-              <ul className="max-h-48 space-y-1.5 overflow-y-auto pr-1">
-                {profile.custodyAssets.map((asset) => (
-                  <li
-                    key={asset.id}
-                    className="flex items-center justify-between gap-2 rounded-lg border border-slate-100 bg-slate-50/70 px-2.5 py-2 text-xs"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <p className="truncate font-semibold text-td-blue-dark">{asset.name}</p>
-                        <span className="shrink-0 rounded bg-emerald-50 px-1.5 py-0.2 text-[10px] font-medium text-emerald-700">
-                          {tr(asset.statusLabel)}
-                        </span>
-                      </div>
-                      <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-td-muted">
-                        <span className="font-mono text-slate-700">{asset.tag}</span>
-                        {asset.location && <span>· {asset.location}</span>}
-                      </div>
-                    </div>
-                    <CopyTagButton tag={asset.tag} />
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+              <div className="flex max-h-28 flex-wrap gap-1 overflow-y-auto">
+                {DEV_PERSONAS.map((p) => {
+                  const active = profile.employeeCode === p.employeeCode;
+                  return (
+                    <a
+                      key={p.id}
+                      href={`/auth/dev?as=${p.id}&returnTo=/applications`}
+                      className={`rounded border px-2 py-0.5 text-[11px] font-medium transition ${
+                        active
+                          ? 'border-td-blue bg-td-blue text-white'
+                          : 'border-amber-200 bg-white text-slate-700 hover:bg-amber-100'
+                      }`}
+                      title={`${p.stageBadge} — ${p.description}`}
+                    >
+                      {p.name} ({p.roleLabel})
+                    </a>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Footer: Logout */}
           <div className="flex items-center justify-between bg-slate-50/60 px-4 py-2.5">
-            <Link
-              href="/assets"
-              onClick={() => setOpen(false)}
-              className="text-xs font-medium text-td-muted hover:text-td-blue"
-            >
-              {t.shell.account.companyAssetShortcut}
-            </Link>
+            {featureFlags.asset_management_module ? (
+              <Link
+                href="/assets/mine"
+                onClick={() => setOpen(false)}
+                className="text-xs font-medium text-td-muted hover:text-td-blue"
+              >
+                {t.shell.account.companyAssetShortcut}
+              </Link>
+            ) : (
+              <span />
+            )}
             <form action="/auth/logout" method="post">
               <button
                 type="submit"
@@ -364,25 +437,113 @@ function EmployeeAccountPopover({ profile }: { profile: SidebarEmployeeProfile }
 
 const TOOL_SUB_LINKS: RecordLink[] = [
   { label: '工具總覽', href: '/tools' },
+  { label: '操作教學', href: '/tools/guide' },
   { label: 'PDF 編輯器', href: '/tools/pdf-editor' },
 ];
 
 export function AppShell({
   profile,
   pendingApprovalCount,
+  taskCounts,
   categories,
+  featureFlags,
   children,
 }: AppShellProps) {
   const pathname = usePathname();
   const { locale, t, tr } = useI18n();
   const [secondaryCollapsed, setSecondaryCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [budgetMenuOpen, setBudgetMenuOpen] = useState(true);
 
-  const showFinance = hasAnyPermission(profile.permissions, FINANCE_NAV_PERMISSIONS);
+  const flags = featureFlags ?? DEFAULT_FEATURE_FLAGS;
+
+  const rawCounts = taskCounts ?? {
+    approvalsAndReturned: pendingApprovalCount,
+    budgetTasks: 0,
+    assetHandovers: 0,
+    pendingSurveys: 0,
+    total: pendingApprovalCount,
+  };
+  const effectiveBudgetTasks = flags.budget_management_platform ? rawCounts.budgetTasks : 0;
+  const effectiveAssetHandovers = flags.asset_management_module ? rawCounts.assetHandovers : 0;
+  const effectivePendingSurveys = flags.company_info_hub ? rawCounts.pendingSurveys : 0;
+  const counts: MyTaskCounts = {
+    approvalsAndReturned: rawCounts.approvalsAndReturned,
+    budgetTasks: effectiveBudgetTasks,
+    assetHandovers: effectiveAssetHandovers,
+    pendingSurveys: effectivePendingSurveys,
+    total:
+      rawCounts.approvalsAndReturned +
+      effectiveBudgetTasks +
+      effectiveAssetHandovers +
+      effectivePendingSurveys,
+  };
+
+  const showFinance =
+    hasAnyPermission(profile.permissions, FINANCE_NAV_PERMISSIONS) &&
+    (flags.budget_management_platform || flags.asset_management_module);
   const showAdmin = hasAnyPermission(profile.permissions, ADMIN_NAV_PERMISSIONS);
 
-  if (pathname.startsWith('/tools/project-assistant/viewer')) {
-    return <>{children}</>;
+  // 嚴格路由守衛：禁止任何使用者（即便是系統管理員）透過直接輸入網址或書籤越權進入全公司未授權／已關閉的功能頁面
+  const requiredFlag = resolveFeatureFlagForPath(pathname);
+  const allFormsDisabledOnFormsHub =
+    (pathname === '/forms' || pathname.startsWith('/forms/')) &&
+    !flags.procurement_module &&
+    !flags.expense_claim_module &&
+    !flags.seal_request_module;
+  const blockedDef =
+    requiredFlag && !flags[requiredFlag]
+      ? getFeatureDefinition(requiredFlag)
+      : allFormsDisabledOnFormsHub
+        ? getFeatureDefinition('procurement_module')
+        : undefined;
+
+  const blockedGuardView = blockedDef ? (
+    <main className="page-shell flex min-h-[75vh] items-center justify-center p-6">
+      <div className="max-w-lg rounded-2xl border border-amber-200 bg-white p-8 text-center shadow-sm space-y-4">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-amber-50 text-2xl ring-1 ring-amber-200">
+          🔒
+        </div>
+        <div className="space-y-1">
+          <span className="inline-block rounded-full bg-rose-50 px-3 py-0.5 text-xs font-bold text-rose-700 ring-1 ring-rose-200">
+            未授權或已關閉功能・禁止網址越權存取
+          </span>
+          <h1 className="pt-1 text-lg font-bold text-td-blue-dark">
+            「{blockedDef.title}」目前未開放存取
+          </h1>
+        </div>
+        <p className="text-sm leading-relaxed text-slate-600">
+          系統偵測到您嘗試直接透過網址（
+          <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-800">
+            {pathname}
+          </code>
+          ）進入此頁面，但該功能於目前的<strong>系統授權碼或功能開關</strong>中屬於<strong>關閉／未授權</strong>狀態，已由系統路由守衛嚴格攔截。
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+          {showAdmin && (
+            <Link
+              href="/admin/feature-flags"
+              className="rounded-lg bg-td-blue px-4 py-2 text-xs font-semibold text-white shadow-2xs hover:bg-td-blue-dark"
+            >
+              🔑 前往「系統管理 → 功能授權」
+            </Link>
+          )}
+          <Link
+            href="/applications"
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            返回我的待辦
+          </Link>
+        </div>
+      </div>
+    </main>
+  ) : null;
+
+  if (
+    pathname.startsWith('/tools/project-assistant/viewer') ||
+    pathname.startsWith('/email-approval')
+  ) {
+    return <>{blockedGuardView ?? children}</>;
   }
 
   const activeSection = resolveActiveSection(pathname);
@@ -400,28 +561,38 @@ export function AppShell({
       label: tr('AI 助手'),
       shortLabel: locale === 'en' ? 'AI' : locale === 'ja' ? 'AI' : 'AI 助手',
       href: '/tools/ai-chat',
-      visible: true,
+      visible: flags.ai_chat,
     },
     {
       key: 'project',
       label: tr('專案助手'),
       shortLabel: locale === 'en' ? 'Project' : locale === 'ja' ? '案件AI' : '專案助手',
       href: '/tools/project-assistant',
+      visible: flags.project_assistant,
+    },
+    {
+      key: 'tasks',
+      label: tr('我的待辦'),
+      shortLabel: locale === 'en' ? 'My Tasks' : locale === 'ja' ? 'マイタスク' : '我的待辦',
+      href: '/applications',
+      badge: counts.total,
       visible: true,
     },
     {
       key: 'approvals',
       label: tr('簽核管理'),
-      shortLabel: locale === 'en' ? 'Approve' : locale === 'ja' ? '承認管理' : '簽核管理',
-      href: '/applications',
-      badge: pendingApprovalCount,
-      visible: true,
+      shortLabel: locale === 'en' ? 'Forms' : locale === 'ja' ? '申請管理' : '簽核管理',
+      href: '/forms',
+      visible:
+        flags.procurement_module ||
+        flags.expense_claim_module ||
+        flags.seal_request_module,
     },
     {
       key: 'finance',
       label: tr('財會管理'),
       shortLabel: locale === 'en' ? 'Finance' : locale === 'ja' ? '財務会計' : '財會管理',
-      href: '/case-tracking',
+      href: flags.budget_management_platform ? '/budget-codes/projects' : '/assets',
       visible: showFinance,
     },
     {
@@ -436,7 +607,7 @@ export function AppShell({
       label: tr('工具區'),
       shortLabel: locale === 'en' ? 'Tools' : locale === 'ja' ? 'ツール' : '工具區',
       href: '/tools',
-      visible: true,
+      visible: flags.tools_workspace,
     },
   ];
 
@@ -446,18 +617,27 @@ export function AppShell({
 
   function renderSecondaryContent() {
     switch (activeSection) {
-      case 'approvals':
+      case 'tasks':
         return (
           <div className="space-y-5">
             <div className="space-y-1">
               <p className="px-2.5 text-[11px] font-semibold tracking-wider text-slate-400">
-                {tr('簽核與進度')}
+                {tr('待辦與進度追蹤')}
               </p>
               <SecondaryNavLink
                 href="/applications"
-                label={tr('簽核管理')}
-                badge={pendingApprovalCount}
-                active={pathname === '/applications' || pathname === '/approvals'}
+                label={tr('簽核與單據追蹤')}
+                badge={counts.approvalsAndReturned}
+                showZeroBadge
+                active={
+                  pathname === '/applications' ||
+                  pathname === '/approvals' ||
+                  (isRecordPage(pathname) &&
+                    !isUnder(pathname, '/applications/drafts') &&
+                    !isUnder(pathname, '/assets/mine') &&
+                    !isUnder(pathname, '/f/budget-request') &&
+                    !isUnder(pathname, '/f/budget-change'))
+                }
               />
               <SecondaryNavLink
                 href="/applications/drafts"
@@ -466,22 +646,91 @@ export function AppShell({
               />
             </div>
 
-            {categories.map((cat) => (
-              <div key={cat.id} className="space-y-1">
+            {(flags.budget_management_platform ||
+              flags.asset_management_module ||
+              flags.company_info_hub) && (
+              <div className="space-y-1">
                 <p className="px-2.5 text-[11px] font-semibold tracking-wider text-slate-400">
-                  {t.shell.newPrefix}
-                  {tr(cat.title)}
+                  {tr('互動填報與個人管理')}
                 </p>
-                {cat.forms.map((f) => (
+                {flags.budget_management_platform && (
                   <SecondaryNavLink
-                    key={f.href}
-                    href={f.href}
-                    label={tr(f.title)}
-                    active={isUnder(pathname, f.href)}
+                    href="/my-tasks/budget"
+                    label={tr('年度預算表填報')}
+                    badge={counts.budgetTasks}
+                    showZeroBadge
+                    active={
+                      isUnder(pathname, '/my-tasks/budget') ||
+                      isUnder(pathname, '/f/budget-request') ||
+                      isUnder(pathname, '/f/budget-change')
+                    }
                   />
-                ))}
+                )}
+                {flags.asset_management_module && (
+                  <SecondaryNavLink
+                    href="/assets/mine"
+                    label={tr('我的資產管理')}
+                    badge={counts.assetHandovers}
+                    showZeroBadge
+                    active={
+                      isUnder(pathname, '/assets/mine') ||
+                      isUnder(pathname, '/asset-transfers') ||
+                      isUnder(pathname, '/f/asset-transfer')
+                    }
+                  />
+                )}
+                {flags.company_info_hub && (
+                  <SecondaryNavLink
+                    href="/surveys"
+                    label={tr('我的專屬問卷')}
+                    badge={counts.pendingSurveys}
+                    showZeroBadge
+                    active={isUnder(pathname, '/surveys')}
+                  />
+                )}
               </div>
-            ))}
+            )}
+          </div>
+        );
+
+      case 'approvals':
+        return (
+          <div className="space-y-5">
+            <div className="space-y-1">
+              <p className="px-2.5 text-[11px] font-semibold tracking-wider text-slate-400">
+                {tr('表單申請入口')}
+              </p>
+              <SecondaryNavLink
+                href="/forms"
+                label={tr('申請表單總覽')}
+                active={pathname === '/forms'}
+              />
+            </div>
+
+            {categories
+              .filter((cat) => {
+                if (cat.id === 'asset') return false;
+                if (cat.id === 'procurement' && !flags.procurement_module) return false;
+                if (cat.id === 'expense' && !flags.expense_claim_module) return false;
+                if (cat.id === 'seal' && !flags.seal_request_module) return false;
+                return true;
+              })
+              .map((cat) => (
+                <div key={cat.id} className="space-y-1">
+                  <p className="px-2.5 text-[11px] font-semibold tracking-wider text-slate-400">
+                    {t.shell.newPrefix}
+                    {tr(cat.title)}
+                  </p>
+                  {cat.forms.map((f) => (
+                    <SecondaryNavLink
+                      key={f.href}
+                      href={f.href}
+                      label={tr(f.title)}
+                      active={isUnder(pathname, f.href)}
+                    />
+                  ))}
+                </div>
+              ))}
           </div>
         );
 
@@ -508,14 +757,85 @@ export function AppShell({
             <p className="px-2.5 text-[11px] font-semibold tracking-wider text-slate-400">
               {tr('全公司財會與資產')}
             </p>
-            {FINANCE_LINKS.map((l) => (
-              <SecondaryNavLink
-                key={l.href}
-                href={l.href}
-                label={tr(l.label)}
-                active={isUnder(pathname, l.href)}
-              />
-            ))}
+            {FINANCE_LINKS.filter((l) => {
+              if (l.label === '預算管理平台') return flags.budget_management_platform;
+              return flags.asset_management_module;
+            }).map((l) => {
+              if (l.label === '預算管理平台') {
+                const isBudgetActive = isUnder(pathname, '/budget-codes');
+                return (
+                  <div key={l.href} className="space-y-1">
+                    <button
+                      type="button"
+                      onClick={() => setBudgetMenuOpen((v) => !v)}
+                      aria-expanded={budgetMenuOpen}
+                      className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-sm transition ${
+                        isBudgetActive
+                          ? 'bg-white/80 font-semibold text-td-blue ring-1 ring-slate-200/70'
+                          : 'text-slate-700 hover:bg-white/70 hover:text-td-blue-dark'
+                      }`}
+                    >
+                      <span className="truncate">{tr('預算管理平台')}</span>
+                      <svg
+                        className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${
+                          budgetMenuOpen ? 'rotate-180 text-td-blue' : ''
+                        }`}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+
+                    {budgetMenuOpen && (
+                      <div className="ml-2.5 space-y-0.5 border-l-2 border-slate-200/90 pl-2">
+                        {BUDGET_PLATFORM_SUB_LINKS.map((sub) => {
+                          const isSubActive =
+                            sub.href === '/budget-codes/projects'
+                              ? pathname === '/budget-codes' ||
+                                isUnder(pathname, sub.href)
+                              : sub.href === '/budget-codes/overview'
+                                ? pathname === '/budget-codes/overview' ||
+                                  pathname === '/budget-codes/define' ||
+                                  pathname === '/budget-codes/dispatch'
+                                : isUnder(pathname, sub.href);
+                          return (
+                            <Link
+                              key={sub.href}
+                              href={sub.href}
+                              className={`flex items-center justify-between rounded-lg px-2.5 py-1.5 text-[13px] transition ${
+                                isSubActive
+                                  ? 'bg-white font-semibold text-td-blue shadow-2xs ring-1 ring-slate-200/80'
+                                  : 'text-slate-600 hover:bg-white/70 hover:text-td-blue-dark'
+                              }`}
+                            >
+                              <span className="truncate">{tr(sub.label)}</span>
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              const isLinkActive =
+                l.href === '/assets'
+                  ? pathname === '/assets' ||
+                    isUnder(pathname, '/assets/import') ||
+                    isUnder(pathname, '/assets/fields')
+                  : isUnder(pathname, l.href);
+              return (
+                <SecondaryNavLink
+                  key={l.href}
+                  href={l.href}
+                  label={tr(l.label)}
+                  active={isLinkActive}
+                />
+              );
+            })}
           </div>
         );
 
@@ -525,7 +845,17 @@ export function AppShell({
             <p className="px-2.5 text-[11px] font-semibold tracking-wider text-slate-400">
               {tr('系統管理設定')}
             </p>
-            {ADMIN_LINKS.map((l) => (
+            {ADMIN_LINKS.filter((l) => {
+              if (
+                !flags.company_info_hub &&
+                (l.href === '/admin/announcements' ||
+                  l.href === '/admin/regulations' ||
+                  l.href === '/admin/surveys')
+              ) {
+                return false;
+              }
+              return true;
+            }).map((l) => (
               <SecondaryNavLink
                 key={l.href}
                 href={l.href}
@@ -547,7 +877,7 @@ export function AppShell({
                 key={l.href}
                 href={l.href}
                 label={tr(l.label)}
-                active={pathname === l.href}
+                active={l.href === '/tools' ? pathname === '/tools' : isUnder(pathname, l.href)}
               />
             ))}
           </div>
@@ -570,14 +900,14 @@ export function AppShell({
         aria-label="主導覽列"
         className="z-30 hidden w-16 shrink-0 flex-col items-center justify-between border-r border-slate-200/80 bg-[#f3f5f8] py-3 md:flex print:hidden"
       >
-        {/* Top: Company Logo Icon (Entry for 公司資訊: 公司公告 / 公司規章 / 內部問卷) */}
+        {/* Top: Company Logo Icon (Entry for 公司資訊: 公司公告 / 公司規章 / 內部問卷 when company_info_hub is licensed) */}
         <div className="flex flex-col items-center gap-3">
           <Link
-            href="/announcements"
+            href={flags.company_info_hub ? '/announcements' : '/applications'}
             onClick={() => setSecondaryCollapsed(false)}
-            title={t.shell.companyInfoTooltip}
+            title={flags.company_info_hub ? t.shell.companyInfoTooltip : 'ACCSYS'}
             className={`flex h-10 w-10 items-center justify-center rounded-xl bg-white p-1.5 transition hover:scale-105 ${
-              activeSection === 'company'
+              activeSection === 'company' && flags.company_info_hub
                 ? 'shadow-sm ring-2 ring-td-blue'
                 : 'shadow-xs ring-1 ring-slate-200/90'
             }`}
@@ -629,8 +959,8 @@ export function AppShell({
         {/* Bottom: Language Switcher + Global Assistant Hover + Employee Account & Assets Trigger */}
         <div className="flex flex-col items-center gap-2.5">
           <LanguageSwitcher variant="rail" />
-          <GlobalAssistant enabled />
-          <EmployeeAccountPopover profile={profile} />
+          <GlobalAssistant enabled={flags.global_floating_assistant} />
+          <EmployeeAccountPopover profile={profile} featureFlags={flags} />
         </div>
       </aside>
 
@@ -690,7 +1020,10 @@ export function AppShell({
             >
               ☰
             </button>
-            <Link href="/announcements" className="flex items-center gap-2">
+            <Link
+              href={flags.company_info_hub ? '/announcements' : '/applications'}
+              className="flex items-center gap-2"
+            >
               <Image src={mark} alt="" className="h-6 w-6 object-contain" />
               <span className="text-sm font-bold text-td-blue-dark">
                 TURING DRIVE · ACCSYS
@@ -699,7 +1032,7 @@ export function AppShell({
           </div>
           <div className="flex items-center gap-2">
             <LanguageSwitcher variant="rail" />
-            <EmployeeAccountPopover profile={profile} />
+            <EmployeeAccountPopover profile={profile} featureFlags={flags} />
           </div>
         </header>
 
@@ -715,7 +1048,7 @@ export function AppShell({
             <div className="flex h-full w-72 flex-col bg-white p-4 shadow-xl">
               <div className="mb-4 flex items-center justify-between border-b border-slate-100 pb-3">
                 <Link
-                  href="/announcements"
+                  href={flags.company_info_hub ? '/announcements' : '/applications'}
                   onClick={() => setMobileMenuOpen(false)}
                   className="flex items-center gap-2 font-bold text-td-blue-dark hover:text-td-blue"
                 >
@@ -770,7 +1103,9 @@ export function AppShell({
         )}
 
         {/* Main Viewport */}
-        <div className="flex-1 overflow-y-auto print:overflow-visible">{children}</div>
+        <div className="flex-1 overflow-y-auto print:overflow-visible">
+          {blockedGuardView ?? children}
+        </div>
       </div>
     </div>
   );
@@ -780,15 +1115,19 @@ function SecondaryNavLink({
   href,
   label,
   badge,
+  showZeroBadge,
   active,
   highlight,
 }: {
   href: string;
   label: string;
   badge?: number;
+  showZeroBadge?: boolean;
   active?: boolean;
   highlight?: boolean;
 }) {
+  const shouldRenderBadge =
+    badge != null && (badge > 0 || (showZeroBadge && badge === 0));
   return (
     <Link
       href={href}
@@ -801,8 +1140,14 @@ function SecondaryNavLink({
       }`}
     >
       <span className="truncate">{label}</span>
-      {badge != null && badge > 0 && (
-        <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900">
+      {shouldRenderBadge && (
+        <span
+          className={`ml-2 rounded-full px-2 py-0.5 text-[11px] font-bold ${
+            badge > 0
+              ? 'bg-amber-100 text-amber-900'
+              : 'bg-slate-200/80 text-slate-600'
+          }`}
+        >
           {badge}
         </span>
       )}

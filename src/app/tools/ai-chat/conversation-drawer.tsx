@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useId, useRef, useState, useTransition } from 'react';
+import { confirmDialog } from '@/app/components/dialog';
 import {
   archiveConversationAction,
   listConversationsAction,
@@ -210,7 +211,13 @@ function ConversationRow({
             type="button"
             className="underline text-rose-600 hover:text-rose-700"
             onClick={async () => {
-              if (!window.confirm('確定要刪除此對話嗎？草稿與單據不會刪除。')) return;
+              const ok = await confirmDialog({
+                title: `刪除「${item.title || '對話'}」？`,
+                message: '確定要刪除此對話嗎？刪除後將從您的對話清單移除（草稿與單據不會刪除）。',
+                confirmLabel: '刪除',
+                tone: 'danger',
+              });
+              if (!ok) return;
               const res = await archiveConversationAction({ conversationId: item.id });
               if (res.ok) onArchived();
               setMenu(false);

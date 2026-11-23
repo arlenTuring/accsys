@@ -7,6 +7,7 @@ import { ACTIVE_ASSET_STATUSES, ASSET_STATUS_LABELS, type AssetStatus } from '@/
 import {
   approvalSteps,
   assets,
+  attachments,
   budgetCodes,
   departments,
   employeeJobRoles,
@@ -14,15 +15,34 @@ import {
   formCategories,
   formDefinitions,
   formDefinitionVersions,
+  formNumberCounters,
   formSubmissionAssetLines,
   formSubmissions,
   jobRoles,
+  notifications,
   procurementCases,
   projects,
   suppliers,
 } from '@/lib/db/schema';
 import { designerPaymentTermsCheck, type PaymentTermsCheck } from '@/lib/procurement/designer-forms';
+import {
+  ACCEPTANCE_FORM,
+  ACCEPTANCE_KEY,
+  PROCUREMENT_PAYMENT_FORM,
+  PROCUREMENT_PAYMENT_KEY,
+  PURCHASE_ORDER_FORM,
+  PURCHASE_ORDER_KEY,
+  PURCHASE_REQUEST_FORM,
+  PURCHASE_REQUEST_KEY,
+  STANDALONE_PAYMENT_FORM,
+  STANDALONE_PAYMENT_KEY,
+} from './migrated/procurement';
+import { EXPENSE_CLAIM_FORMS, UNIFIED_EXPENSE_CLAIM_FORM, UNIFIED_EXPENSE_CLAIM_KEY } from './migrated/expense-claims';
+import { BUDGET_CHANGE_FORM, BUDGET_CHANGE_KEY, BUDGET_FORMS, BUDGET_REQUEST_FORM, BUDGET_REQUEST_KEY } from './migrated/budget';
+import { TRAVEL_EXPENSE_FORM } from './migrated/travel';
 import { parseDefinition } from './definition';
+import { publishDefinition } from './publish';
+import { runInTransaction } from '@/lib/workflow/tx';
 import { allFields, sourceFieldOf, type BudgetScope, type FieldDef, type FormSchema } from './schema';
 import { canSeeSensitive, maskSensitive } from './sensitive';
 import { expectedPaymentDateOf, paymentBatchOf, type PaymentBatch } from './payment';
@@ -30,6 +50,8 @@ import { ruleHolds, sourceOptions, type SourceOption } from './source';
 import type { TableValue } from './validate';
 import { canFile, parseVisibility } from './visibility';
 import { projectUsableBy } from '@/lib/projects/access';
+import { getEmployeeFilingScope, type EmployeeFilingScope } from '@/lib/filing-agents/queries';
+import { listFormDraftsForOwner, type SavedFormDraft } from '@/lib/form-drafts/service';
 
 const FORM = 'custom' as const;
 
@@ -53,10 +75,279 @@ async function jobRolesOf(employeeId: string): Promise<string[]> {
   return rows.map((r) => r.code);
 }
 
+export const LEGACY_SPLIT_EXPENSE_KEYS = new Set([
+  ...EXPENSE_CLAIM_FORMS.map((f) => f.key),
+  STANDALONE_PAYMENT_KEY,
+]);
+
+export const OBSOLETE_PURGED_FORM_KEYS = [
+  ...EXPENSE_CLAIM_FORMS.map((f) => f.key),
+  STANDALONE_PAYMENT_KEY,
+  'admin-purchase',
+  'designer-smoke',
+] as const;
+
+let obsoleteFormsPurgePromise: Promise<void> | null = null;
+
+/**
+ * Permanently deletes obsolete split-expense forms and legacy sample/smoke forms
+ * (along with their submissions, drafts, versions, and counters) from PostgreSQL,
+ * and aligns sort order between Form Builder and the Form Catalog.
+ */
+export async function ensureObsoleteFormsPurged(): Promise<void> {
+  if (process.env.VITEST) return;
+  if (obsoleteFormsPurgePromise) return obsoleteFormsPurgePromise;
+  obsoleteFormsPurgePromise = (async () => {
+    const db = getDb();
+    const existing = await db
+      .select({ id: formDefinitions.id, key: formDefinitions.key })
+      .from(formDefinitions)
+      .where(inArray(formDefinitions.key, [...OBSOLETE_PURGED_FORM_KEYS]));
+
+    await runInTransaction('custom_form.purge_obsolete_definitions', async (tx) => {
+      if (existing.length > 0) {
+        const defIds = existing.map((d) => d.id);
+        const subs = await tx
+          .select({ id: formSubmissions.id, procurementCaseId: formSubmissions.procurementCaseId })
+          .from(formSubmissions)
+          .where(inArray(formSubmissions.definitionId, defIds));
+        const subIds = subs.map((s) => s.id);
+        const caseIds = [...new Set(subs.map((s) => s.procurementCaseId))];
+
+        await tx.execute(
+          sql`delete from form_drafts where form_key in (${sql.join(
+            OBSOLETE_PURGED_FORM_KEYS.map((k) => sql`${k}`),
+            sql`, `
+          )})`
+        );
+
+        if (subIds.length > 0) {
+          await tx.execute(
+            sql`update ai_application_drafts set submission_id = null where submission_id in (${sql.join(
+              subIds.map((id) => sql`${id}`),
+              sql`, `
+            )})`
+          );
+          await tx.execute(
+            sql`update ai_application_drafts set resubmit_of_submission_id = null where resubmit_of_submission_id in (${sql.join(
+              subIds.map((id) => sql`${id}`),
+              sql`, `
+            )})`
+          );
+          await tx
+            .update(formSubmissions)
+            .set({ sourceSubmissionId: null })
+            .where(inArray(formSubmissions.sourceSubmissionId, subIds));
+          await tx
+            .delete(approvalSteps)
+            .where(and(eq(approvalSteps.formType, FORM), inArray(approvalSteps.formId, subIds)));
+          await tx
+            .delete(notifications)
+            .where(and(eq(notifications.formType, FORM), inArray(notifications.formId, subIds)));
+          await tx
+            .delete(attachments)
+            .where(and(eq(attachments.formType, FORM), inArray(attachments.formId, subIds)));
+          await tx
+            .delete(formSubmissionAssetLines)
+            .where(inArray(formSubmissionAssetLines.submissionId, subIds));
+          await tx.delete(formSubmissions).where(inArray(formSubmissions.id, subIds));
+        }
+
+        await tx.execute(
+          sql`update ai_application_drafts set form_version_id = null where form_definition_key in (${sql.join(
+            OBSOLETE_PURGED_FORM_KEYS.map((k) => sql`${k}`),
+            sql`, `
+          )})`
+        );
+
+        await tx
+          .update(formDefinitions)
+          .set({
+            publishedVersionId: null,
+            status: 'draft',
+            deletedAt: null,
+            deletedByEmployeeId: null,
+          })
+          .where(inArray(formDefinitions.id, defIds));
+        await tx
+          .delete(formDefinitionVersions)
+          .where(inArray(formDefinitionVersions.definitionId, defIds));
+        await tx
+          .delete(formNumberCounters)
+          .where(inArray(formNumberCounters.definitionId, defIds));
+        await tx.delete(formDefinitions).where(inArray(formDefinitions.id, defIds));
+
+        if (caseIds.length > 0) {
+          await tx.execute(
+            sql`delete from procurement_cases pc
+                where pc.id in (${sql.join(
+                  caseIds.map((id) => sql`${id}`),
+                  sql`, `
+                )})
+                  and not exists (select 1 from form_submissions fs where fs.procurement_case_id = pc.id)
+                  and not exists (select 1 from purchase_requests pr where pr.procurement_case_id = pc.id)`
+          );
+        }
+      }
+
+      // Clear stale draft_schema on auto-upgraded system forms and align expense form sort_order
+      await tx.execute(
+        sql`update form_definitions
+            set draft_schema = null, draft_flow = null
+            where key in ('expense-claim', 'travel-expense', 'budget-request', 'budget-change')
+              and status = 'published'
+              and (draft_schema is not null or draft_flow is not null)`
+      );
+      await tx.execute(sql`update form_definitions set sort_order = 1 where key = 'expense-claim' and sort_order <> 1`);
+      await tx.execute(sql`update form_definitions set sort_order = 2 where key = 'travel-expense' and sort_order <> 2`);
+      await tx.execute(sql`update form_definitions set sort_order = 3 where key = 'business-trip' and sort_order <> 3`);
+      return { ok: true as const };
+    }).catch(() => null);
+  })().finally(() => {
+    obsoleteFormsPurgePromise = null;
+  });
+  return obsoleteFormsPurgePromise;
+}
+
+async function publishUpgradedSchemaVersion(params: {
+  definitionId: string;
+  actorId: string;
+  schema: FormSchema;
+  flow: unknown;
+  description?: string;
+}): Promise<void> {
+  await runInTransaction('custom_form.upgrade_schema_version', async (tx) => {
+    const [{ next }] = await tx.execute<{ next: number }>(
+      sql`select coalesce(max(version), 0) + 1 as next from form_definition_versions where definition_id = ${params.definitionId}`
+    );
+    const version = Number(next);
+    const [ver] = await tx
+      .insert(formDefinitionVersions)
+      .values({
+        definitionId: params.definitionId,
+        version,
+        schema: params.schema,
+        flow: params.flow,
+        publishedByEmployeeId: params.actorId,
+      })
+      .returning({ id: formDefinitionVersions.id });
+    await tx
+      .update(formDefinitions)
+      .set({
+        draftSchema: null,
+        draftFlow: null,
+        publishedVersionId: ver.id,
+        ...(params.description !== undefined ? { description: params.description } : {}),
+        updatedAt: sql`now()`,
+        version: sql`${formDefinitions.version} + 1`,
+      })
+      .where(eq(formDefinitions.id, params.definitionId));
+    return { ok: true as const, versionId: ver.id };
+  }).catch(() => null);
+}
+
+export async function ensureUnifiedExpenseClaimPublished(actorId: string): Promise<void> {
+  const db = getDb();
+  const [existing] = await db
+    .select({
+      id: formDefinitions.id,
+      status: formDefinitions.status,
+      description: formDefinitions.description,
+      publishedVersionId: formDefinitions.publishedVersionId,
+      schema: formDefinitionVersions.schema,
+      flow: formDefinitionVersions.flow,
+    })
+    .from(formDefinitions)
+    .leftJoin(formDefinitionVersions, eq(formDefinitionVersions.id, formDefinitions.publishedVersionId))
+    .where(eq(formDefinitions.key, UNIFIED_EXPENSE_CLAIM_KEY));
+
+  if (!existing || existing.status !== 'published') {
+    await runInTransaction('custom_form.ensure_unified_expense', async (tx) => {
+      const r = await publishDefinition(tx, { ...UNIFIED_EXPENSE_CLAIM_FORM, actorId });
+      return { ok: true as const, ...r };
+    }).catch(() => null);
+    return;
+  }
+
+  const rawSchemaJson = JSON.stringify(existing.schema ?? {});
+  const needsUpgrade =
+    existing.description !== UNIFIED_EXPENSE_CLAIM_FORM.description ||
+    rawSchemaJson.includes('單筆新臺幣30,000元以下') ||
+    rawSchemaJson.includes('採購金額 ≤ NT$ 30,000');
+
+  if (needsUpgrade && existing.publishedVersionId) {
+    const upgraded = parseDefinition(UNIFIED_EXPENSE_CLAIM_FORM.schema, UNIFIED_EXPENSE_CLAIM_FORM.flow);
+    if (upgraded.ok) {
+      await publishUpgradedSchemaVersion({
+        definitionId: existing.id,
+        actorId,
+        schema: upgraded.schema,
+        flow: existing.flow ?? upgraded.flow,
+        description: UNIFIED_EXPENSE_CLAIM_FORM.description,
+      });
+    }
+  }
+}
+
+export async function ensureBudgetFormsPublished(actorId: string): Promise<void> {
+  const db = getDb();
+  for (const form of BUDGET_FORMS) {
+    const [existing] = await db
+      .select({
+        id: formDefinitions.id,
+        status: formDefinitions.status,
+        publishedVersionId: formDefinitions.publishedVersionId,
+        schema: formDefinitionVersions.schema,
+        flow: formDefinitionVersions.flow,
+      })
+      .from(formDefinitions)
+      .leftJoin(formDefinitionVersions, eq(formDefinitionVersions.id, formDefinitions.publishedVersionId))
+      .where(eq(formDefinitions.key, form.key));
+
+    if (!existing || existing.status !== 'published') {
+      await runInTransaction(`custom_form.ensure_${form.key}`, async (tx) => {
+        const r = await publishDefinition(tx, { ...form, actorId });
+        return { ok: true as const, ...r };
+      }).catch(() => null);
+      continue;
+    }
+
+    if (form.key === BUDGET_REQUEST_KEY && existing.publishedVersionId) {
+      const check = parseDefinition(existing.schema, form.flow);
+      const itemsField = check.ok ? allFields(check.schema).find((f) => f.id === 'items' && f.type === 'table') : undefined;
+      const hasRowOriginCol =
+        itemsField?.type === 'table' &&
+        itemsField.columns.some((c) => c.id === 'm1') &&
+        itemsField.columns.some((c) => c.id === 'rowOrigin');
+      const hasDeprecatedReasonField =
+        check.ok && allFields(check.schema).some((f) => f.id === 'reason');
+      if (!hasRowOriginCol || hasDeprecatedReasonField) {
+        const upgraded = parseDefinition(BUDGET_REQUEST_FORM.schema, BUDGET_REQUEST_FORM.flow);
+        if (upgraded.ok) {
+          await publishUpgradedSchemaVersion({
+            definitionId: existing.id,
+            actorId,
+            schema: upgraded.schema,
+            flow: existing.flow ?? upgraded.flow,
+          });
+        }
+      }
+    }
+  }
+}
+
 /** Published forms the current employee may file, in menu order. */
 export async function getFilableDefinitions(): Promise<FilableDefinition[]> {
+  await ensureObsoleteFormsPurged();
   const employee = await getCurrentEmployee();
   if (!employee) return [];
+  const { getSystemFeatureFlags } = await import('@/lib/feature-flags/service');
+  const { resolveFeatureFlagForFormKey } = await import('@/lib/feature-flags/definitions');
+  const [, , featureFlags] = await Promise.all([
+    ensureUnifiedExpenseClaimPublished(employee.id),
+    ensureBudgetFormsPublished(employee.id),
+    getSystemFeatureFlags(),
+  ]);
   const rows = await getDb()
     .select({
       key: formDefinitions.key,
@@ -73,22 +364,45 @@ export async function getFilableDefinitions(): Promise<FilableDefinition[]> {
     .innerJoin(formCategories, eq(formCategories.id, formDefinitions.categoryId))
     .where(and(eq(formDefinitions.status, 'published'), eq(formCategories.active, true)))
     .orderBy(asc(formCategories.sortOrder), asc(formDefinitions.sortOrder), asc(formDefinitions.name));
+  const hasUnifiedExpense = rows.some((r) => r.key === UNIFIED_EXPENSE_CLAIM_KEY);
   const roles = await jobRolesOf(employee.id);
   return rows
     .filter((r) => {
+      if (hasUnifiedExpense && LEGACY_SPLIT_EXPENSE_KEYS.has(r.key)) return false;
+      // 第一層：全公司系統功能授權硬門檻（若全公司未授權或已關閉該模組，即便是系統管理員亦不可見／不可填寫）
+      const requiredFlag = resolveFeatureFlagForFormKey(
+        r.key,
+        r.key === STANDALONE_PAYMENT_KEY ? 'expense' : r.categoryKey
+      );
+      if (requiredFlag && !featureFlags[requiredFlag]) return false;
+      // 第二層：個人部門與職務角色權限
       const v = parseVisibility(r.visibility);
       return v.ok && canFile(v.value, { departmentId: employee.departmentId, jobRoles: roles });
     })
-    .map((r) => ({
-      key: r.key,
-      name: r.name,
-      description: r.description,
-      categoryKey: r.categoryKey,
-      categoryTitle: r.categoryTitle,
-      categoryDescription: r.categoryDescription,
-      categorySort: r.categorySort,
-      legacyFormType: r.legacyFormType,
-    }));
+    .map((r) => {
+      if (r.key === STANDALONE_PAYMENT_KEY && r.categoryKey === 'procurement') {
+        return {
+          key: r.key,
+          name: r.name,
+          description: r.description,
+          categoryKey: 'expense',
+          categoryTitle: '費用報支',
+          categoryDescription: '差旅與日常費用報支',
+          categorySort: 2,
+          legacyFormType: r.legacyFormType,
+        };
+      }
+      return {
+        key: r.key,
+        name: r.name,
+        description: r.description,
+        categoryKey: r.categoryKey,
+        categoryTitle: r.categoryTitle,
+        categoryDescription: r.categoryDescription,
+        categorySort: r.categorySort,
+        legacyFormType: r.legacyFormType,
+      };
+    });
 }
 
 /** "高雄自駕車：劉君怡（差旅費｜B-001）" — project (or department), budget owner, category and code. */
@@ -109,28 +423,52 @@ async function budgetCodeLabels(ids?: string[]): Promise<BudgetCodeOption[]> {
     .leftJoin(projects, eq(projects.id, budgetCodes.projectId))
     .leftJoin(departments, eq(departments.id, budgetCodes.departmentId))
     .leftJoin(owner, eq(owner.id, budgetCodes.ownerEmployeeId))
-    .where(ids ? inArray(budgetCodes.id, ids) : undefined)
+    .where(ids ? inArray(budgetCodes.id, ids) : eq(budgetCodes.active, true))
     .orderBy(asc(budgetCodes.code));
-  return rows.map((c) => ({
-    id: c.id,
-    label: `${c.project ?? c.department ?? c.code}：${c.owner ?? '未指定預算負責人'}（${c.category}｜${c.code}）`,
-    scope: c.departmentId ? 'department' : c.projectKind === 'revenue' ? 'revenue' : 'product',
-  }));
+  return rows.map((c) => {
+    const groupName = c.project ?? c.department ?? c.code;
+    const ownerText = c.owner ?? '未指定預算負責人';
+    return {
+      id: c.id,
+      label: `${groupName}：${ownerText}（${c.category}｜${c.code}）`,
+      groupName,
+      itemLabel: `${c.category}｜${c.code}（負責人：${ownerText}）`,
+      scope: c.departmentId ? 'department' : c.projectKind === 'revenue' ? 'revenue' : 'product',
+    };
+  });
 }
 
-export type BudgetCodeOption = { id: string; label: string; scope: BudgetScope };
+export type BudgetCodeOption = {
+  id: string;
+  label: string;
+  scope: BudgetScope;
+  groupName?: string;
+  itemLabel?: string;
+};
+
+export type HistoricalBudgetSubmissionOption = {
+  id: string;
+  formNumber: string;
+  fiscalYear: string;
+  budgetScope: 'department' | 'project';
+  targetDepartmentId?: string;
+  targetProjectId?: string;
+  rows: Record<string, unknown>[];
+};
 
 export type PickerOptions = {
   employees: { id: string; label: string }[];
-  departments: { id: string; label: string }[];
+  departments: { id: string; label: string; code?: string; managerEmployeeId?: string | null }[];
   budgetCodes: BudgetCodeOption[];
-  projects: { id: string; label: string }[];
+  projects: { id: string; label: string; code?: string; kind?: string }[];
   /** Names only; bank details never leave the server through the picker. */
   suppliers: { id: string; label: string }[];
   /** Assets still in the register; custodian / location pre-fill the register-linked rows. */
   assets: AssetPickerOption[];
   /** 關聯單據: submissions this form may continue (with the rows each carries over). */
   sources: SourceOption[];
+  /** 歷年已填寫之預算申請單明細（供線上預算申請單切換檢視去年填寫資料與科目增減對照） */
+  historicalBudgetSubmissions?: HistoricalBudgetSubmissionOption[];
 };
 
 /** Who files the form and, when editing, the source it already continues. */
@@ -187,11 +525,19 @@ export async function getPickerOptions(schema: FormSchema, sourceCtx?: SourceCon
           .orderBy(asc(departments.name), asc(employees.name))
       : [],
     types.has('department')
-      ? db.select({ id: departments.id, name: departments.name }).from(departments).where(eq(departments.active, true)).orderBy(asc(departments.sortOrder), asc(departments.name))
+      ? db
+          .select({ id: departments.id, code: departments.code, name: departments.name, managerEmployeeId: departments.managerEmployeeId })
+          .from(departments)
+          .where(eq(departments.active, true))
+          .orderBy(asc(departments.sortOrder), asc(departments.name))
       : [],
     types.has('budget_code') ? budgetCodeLabels() : [],
     types.has('project')
-      ? db.select({ id: projects.id, code: projects.code, name: projects.name }).from(projects).where(projectUsableBy(sourceCtx?.applicantId)).orderBy(asc(projects.code))
+      ? db
+          .select({ id: projects.id, code: projects.code, name: projects.name, kind: projects.kind })
+          .from(projects)
+          .where(projectUsableBy(sourceCtx?.applicantId))
+          .orderBy(asc(projects.code))
       : [],
     types.has('supplier') ? db.select({ id: suppliers.id, label: suppliers.name }).from(suppliers).orderBy(asc(suppliers.name)) : [],
     types.has('asset') ? assetOptions() : [],
@@ -199,9 +545,14 @@ export async function getPickerOptions(schema: FormSchema, sourceCtx?: SourceCon
   ]);
   return {
     employees: emps.map((e) => ({ id: e.id, label: `${e.name}（${e.dept}）` })),
-    departments: depts.map((d) => ({ id: d.id, label: d.name })),
+    departments: depts.map((d) => ({ id: d.id, label: `${d.code}｜${d.name}`, code: d.code, managerEmployeeId: d.managerEmployeeId })),
     budgetCodes: codes,
-    projects: projs.map((p) => ({ id: p.id, label: `${p.code} ${p.name}` })),
+    projects: projs.map((p) => ({
+      id: p.id,
+      label: p.name && p.name !== p.code && !p.name.startsWith(p.code) ? `${p.code}｜${p.name}` : p.name || p.code,
+      code: p.code,
+      kind: p.kind,
+    })),
     suppliers: sups,
     assets: assetChoices,
     sources: sourceChoices,
@@ -215,15 +566,25 @@ export type NewFormContext = {
   schema: FormSchema;
   options: PickerOptions;
   currentEmployeeId: string;
+  filingScope: EmployeeFilingScope;
+  savedDrafts: SavedFormDraft[];
 };
 
 /** The published version of a form the current employee may file, or null (missing / hidden look the same). */
 export async function getNewFormContext(key: string): Promise<NewFormContext | null> {
   const employee = await getCurrentEmployee();
   if (!employee || typeof key !== 'string' || key.length > 40) return null;
-  const [row] = await getDb()
+  if (key === UNIFIED_EXPENSE_CLAIM_KEY) {
+    await ensureUnifiedExpenseClaimPublished(employee.id);
+  }
+  if (key === BUDGET_REQUEST_KEY || key === BUDGET_CHANGE_KEY) {
+    await ensureBudgetFormsPublished(employee.id);
+  }
+  const db = getDb();
+  const [row] = await db
     .select({
       id: formDefinitions.id,
+      publishedVersionId: formDefinitions.publishedVersionId,
       key: formDefinitions.key,
       name: formDefinitions.name,
       description: formDefinitions.description,
@@ -237,15 +598,217 @@ export async function getNewFormContext(key: string): Promise<NewFormContext | n
   if (!row) return null;
   const v = parseVisibility(row.visibility);
   if (!v.ok || !canFile(v.value, { departmentId: employee.departmentId, jobRoles: await jobRolesOf(employee.id) })) return null;
-  const parsed = parseDefinition(row.schema, row.flow);
+  let rawSchema = row.schema;
+  if (key === BUDGET_REQUEST_KEY) {
+    const check = parseDefinition(rawSchema, row.flow);
+    const hasDeprecatedReasonField = check.ok && allFields(check.schema).some((f) => f.id === 'reason');
+    if (hasDeprecatedReasonField) {
+      const upgraded = parseDefinition(BUDGET_REQUEST_FORM.schema, row.flow);
+      if (upgraded.ok) {
+        rawSchema = upgraded.schema;
+        if (row.publishedVersionId) {
+          await publishUpgradedSchemaVersion({
+            definitionId: row.id,
+            actorId: employee.id,
+            schema: upgraded.schema,
+            flow: row.flow,
+          });
+        }
+      }
+    }
+  }
+  if (key === PURCHASE_REQUEST_KEY) {
+    const check = parseDefinition(rawSchema, row.flow);
+    const itemsField = check.ok ? allFields(check.schema).find((f) => f.id === 'items' && f.type === 'table') : undefined;
+    const hasUnitPrice = itemsField?.type === 'table' && itemsField.columns.some((c) => c.id === 'unitPrice');
+    if (!hasUnitPrice) {
+      const upgraded = parseDefinition(PURCHASE_REQUEST_FORM.schema, row.flow);
+      if (upgraded.ok && row.publishedVersionId) {
+        rawSchema = upgraded.schema;
+        await publishUpgradedSchemaVersion({
+          definitionId: row.id,
+          actorId: employee.id,
+          schema: upgraded.schema,
+          flow: row.flow,
+        });
+      }
+    }
+  }
+  const oneToManyMigratedMap: Record<string, unknown> = {
+    [PURCHASE_ORDER_KEY]: PURCHASE_ORDER_FORM.schema,
+    [ACCEPTANCE_KEY]: ACCEPTANCE_FORM.schema,
+    [PROCUREMENT_PAYMENT_KEY]: PROCUREMENT_PAYMENT_FORM.schema,
+  };
+  if (key in oneToManyMigratedMap) {
+    const check = parseDefinition(rawSchema, row.flow);
+    const srcField = check.ok ? sourceFieldOf(check.schema) : undefined;
+    const hasAllowMultiple = srcField?.sources.every((s) => s.allowMultiple === true);
+    if (!hasAllowMultiple) {
+      const upgraded = parseDefinition(oneToManyMigratedMap[key], row.flow);
+      if (upgraded.ok && row.publishedVersionId) {
+        rawSchema = upgraded.schema;
+        await publishUpgradedSchemaVersion({
+          definitionId: row.id,
+          actorId: employee.id,
+          schema: upgraded.schema,
+          flow: row.flow,
+        });
+      }
+    }
+  }
+  const qtyMigratedMap: Record<string, unknown> = {
+    [PROCUREMENT_PAYMENT_KEY]: PROCUREMENT_PAYMENT_FORM.schema,
+    [STANDALONE_PAYMENT_KEY]: STANDALONE_PAYMENT_FORM.schema,
+    ...Object.fromEntries(EXPENSE_CLAIM_FORMS.map((f) => [f.key, f.schema])),
+  };
+  if (key in qtyMigratedMap) {
+    const check = parseDefinition(rawSchema, row.flow);
+    const itemsField = check.ok ? allFields(check.schema).find((f) => f.id === 'items' && f.type === 'table') : undefined;
+    const hasQuantity = itemsField?.type === 'table' && itemsField.columns.some((c) => c.id === 'quantity');
+    if (!hasQuantity) {
+      const upgraded = parseDefinition(qtyMigratedMap[key], row.flow);
+      if (upgraded.ok && row.publishedVersionId) {
+        rawSchema = upgraded.schema;
+        await publishUpgradedSchemaVersion({
+          definitionId: row.id,
+          actorId: employee.id,
+          schema: upgraded.schema,
+          flow: row.flow,
+        });
+      }
+    }
+  }
+  if (key === TRAVEL_EXPENSE_FORM.key) {
+    const check = parseDefinition(rawSchema, row.flow);
+    if (check.ok) {
+      const costsField = allFields(check.schema).find((f) => f.id === 'costItems' && f.type === 'table');
+      const summaryCol = costsField?.type === 'table' ? costsField.columns.find((c) => c.id === 'summary') : undefined;
+      if (summaryCol && summaryCol.label === '摘要') {
+        summaryCol.label = '備註說明(起-迄點、油資補助公里數等)';
+        rawSchema = check.schema;
+        if (row.publishedVersionId) {
+          await publishUpgradedSchemaVersion({
+            definitionId: row.id,
+            actorId: employee.id,
+            schema: check.schema,
+            flow: row.flow,
+          });
+        }
+      }
+    }
+  }
+  const parsed = parseDefinition(rawSchema, row.flow);
   if (!parsed.ok) return null;
+  const [options, filingScope, savedDrafts, histBudgets] = await Promise.all([
+    getPickerOptions(parsed.schema, { definitionId: row.id, applicantId: employee.id }),
+    getEmployeeFilingScope(employee.id, parsed.schema.onBehalf === true, db),
+    listFormDraftsForOwner(employee.id, row.key),
+    row.key === BUDGET_REQUEST_KEY
+      ? db
+          .select({
+            id: formSubmissions.id,
+            formNumber: formSubmissions.formNumber,
+            data: formSubmissions.data,
+          })
+          .from(formSubmissions)
+          .where(
+            and(
+              eq(formSubmissions.definitionId, row.id),
+              eq(formSubmissions.applicantEmployeeId, employee.id)
+            )
+          )
+          .orderBy(desc(formSubmissions.submittedAt))
+      : Promise.resolve([]),
+  ]);
+  if (histBudgets.length > 0) {
+    options.historicalBudgetSubmissions = histBudgets.map((h) => {
+      const d = (h.data ?? {}) as Record<string, unknown>;
+      const itemsObj = (d.items ?? {}) as { rows?: Record<string, unknown>[] };
+      return {
+        id: h.id,
+        formNumber: h.formNumber,
+        fiscalYear: String(d.fiscalYear ?? ''),
+        budgetScope: d.budgetScope === 'project' ? 'project' : 'department',
+        targetDepartmentId: typeof d.targetDepartmentId === 'string' ? d.targetDepartmentId : undefined,
+        targetProjectId: typeof d.targetProjectId === 'string' ? d.targetProjectId : undefined,
+        rows: Array.isArray(itemsObj.rows) ? itemsObj.rows : [],
+      };
+    });
+  }
   return {
     key: row.key,
     name: row.name,
     description: row.description,
     schema: parsed.schema,
-    options: await getPickerOptions(parsed.schema, { definitionId: row.id, applicantId: employee.id }),
+    options,
     currentEmployeeId: employee.id,
+    filingScope,
+    savedDrafts,
+  };
+}
+
+export type CloneableSubmissionData = {
+  sourceFormNumber: string;
+  applicantEmployeeId: string;
+  data: Record<string, unknown>;
+};
+
+/**
+ * Load an existing submission's field data so a user can duplicate ("複製舊單")
+ * it into a fresh form without re-typing. Strips finance-filled values.
+ */
+export async function getCloneableSubmissionData(key: string, copyFromId: string): Promise<CloneableSubmissionData | null> {
+  const actor = await getCurrentEmployee();
+  if (!actor || !isUuid(copyFromId)) return null;
+  if (!(await canReadForm(actor, FORM, copyFromId))) return null;
+  const db = getDb();
+  const [row] = await db
+    .select({
+      formNumber: formSubmissions.formNumber,
+      applicantEmployeeId: formSubmissions.applicantEmployeeId,
+      filedByEmployeeId: formSubmissions.filedByEmployeeId,
+      data: formSubmissions.data,
+      defKey: formDefinitions.key,
+      schema: formDefinitionVersions.schema,
+      flow: formDefinitionVersions.flow,
+    })
+    .from(formSubmissions)
+    .innerJoin(formDefinitions, eq(formDefinitions.id, formSubmissions.definitionId))
+    .innerJoin(formDefinitionVersions, eq(formDefinitionVersions.id, formSubmissions.versionId))
+    .where(eq(formSubmissions.id, copyFromId));
+  if (!row || row.defKey !== key) return null;
+  const parsed = parseDefinition(row.schema, row.flow);
+  const raw = ((row.data ?? {}) as Record<string, unknown>);
+  const safe =
+    parsed.ok && !canSeeSensitive(actor, { applicantId: row.applicantEmployeeId, filerId: row.filedByEmployeeId ?? row.applicantEmployeeId })
+      ? maskSensitive(parsed.schema, raw)
+      : { ...raw };
+
+  // Strip finance-only columns when cloning into a fresh submission
+  if (parsed.ok) {
+    for (const f of allFields(parsed.schema)) {
+      if (f.type === 'table' && safe[f.id] && typeof safe[f.id] === 'object') {
+        const financeCols = new Set(f.columns.filter((c) => c.financeFill).map((c) => c.id));
+        if (financeCols.size > 0) {
+          const tableVal = safe[f.id] as { rows?: Record<string, unknown>[] };
+          if (Array.isArray(tableVal.rows)) {
+            safe[f.id] = {
+              ...tableVal,
+              rows: tableVal.rows.map((r) => {
+                const copy = { ...r };
+                for (const colId of financeCols) delete copy[colId];
+                return copy;
+              }),
+            };
+          }
+        }
+      }
+    }
+  }
+  return {
+    sourceFormNumber: row.formNumber,
+    applicantEmployeeId: row.applicantEmployeeId,
+    data: safe,
   };
 }
 
@@ -337,6 +900,18 @@ export async function getMyCustomApprovalQueue(): Promise<CustomQueueItem[]> {
   return rows.map((r) => ({ ...r, formType: FORM, totalAmount: r.totalAmount === null ? null : Number(r.totalAmount) }));
 }
 
+export type CaseChainNode = {
+  id: string;
+  key: string;
+  name: string;
+  formNumber: string;
+  status: string;
+  totalAmount: number | null;
+  sourceSubmissionId: string | null;
+  paymentTerms: string | null;
+  submittedAt: Date;
+};
+
 export type SubmissionDetail = {
   id: string;
   key: string;
@@ -375,17 +950,20 @@ export type SubmissionDetail = {
   /** Register-linked forms only (null otherwise). */
   assetRegister: { lines: SubmissionAssetLine[]; appliedAt: Date | null } | null;
   /** Forms the applicant may file next from this approved submission (關聯單據). */
-  followUps: { key: string; name: string }[];
+  followUps: { key: string; name: string; sourceId?: string }[];
+  /** 第 16、17 條：同採購案號下之 1 對多關聯單據鏈與預付／非預付流程進度。 */
+  caseChain: CaseChainNode[];
 };
 
 /**
  * Published forms the employee may file whose 關聯單據 field accepts this
- * submission (form `key`, rule condition met), minus those the case already has.
+ * submission (form `key`, rule condition met), supporting 1-to-many
+ * (`allowMultiple: true`) and prepayment order (`2.採購單[預付款] → 4.費用申請單 → 3.驗收單`).
  */
 async function followUpsOf(
   employee: { id: string; departmentId: string },
-  source: { key: string; caseId: string; schema: FormSchema; data: Record<string, unknown> }
-): Promise<{ key: string; name: string }[]> {
+  source: { id: string; key: string; caseId: string; sourceSubmissionId: string | null; schema: FormSchema; data: Record<string, unknown> }
+): Promise<{ key: string; name: string; sourceId?: string }[]> {
   const db = getDb();
   const [defs, existing] = await Promise.all([
     db
@@ -402,23 +980,63 @@ async function followUpsOf(
       .where(eq(formDefinitions.status, 'published'))
       .orderBy(asc(formDefinitions.sortOrder), asc(formDefinitions.name)),
     db
-      .select({ definitionId: formSubmissions.definitionId, key: formDefinitions.key, status: formSubmissions.status })
+      .select({
+        id: formSubmissions.id,
+        definitionId: formSubmissions.definitionId,
+        key: formDefinitions.key,
+        status: formSubmissions.status,
+        sourceSubmissionId: formSubmissions.sourceSubmissionId,
+      })
       .from(formSubmissions)
       .innerJoin(formDefinitions, eq(formDefinitions.id, formSubmissions.definitionId))
       .where(eq(formSubmissions.procurementCaseId, source.caseId)),
   ]);
   const taken = new Set(existing.map((e) => e.definitionId));
-  const candidates = defs.filter((d) => {
-    if (taken.has(d.id)) return false;
+  const candidates: { key: string; name: string; visibility: unknown; sourceId?: string }[] = [];
+
+  for (const d of defs) {
     const parsed = parseDefinition(d.schema, d.flow);
     const link = parsed.ok ? sourceFieldOf(parsed.schema) : null;
-    return !!link?.sources.some(
+    if (!link) continue;
+    const matchedRule = link.sources.find(
       (r) =>
         r.form === source.key &&
         ruleHolds(r, source.schema, source.data) &&
-        !(r.unlessCaseHas && existing.some((e) => e.key === r.unlessCaseHas && e.status === 'approved'))
+        !(
+          r.unlessCaseHas &&
+          existing.some(
+            (e) =>
+              e.key === r.unlessCaseHas &&
+              e.status === 'approved' &&
+              (e.sourceSubmissionId === source.id || e.sourceSubmissionId === null)
+          )
+        )
     );
-  });
+    if (!matchedRule) continue;
+    const allowMultiple =
+      matchedRule.allowMultiple === true ||
+      d.key === PURCHASE_ORDER_KEY ||
+      d.key === ACCEPTANCE_KEY ||
+      d.key === PROCUREMENT_PAYMENT_KEY;
+    if (!allowMultiple && taken.has(d.id)) continue;
+    candidates.push({ key: d.key, name: d.name, visibility: d.visibility });
+  }
+
+  // 第 17 條（預付款流程：2.採購單 → 4.費用申請單 → 3.驗收單）：
+  // 當一張來自「預付採購單」的 4.費用申請單(採購付款) 核准後，直接提供「接續建立驗收單（預付後補驗收）」按鈕
+  if (source.key === PROCUREMENT_PAYMENT_KEY && source.sourceSubmissionId) {
+    const parentPo = existing.find((e) => e.id === source.sourceSubmissionId && e.key === PURCHASE_ORDER_KEY);
+    const acDef = defs.find((d) => d.key === ACCEPTANCE_KEY);
+    if (parentPo && acDef && !candidates.some((c) => c.key === ACCEPTANCE_KEY)) {
+      candidates.push({
+        key: acDef.key,
+        name: `${acDef.name}（預付後補驗收：入庫、貼財編）`,
+        visibility: acDef.visibility,
+        sourceId: parentPo.id,
+      });
+    }
+  }
+
   if (candidates.length === 0) return [];
   const roles = await jobRolesOf(employee.id);
   return candidates
@@ -426,7 +1044,7 @@ async function followUpsOf(
       const v = parseVisibility(d.visibility);
       return v.ok && canFile(v.value, { departmentId: employee.departmentId, jobRoles: roles });
     })
-    .map((d) => ({ key: d.key, name: d.name }));
+    .map((d) => ({ key: d.key, name: d.name, ...(d.sourceId ? { sourceId: d.sourceId } : {}) }));
 }
 
 /** Ids referenced by reference fields and employee / asset table columns, resolved to display names. */
@@ -590,8 +1208,16 @@ export async function getSubmissionDetail(id: string, opts: { withOptions?: bool
         : null,
     followUps:
       s.status === 'approved' && s.applicantEmployeeId === actor.id
-        ? await followUpsOf(actor, { key: row.key, caseId: s.procurementCaseId, schema: parsed.schema, data: stored })
+        ? await followUpsOf(actor, {
+            id: s.id,
+            key: row.key,
+            caseId: s.procurementCaseId,
+            sourceSubmissionId: s.sourceSubmissionId,
+            schema: parsed.schema,
+            data: stored,
+          })
         : [],
+    caseChain: await loadCaseChain(s.procurementCaseId),
     filerName: filer?.name ?? null,
     isCurrentApprover: s.status === 'pending_approval' && current?.status === 'pending' && current.approverEmployeeId === actor.id,
     canEdit,
@@ -608,6 +1234,39 @@ export async function getSubmissionDetail(id: string, opts: { withOptions?: bool
       ? await designerPaymentTermsCheck(s.procurementCaseId, expectedPaymentDateOf(parsed.schema.payment, stored))
       : null,
   };
+}
+
+async function loadCaseChain(caseId: string): Promise<CaseChainNode[]> {
+  const rows = await getDb()
+    .select({
+      id: formSubmissions.id,
+      key: formDefinitions.key,
+      name: formDefinitions.name,
+      formNumber: formSubmissions.formNumber,
+      status: formSubmissions.status,
+      totalAmount: formSubmissions.totalAmount,
+      sourceSubmissionId: formSubmissions.sourceSubmissionId,
+      data: formSubmissions.data,
+      submittedAt: formSubmissions.submittedAt,
+    })
+    .from(formSubmissions)
+    .innerJoin(formDefinitions, eq(formDefinitions.id, formSubmissions.definitionId))
+    .where(eq(formSubmissions.procurementCaseId, caseId))
+    .orderBy(asc(formSubmissions.submittedAt));
+  return rows.map((r) => {
+    const d = (r.data ?? {}) as Record<string, unknown>;
+    return {
+      id: r.id,
+      key: r.key,
+      name: r.name,
+      formNumber: r.formNumber,
+      status: r.status,
+      totalAmount: r.totalAmount === null ? null : Number(r.totalAmount),
+      sourceSubmissionId: r.sourceSubmissionId,
+      paymentTerms: typeof d.paymentTerms === 'string' ? d.paymentTerms : null,
+      submittedAt: r.submittedAt,
+    };
+  });
 }
 
 /** Definition key of a submission the viewer may read (for /f/_/<id> redirects). */

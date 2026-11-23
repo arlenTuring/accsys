@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState, useTransition } from 'react';
+import { confirmDialog, promptDialog } from '@/app/components/dialog';
 import {
   createAssetFieldAction,
   downloadFieldPurgeBackupPreviewAction,
@@ -241,10 +242,16 @@ export function AssetFieldManager({ initialFields }: Props) {
                   type="button"
                   className="btn-secondary text-xs"
                   disabled={pending}
-                  onClick={() =>
+                  onClick={async () => {
+                    const next = await promptDialog({
+                      title: `修改「${f.label}」顯示名稱`,
+                      label: '新的顯示名稱',
+                      defaultValue: f.label,
+                      required: true,
+                      confirmLabel: '儲存',
+                    });
+                    if (!next || next.trim() === f.label) return;
                     start(async () => {
-                      const next = window.prompt('新的顯示名稱', f.label);
-                      if (!next || next.trim() === f.label) return;
                       const res = await updateAssetFieldAction({
                         id: f.id,
                         expectedVersion: f.version,
@@ -257,8 +264,8 @@ export function AssetFieldManager({ initialFields }: Props) {
                       }
                       refresh(res.field);
                       setNotice('已改名（欄位 ID 不變）。');
-                    })
-                  }
+                    });
+                  }}
                 >
                   改名
                 </button>
@@ -266,15 +273,16 @@ export function AssetFieldManager({ initialFields }: Props) {
                   type="button"
                   className="btn-secondary text-xs"
                   disabled={pending || Boolean(f.systemBinding)}
-                  onClick={() =>
+                  onClick={async () => {
+                    const ok = await confirmDialog({
+                      title: `隱藏欄位「${f.label}」？`,
+                      message:
+                        '隱藏後，既有資料會保留，但此欄位不再出現在日常資產操作中。具權限的管理員可在欄位管理中恢復。',
+                      confirmLabel: '隱藏',
+                      tone: 'danger',
+                    });
+                    if (!ok) return;
                     start(async () => {
-                      if (
-                        !window.confirm(
-                          '隱藏後，既有資料會保留，但此欄位不再出現在日常資產操作中。具權限的管理員可在欄位管理中恢復。'
-                        )
-                      ) {
-                        return;
-                      }
                       const res = await hideAssetFieldAction({ id: f.id, expectedVersion: f.version });
                       if (!res.ok) {
                         setError(res.error);
@@ -282,8 +290,8 @@ export function AssetFieldManager({ initialFields }: Props) {
                       }
                       refresh(res.field);
                       setNotice(`已隱藏「${res.field.label}」。`);
-                    })
-                  }
+                    });
+                  }}
                 >
                   隱藏
                 </button>

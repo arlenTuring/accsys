@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { confirmDialog } from '@/app/components/dialog';
 import { getFileEditStateAction, restoreOriginalAction } from '@/lib/ai-chat/actions-staged-invoice';
 import {
   EMPTY_EDIT,
@@ -246,8 +247,16 @@ export function PhotoEditor({ target, onClose, onSaved }: { target: EditTarget; 
     setText('');
   };
 
-  const close = () => {
-    if (dirty && !window.confirm('修改尚未儲存，確定離開？原檔與已存版本都不會改變。')) return;
+  const close = async () => {
+    if (dirty) {
+      const ok = await confirmDialog({
+        title: '放棄尚未儲存的修改？',
+        message: '修改尚未儲存，確定離開？原檔與已存版本都不會改變。',
+        confirmLabel: '確定離開',
+        tone: 'danger',
+      });
+      if (!ok) return;
+    }
     onClose();
   };
 

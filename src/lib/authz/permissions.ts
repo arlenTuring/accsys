@@ -31,14 +31,19 @@ export const PERMISSIONS = {
     description: '維護預算編號、專案與年度預算。',
   },
   'finance.cases': {
-    group: 'finance',
+    group: 'admin',
     label: '全公司簽核追蹤',
-    description: '查看與匯出全公司案件 pipeline。',
+    description: '於系統管理查看全公司所有要簽核單據之完整內文與簽核軌跡紀錄。',
   },
   'finance.assets': {
     group: 'finance',
     label: '財產保管清冊',
     description: '查看與維護財產保管人、地點與狀態。',
+  },
+  'finance.inventory': {
+    group: 'finance',
+    label: '財產清點人（財產盤點點交管理）',
+    description: '賦予財產清點人身份：可發送財產清點單給保管人、執行清點人確認／標記異常並結案。',
   },
   'finance.assets_fields': {
     group: 'finance',
@@ -141,6 +146,7 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<SystemRoleCode, readonly Permission
     'finance.budget',
     'finance.cases',
     'finance.assets',
+    'finance.inventory',
     'finance.assets_fields',
     'assets.company_view',
   ],
@@ -175,10 +181,16 @@ export function hasAnyPermission(held: ReadonlySet<string> | readonly string[] |
 }
 
 /** Nav / layout: any finance-area capability. */
-export const FINANCE_NAV_PERMISSIONS = ['finance.budget', 'finance.cases', 'finance.assets', 'forms.read_all'] as const satisfies readonly Permission[];
+export const FINANCE_NAV_PERMISSIONS = [
+  'finance.budget',
+  'finance.assets',
+  'finance.inventory',
+  'forms.read_all',
+] as const satisfies readonly Permission[];
 
 /** Nav / layout: any system-admin area capability. */
 export const ADMIN_NAV_PERMISSIONS = [
+  'finance.cases',
   'org.manage',
   'org.directory',
   'org.access_roles',

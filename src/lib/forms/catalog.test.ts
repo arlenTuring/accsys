@@ -42,9 +42,10 @@ describe('form catalog', () => {
     expect(isRecordPage('/applications/drafts/abc')).toBe(true);
   });
 
-  it('keeps the draft library under my applications, not finance', () => {
+  it('keeps the draft library under my applications and case tracking under admin', () => {
     expect(MY_APPLICATION_LINKS.some((l) => l.href === '/applications/drafts')).toBe(true);
     expect(FINANCE_LINKS.some((l) => l.href === '/applications/drafts')).toBe(false);
+    expect(FINANCE_LINKS.some((l) => l.href === '/case-tracking')).toBe(false);
   });
 
   it('merges designer forms into existing or new categories without touching the base', () => {

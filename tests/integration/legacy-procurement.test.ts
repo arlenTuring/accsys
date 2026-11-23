@@ -29,9 +29,15 @@ describe('batch 5a: purchase request / order moved to the designer runtime', () 
     return f;
   })();
 
-  const requestData = (lines: { budgetCodeId?: string; description?: string; quantity?: number; estimatedAmount?: string }[]) => ({
+  const requestData = (lines: { budgetCodeId?: string; description?: string; quantity?: number; unitPrice?: string; estimatedAmount?: string }[]) => ({
     neededWithinDays: 30,
-    items: { rows: lines.map((l) => ({ budgetCodeId: ids.budget, description: '筆電', quantity: 2, estimatedAmount: '30000', ...l })) },
+    items: {
+      rows: lines.map((l) => {
+        const qty = l.quantity ?? 2;
+        const unitPrice = l.unitPrice ?? (l.estimatedAmount !== undefined ? String(Number(l.estimatedAmount) / qty) : '15000');
+        return { budgetCodeId: ids.budget, description: '筆電', quantity: qty, unitPrice, ...l };
+      }),
+    },
   });
   const orderData = (sourceId: string, rows: Record<string, unknown>[], o: Record<string, unknown> = {}) => ({
     purchaseRequestId: sourceId,
@@ -245,18 +251,15 @@ describe('batch 5a: purchase request / order moved to the designer runtime', () 
       ['螢幕', '1000.00'],
     ]);
 
-    // One order per case: a second one is refused, and still refused after the first is withdrawn.
-    expect(await create(ids.applicant, po.key, orderData(request.submissionId, [{ _src: 0, unitPrice: '1' }, { _src: 1, unitPrice: '1' }], { quoteCount: 1 }))).toMatchObject({
-      ok: false,
-      code: 'conflict',
-      error: expect.stringContaining('此案件已建立過'),
-    });
+    // 1-to-many (第 16 條): multiple orders per request are allowed, and sourceOptions tracks remaining balance.
+    const secondOrder = await create(ids.applicant, po.key, orderData(request.submissionId, [{ _src: 0, quantity: 1, unitPrice: '20000' }], { quoteCount: 1 }));
+    expect(secondOrder).toMatchObject({ ok: true });
+    if (secondOrder.ok) {
+      expect(await service.withdrawSubmission({ id: ids.applicant }, secondOrder.submissionId)).toMatchObject({ ok: true });
+    }
     expect(await service.withdrawSubmission({ id: ids.applicant }, order.submissionId)).toMatchObject({ ok: true });
-    expect(await create(ids.applicant, po.key, orderData(request.submissionId, [{ _src: 0, unitPrice: '1' }, { _src: 1, unitPrice: '1' }], { quoteCount: 1 }))).toMatchObject({
-      ok: false,
-      code: 'conflict',
-    });
-    expect(await sourceOptions(getDb(), { definitionId: poDefinitionId }, link, ids.applicant)).toEqual([]);
+    const reoffered = await sourceOptions(getDb(), { definitionId: poDefinitionId }, link, ids.applicant);
+    expect(reoffered.map((o) => o.id)).toContain(request.submissionId);
   });
 
   it('採購單 quote rule: below the threshold the reason is required', async () => {

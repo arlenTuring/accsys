@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" fill="none">
+  <rect width="960" height="540" rx="16" fill="#F1F5F9"/>
+  <rect x="40" y="24" width="880" height="492" rx="14" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="2"/>
+  <rect x="40" y="24" width="880" height="54" rx="14" fill="#0F172A"/>
+  <text x="72" y="57" fill="#FFFFFF" font-family="sans-serif" font-size="16" font-weight="bold">TURING DRIVE ACCSYS 簽核通知信（免跳轉進系統，信件內直接看明細與簽核）</text>
+  <rect x="72" y="96" width="816" height="190" rx="10" fill="#F8FAFC" stroke="#E2E8F0"/>
+  <text x="96" y="126" fill="#0F172A" font-family="sans-serif" font-size="16" font-weight="bold">【待您簽核】請購單 #20261120PR0001（申請人：阮振瑋 / 自動駕駛系統部）</text>
+  <line x1="96" y1="140" x2="864" y2="140" stroke="#CBD5E1"/>
+  <text x="96" y="168" fill="#475569" font-family="sans-serif" font-size="13">• 預算科目：115ADSSE15（自動駕駛系統部 - 雜項購置）</text>
+  <text x="96" y="194" fill="#475569" font-family="sans-serif" font-size="13">• 請購明細：高精準度雙天線 RTK-GNSS 衛星定位模組 x 1 組 — NT$ 68,500</text>
+  <text x="96" y="220" fill="#475569" font-family="sans-serif" font-size="13">• 目前關卡：第 1 關 — 申請單位主管簽核</text>
+  <text x="96" y="248" fill="#2563EB" font-family="sans-serif" font-size="13" font-weight="bold">信件內已完整展開所有表單欄位與明細列，無須登入網頁即可審閱</text>
+  <rect x="72" y="306" width="816" height="186" rx="12" fill="#FFFBEB" stroke="#F59E0B" stroke-width="2"/>
+  <text x="96" y="338" fill="#92400E" font-family="sans-serif" font-size="15" font-weight="bold">信件內快速簽核操作區（HMAC-SHA256 加密憑證保護）</text>
+  <text x="96" y="364" fill="#78350F" font-family="sans-serif" font-size="13">請直接點擊下方對齊按鈕，系統會彈出極簡二次確認視窗，簽完即自動完成：</text>
+  <rect x="96" y="392" width="220" height="52" rx="10" fill="#059669"/>
+  <text x="206" y="424" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="16" font-weight="bold">準許簽核</text>
+  <rect x="336" y="392" width="220" height="52" rx="10" fill="#FFFFFF" stroke="#E11D48" stroke-width="2"/>
+  <text x="446" y="424" text-anchor="middle" fill="#BE123C" font-family="sans-serif" font-size="16" font-weight="bold">簽核退回</text>
+  <circle cx="96" cy="120" r="16" fill="#DC2626" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="96" y="125" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="bold">1</text>
+  <circle cx="96" cy="392" r="16" fill="#DC2626" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="96" y="397" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="bold">2</text>
+</svg>

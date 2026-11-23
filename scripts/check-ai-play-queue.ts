@@ -1,5 +1,5 @@
 /**
- * Diagnostic: who has pending custom approvals, and DEV001's mine/pending counts.
+ * Diagnostic: who has pending custom approvals, and admin's mine/pending counts.
  *   npx tsx scripts/check-ai-play-queue.ts
  */
 import { config } from 'dotenv';
@@ -32,8 +32,8 @@ async function main() {
       console.log(`  ${r.approver} ← ${r.applicant}  ${r.form_number}  ${r.key}  step ${r.step_order}`);
     }
 
-    const [dev] = await sql`select id, employee_code, name from employees where employee_code = 'DEV001' limit 1`;
-    console.log('dev', dev ?? null);
+    const [dev] = await sql`select id, employee_code, name from employees where role = 'admin' limit 1`;
+    console.log('admin', dev ?? null);
     if (dev) {
       const mine = await sql`
         select d.key, s.form_number, s.status
@@ -44,7 +44,7 @@ async function main() {
         order by s.created_at desc
         limit 30
       `;
-      console.log('DEV001_in_progress', mine.length);
+      console.log('0054_in_progress', mine.length);
       for (const r of mine) console.log(`  ${r.status.padEnd(18)} ${r.form_number}  ${r.key}`);
     }
   } finally {

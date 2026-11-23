@@ -16,6 +16,8 @@ export function ApprovalActions({
   version: number;
   onApprove: (id: string, expectedVersion: number) => Promise<Result>;
   onReturn: (id: string, reason: string, expectedVersion: number) => Promise<Result>;
+  nextHref?: string | null;
+  nextLabel?: string | null;
 }) {
   const router = useRouter();
   const [reason, setReason] = useState('');
@@ -52,7 +54,11 @@ export function ApprovalActions({
         />
         <button
           type="button"
-          onClick={() => (reason.trim() === '' ? setError('請填寫退回原因') : run(() => onReturn(formId, reason, version)))}
+          onClick={() =>
+            reason.trim() === ''
+              ? setError('請填寫退回原因')
+              : run(() => onReturn(formId, reason, version))
+          }
           disabled={busy}
           className="btn border border-red-200 bg-white text-red-700 hover:bg-red-50"
         >

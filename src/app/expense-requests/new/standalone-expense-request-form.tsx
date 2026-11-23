@@ -2,12 +2,13 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { TwoTierBudgetSelect } from '@/app/components/two-tier-budget-select';
 import { createStandaloneExpenseRequest } from '@/lib/expense-requests/actions';
 import { STANDALONE_EXPENSE_REQUEST_LIMIT } from '@/lib/expense-requests/constants';
 import type { BudgetCodeListItem } from '@/lib/budget-codes/queries';
 
-type Row = { description: string; amount: string };
-const emptyRow: Row = { description: '', amount: '' };
+type Row = { description: string; quantity: string; amount: string };
+const emptyRow: Row = { description: '', quantity: '1', amount: '' };
 
 export function StandaloneExpenseRequestForm({
   budgetCodes,
@@ -32,7 +33,12 @@ export function StandaloneExpenseRequestForm({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const total = rows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+  const total = rows.reduce((sum, r) => {
+    const qty = Number(r.quantity || '1');
+    const n = Number(r.amount);
+    const validQty = Number.isFinite(qty) && qty > 0 ? qty : 1;
+    return sum + (Number.isFinite(n) && n > 0 ? validQty * n : 0);
+  }, 0);
   const overLimit = total >= STANDALONE_EXPENSE_REQUEST_LIMIT;
 
   const setRow = (index: number, patch: Partial<Row>) => {
@@ -41,6 +47,14 @@ export function StandaloneExpenseRequestForm({
 
   const onSubmit = async () => {
     setError(null);
+    for (let i = 0; i < rows.length; i += 1) {
+      const rawAmt = rows[i]!.amount.trim();
+      const numAmt = Number(rawAmt);
+      if (rawAmt !== '' && Number.isFinite(numAmt) && numAmt < 0) {
+        setError(`第 ${i + 1} 項的「金額」不可為負數（目前輸入：${rawAmt}），請修改為正數`);
+        return;
+      }
+    }
     setSubmitting(true);
     const result = await createStandaloneExpenseRequest({
       budgetCodeId,
@@ -53,7 +67,7 @@ export function StandaloneExpenseRequestForm({
       invoiceMonth: invoiceMonth.trim() === '' ? null : invoiceMonth,
       expectedPaymentDate: expectedPaymentDate.trim() === '' ? null : expectedPaymentDate,
       // Decimal strings as typed; the server converts them to exact cents.
-      items: rows.map((r) => ({ description: r.description, amount: r.amount.trim() })),
+      items: rows.map((r) => ({ description: r.description, quantity: r.quantity, amount: r.amount.trim() })),
       idempotencyKey,
     });
     setSubmitting(false);
@@ -70,20 +84,24 @@ export function StandaloneExpenseRequestForm({
         免走採購流程：總金額須低於 NT$ {STANDALONE_EXPENSE_REQUEST_LIMIT.toLocaleString()}。
       </p>
 
-      <label className="block text-sm">
-        預算編號：
-        <select
+      <div className="block text-sm">
+        <span className="mb-1 block font-medium">預算編號（兩層選單：先選部門／專案，再選預算科目）：</span>
+        <TwoTierBudgetSelect
           value={budgetCodeId}
-          onChange={(e) => setBudgetCodeId(e.target.value)}
-          className="ml-2 rounded border px-2 py-1"
-        >
-          {budgetCodes.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.code}｜{b.departmentName ?? b.projectName}｜{b.category}
-            </option>
-          ))}
-        </select>
-      </label>
+          onChange={(val) => setBudgetCodeId(val)}
+          options={budgetCodes.map((b) => {
+            const groupName = b.departmentName ?? b.projectName ?? '通用預算';
+            return {
+              id: b.id,
+              label: `${b.code}｜${groupName}｜${b.category}`,
+              groupName,
+              itemLabel: `${b.category}｜${b.code}${b.ownerName ? `（負責人：${b.ownerName}）` : ''}`,
+            };
+          })}
+          className="w-full rounded border px-2 py-1"
+          ariaLabel="預算編號"
+        />
+      </div>
 
       <label className="block text-sm">
         付款對象：
@@ -169,28 +187,52 @@ export function StandaloneExpenseRequestForm({
       </label>
 
       {rows.map((row, i) => (
-        <div key={i} className="flex gap-2 rounded border p-3">
-          <input
-            value={row.description}
-            onChange={(e) => setRow(i, { description: e.target.value })}
-            placeholder="說明"
-            className="flex-1 rounded border px-2 py-1"
-          />
-          <input
-            type="number"
-            value={row.amount}
-            onChange={(e) => setRow(i, { amount: e.target.value })}
-            placeholder="金額"
-            className="w-32 rounded border px-2 py-1"
-          />
-          {rows.length > 1 && (
-            <button
-              type="button"
-              onClick={() => setRows((prev) => prev.filter((_, idx) => idx !== i))}
-              className="rounded border px-2 text-sm"
-            >
-              移除
-            </button>
+        <div key={i} className="space-y-1 rounded border p-3">
+          <div className="flex gap-2">
+            <input
+              value={row.description}
+              onChange={(e) => setRow(i, { description: e.target.value })}
+              placeholder="說明"
+              className="flex-1 rounded border px-2 py-1"
+            />
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={row.quantity}
+              onKeyDown={(e) => {
+                if (e.key === '-' || e.key === '－' || e.key === 'e' || e.key === 'E') e.preventDefault();
+              }}
+              onChange={(e) => setRow(i, { quantity: e.target.value.replace(/[-－]/g, '') })}
+              placeholder="數量"
+              aria-label={`第 ${i + 1} 項數量`}
+              className="w-24 rounded border px-2 py-1 text-right"
+            />
+            <input
+              type="number"
+              min="0"
+              value={row.amount}
+              onKeyDown={(e) => {
+                if (e.key === '-' || e.key === '－' || e.key === 'e' || e.key === 'E') e.preventDefault();
+              }}
+              onChange={(e) => setRow(i, { amount: e.target.value.replace(/[-－]/g, '') })}
+              placeholder="金額"
+              className="w-32 rounded border px-2 py-1"
+            />
+            {rows.length > 1 && (
+              <button
+                type="button"
+                onClick={() => setRows((prev) => prev.filter((_, idx) => idx !== i))}
+                className="rounded border px-2 text-sm"
+              >
+                移除
+              </button>
+            )}
+          </div>
+          {row.amount.trim() !== '' && Number(row.amount) < 0 && (
+            <p className="text-xs text-red-600">
+              ⚠️ 第 {i + 1} 項的「金額」不可為負數（目前輸入：{row.amount}），請修改為正數
+            </p>
           )}
         </div>
       ))}

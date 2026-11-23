@@ -31,14 +31,14 @@ export type TableColumn = {
   decimals?: number;
   /** select columns */
   options?: FieldOption[];
-  /** select columns: option picked on a new row. */
+  /** select / number / text columns: default value on a new row. */
   default?: string;
   /** text columns: longest value (500 when unset). */
   maxLength?: number;
   /** number / money columns: smallest value allowed (also checked on formula results). */
   min?: number | null;
-  /** Read-only column the server recomputes (e.g. 數量 × 單價). */
-  formula?: { op: 'multiply'; of: [string, string] };
+  /** Read-only column the server recomputes (e.g. 數量 × 單價, or 數量 × 金額 × 匯率). */
+  formula?: { op: 'multiply'; of: [string, string] | [string, string, string] };
   /**
    * number columns: exchange rate for the currency picked in this earlier
    * select column of the row — fixed at 1 for NT$, otherwise required, > 0
@@ -164,8 +164,10 @@ export type SourceRule = {
   form: string;
   /** The source must also satisfy this, tested on its own fields. */
   when?: Condition;
-  /** Not offered while the case already has an approved submission of this form (that one is the source then). */
+  /** Not offered while the case/source already has an approved submission of this form (that one is the source then). */
   unlessCaseHas?: string;
+  /** 第 16 條：允許一張來源單據對應多張後續單據（1 對多分批開立）。 */
+  allowMultiple?: boolean;
   rows?: SourceRowMap;
 };
 
@@ -179,6 +181,8 @@ export type SourceRowMap = {
   filter?: { column: string; value: string };
   /** all: every source row, in order; subset: rows may be removed (at least one stays), none added. */
   mode: 'all' | 'subset';
+  /** 第 16 條：在 1 對多分批開立時，允許使用者在來源上限內調整本次數量或金額的欄位（如 ['quantity'] 或 ['quantity', 'amount']）。 */
+  adjustableColumns?: string[];
 };
 
 /** Source-row index kept on carried-over rows. */
@@ -258,7 +262,7 @@ export const isDisplayOnly = (f: FieldDef) => f.type === 'notice' || f.type === 
 export const SCHEMA_LIMITS = {
   sections: 30,
   fields: 200,
-  columns: 20,
+  columns: 25,
   rows: 200,
   options: 200,
   label: 60,
@@ -482,6 +486,9 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
         if (typeof v.default !== 'string' || !col.options.some((o) => o.value === v.default)) errors.push(`${where}：預設選項不在選項中`);
         else col.default = v.default;
       }
+    } else if ((type === 'number' || type === 'text') && v.default !== undefined && v.default !== null && v.default !== '') {
+      if (typeof v.default !== 'string' && typeof v.default !== 'number') errors.push(`${where}：預設值格式不正確`);
+      else col.default = String(v.default);
     }
     if (v.unique === true) {
       if (!UNIQUE_COLUMN_TYPES.includes(type)) errors.push(`${where}：此欄位類型不能設定「不可重複」`);
@@ -512,10 +519,19 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
     }
     if (v.formula !== undefined && v.formula !== null) {
       const f = v.formula;
-      if (!isObj(f) || f.op !== 'multiply' || !Array.isArray(f.of) || f.of.length !== 2 || !f.of.every((x) => typeof x === 'string')) {
+      if (
+        !isObj(f) ||
+        f.op !== 'multiply' ||
+        !Array.isArray(f.of) ||
+        (f.of.length !== 2 && f.of.length !== 3) ||
+        !f.of.every((x) => typeof x === 'string')
+      ) {
         errors.push(`${where}：計算式格式不正確`);
       } else {
-        col.formula = { op: 'multiply', of: [f.of[0] as string, f.of[1] as string] };
+        col.formula =
+          f.of.length === 3
+            ? { op: 'multiply', of: [f.of[0] as string, f.of[1] as string, f.of[2] as string] }
+            : { op: 'multiply', of: [f.of[0] as string, f.of[1] as string] };
       }
       col.required = false;
     }
@@ -590,6 +606,7 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
       if (typeof r.unlessCaseHas !== 'string' || !FORM_KEY.test(r.unlessCaseHas)) errors.push(`${where}：「案件已有核准的表單時不提供」設定不正確`);
       else rule.unlessCaseHas = r.unlessCaseHas;
     }
+    if (r.allowMultiple === true) rule.allowMultiple = true;
     if (r.rows === undefined || r.rows === null) return rule;
     const m = r.rows;
     const cols = isObj(m) && Array.isArray(m.columns) && m.columns.length > 0 && m.columns.length <= SCHEMA_LIMITS.columns ? m.columns : null;
@@ -605,6 +622,10 @@ export function parseFormSchema(raw: unknown): ParseSchemaResult {
       return { to: c.to, from: c.from };
     });
     const rows: SourceRowMap = { table: m.table, from: m.from, columns, mode: m.mode === 'subset' ? 'subset' : 'all' };
+    if (Array.isArray(m.adjustableColumns)) {
+      const adj = m.adjustableColumns.filter((x): x is string => typeof x === 'string' && ID.test(x));
+      if (adj.length > 0) rows.adjustableColumns = [...new Set(adj)];
+    }
     if (m.filter !== undefined && m.filter !== null) {
       const f = m.filter;
       if (!isObj(f) || typeof f.column !== 'string' || !ID.test(f.column) || typeof f.value !== 'string' || !f.value || f.value.length > 100) {
@@ -944,6 +965,18 @@ export function sourceTargets(schema: FormSchema): Map<string, Set<string>> {
     if (!rule.rows) continue;
     const set = out.get(rule.rows.table) ?? new Set<string>();
     rule.rows.columns.forEach((c) => set.add(c.to));
+    out.set(rule.rows.table, set);
+  }
+  return out;
+}
+
+/** Table ids rows are carried into, with the subset of carried columns that may be adjusted for partial/batch fulfillment. */
+export function adjustableSourceTargets(schema: FormSchema): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const rule of sourceFieldOf(schema)?.sources ?? []) {
+    if (!rule.rows?.adjustableColumns?.length) continue;
+    const set = out.get(rule.rows.table) ?? new Set<string>();
+    rule.rows.adjustableColumns.forEach((colId) => set.add(colId));
     out.set(rule.rows.table, set);
   }
   return out;

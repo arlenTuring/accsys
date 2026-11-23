@@ -27,6 +27,13 @@ export async function POST(request: Request) {
       headers: { 'Content-Type': 'application/json' },
     });
   }
+  const headerLocale = request.headers.get('x-accsys-locale');
+  if (
+    !input.locale &&
+    (headerLocale === 'zh-Hant' || headerLocale === 'en' || headerLocale === 'ja')
+  ) {
+    input.locale = headerLocale;
+  }
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -46,6 +53,7 @@ export async function POST(request: Request) {
       try {
         const result = await runAssistantTurn(employee, input, {
           onProgress: (event) => send(event),
+          signal: request.signal,
         });
         send({ type: 'result', result });
       } catch (err) {

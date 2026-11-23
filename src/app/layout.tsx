@@ -4,9 +4,12 @@ import '@fontsource/noto-sans-tc/400.css';
 import '@fontsource/noto-sans-tc/500.css';
 import '@fontsource/noto-sans-tc/700.css';
 import './globals.css';
-import { getPendingApprovalCount } from '@/lib/approvals/pending-count';
+import { getMyTaskCounts } from '@/lib/approvals/pending-count';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { getSidebarEmployeeProfile } from '@/lib/auth/sidebar-profile';
+import { DEFAULT_FEATURE_FLAGS } from '@/lib/feature-flags/definitions';
+import { ensureLocalLicenseStudioRunning } from '@/lib/feature-flags/local-license-server';
+import { getSystemFeatureFlags } from '@/lib/feature-flags/service';
 import { getFormCatalog } from '@/lib/forms/catalog-server';
 import { I18nProvider } from '@/lib/i18n/context';
 import { getServerI18n } from '@/lib/i18n/server';
@@ -22,18 +25,30 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const [employee, { locale }] = await Promise.all([
+  void ensureLocalLicenseStudioRunning();
+  const [employee, { locale }, featureFlags] = await Promise.all([
     getCurrentEmployee(),
     getServerI18n(),
+    getSystemFeatureFlags(),
   ]);
 
-  const [pendingApprovalCount, categories, sidebarProfile] = employee
+  const [taskCounts, categories, sidebarProfile] = employee
     ? await Promise.all([
-        getPendingApprovalCount(),
+        getMyTaskCounts(),
         getFormCatalog(),
         getSidebarEmployeeProfile(employee),
       ])
-    : [0, [], null];
+    : [
+        {
+          approvalsAndReturned: 0,
+          budgetTasks: 0,
+          assetHandovers: 0,
+          pendingSurveys: 0,
+          total: 0,
+        },
+        [],
+        null,
+      ];
 
   return (
     <html lang={locale} suppressHydrationWarning>
@@ -42,8 +57,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           {sidebarProfile ? (
             <AppShell
               profile={sidebarProfile}
-              pendingApprovalCount={pendingApprovalCount}
+              pendingApprovalCount={taskCounts.approvalsAndReturned}
+              taskCounts={taskCounts}
               categories={categories}
+              featureFlags={featureFlags}
             >
               {children}
             </AppShell>

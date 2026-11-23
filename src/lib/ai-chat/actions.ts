@@ -4,6 +4,8 @@ export type { AiChatActionResult } from './turn';
 
 import { and, eq } from 'drizzle-orm';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
+import { getServerLocale } from '@/lib/i18n/server';
+import { translatePhrase } from '@/lib/i18n/messages';
 import { getDb } from '@/lib/db';
 import { attachments } from '@/lib/db/schema';
 import { hitRateLimit } from '@/lib/rate-limit';
@@ -321,11 +323,13 @@ export async function answerChoiceAction(input: {
     input.optionValue === 'open_draft_library' ||
     input.optionValue === 'create_form'
   ) {
+    const locale = await getServerLocale();
+    const prefix = locale === 'en' ? 'Selected: ' : locale === 'ja' ? '選択：' : '選擇：';
     await appendMessage({
       conversationId: input.conversationId,
       ownerEmployeeId: employee.id,
       role: 'user',
-      contentText: `選擇：${input.optionLabel}`,
+      contentText: `${prefix}${input.optionLabel}`,
       clientMessageId: crypto.randomUUID(),
     });
     return { ok: true, intent: input.optionValue };
@@ -363,18 +367,30 @@ export async function presentFormChoicesAction(input: { conversationId: string }
   const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: publicError('unauthenticated') };
   if (!(await getOwnedConversation(employee.id, input.conversationId))) return { ok: false, error: publicError('conversation_not_found') };
-  const forms = await getFilableDefinitions();
+  const [forms, locale] = await Promise.all([getFilableDefinitions(), getServerLocale()]);
+  const contentText =
+    locale === 'en'
+      ? 'Which type of form would you like to create?'
+      : locale === 'ja'
+        ? 'どの種類の申請書を作成しますか？'
+        : '要建立哪一種單據？';
+  const promptText =
+    locale === 'en'
+      ? 'Select Form Type'
+      : locale === 'ja'
+        ? '申請書の種類を選択'
+        : '選擇表單類型';
   await appendMessage({
     conversationId: input.conversationId,
     ownerEmployeeId: employee.id,
     role: 'model',
-    contentText: '要建立哪一種單據？',
+    contentText,
     blocks: [
       {
         kind: 'choice',
         id: `forms_${crypto.randomUUID().slice(0, 8)}`,
-        prompt: '選擇表單類型',
-        options: forms.slice(0, 20).map((f) => ({ id: f.key, label: f.name, value: f.key })),
+        prompt: promptText,
+        options: forms.slice(0, 20).map((f) => ({ id: f.key, label: translatePhrase(f.name, locale), value: f.key })),
         conversationId: input.conversationId,
         status: 'open',
       },
@@ -452,7 +468,7 @@ async function listAttachmentsForDraftPanel(submissionId: string) {
   }));
 }
 
-/** Right-pane browse for a filed designer form (詳情／簽核). */
+/** Right-pane browse for any filed form (詳情／簽核) across custom forms, legacy forms, and inventory handovers. */
 export async function getSubmissionPanelAction(submissionId: string): Promise<
   | {
       ok: true;
@@ -466,6 +482,7 @@ export async function getSubmissionPanelAction(submissionId: string): Promise<
       departmentName: string;
       submittedAt: string | null;
       isCurrentApprover: boolean;
+      canResubmit?: boolean;
       href: string;
       header: Array<{ label: string; value: string }>;
       fields: Array<{ label: string; value: string }>;
@@ -487,7 +504,6 @@ export async function getSubmissionPanelAction(submissionId: string): Promise<
   const { allFields, isDisplayOnly } = await import('@/lib/custom-forms/schema');
   const { getApprovalTimeline } = await import('@/lib/approval/timeline');
   const detail = await getSubmissionDetail(submissionId);
-  if (!detail) return { ok: false, error: '找不到單據或無權限閱讀。' };
 
   const stringify = (v: unknown): string => {
     if (v == null || v === '') return '—';
@@ -497,12 +513,12 @@ export async function getSubmissionPanelAction(submissionId: string): Promise<
       const rows = (v as { rows: Record<string, unknown>[] }).rows;
       if (!rows.length) return '—';
       return rows
-        .slice(0, 5)
+        .slice(0, 8)
         .map((r, i) => {
           const parts = Object.values(r)
             .filter((x) => typeof x === 'string' || typeof x === 'number')
             .map(String)
-            .slice(0, 3);
+            .slice(0, 4);
           return `${i + 1}. ${parts.join(' / ') || '（列）'}`;
         })
         .join('\n');
@@ -510,41 +526,226 @@ export async function getSubmissionPanelAction(submissionId: string): Promise<
     return JSON.stringify(v).slice(0, 200);
   };
 
-  const headerFields = allFields(detail.schema).filter((f) => f.showInHeader && !isDisplayOnly(f) && f.id in detail.data);
-  const bodyFields = allFields(detail.schema).filter(
-    (f) => !f.showInHeader && !isDisplayOnly(f) && f.id in detail.data && f.type !== 'table'
-  );
-  const tableFields = allFields(detail.schema).filter((f) => f.type === 'table' && f.id in detail.data);
+  if (detail) {
+    const headerFields = allFields(detail.schema).filter((f) => f.showInHeader && !isDisplayOnly(f) && f.id in detail.data);
+    const bodyFields = allFields(detail.schema).filter(
+      (f) => !f.showInHeader && !isDisplayOnly(f) && f.id in detail.data && f.type !== 'table'
+    );
+    const tableFields = allFields(detail.schema).filter((f) => f.type === 'table' && f.id in detail.data);
 
-  const labeled = (raw: unknown) => {
-    const ref = detail.labels[String(raw)];
-    if (ref) return ref;
-    return stringify(raw);
-  };
+    const labeled = (raw: unknown) => {
+      const ref = detail.labels[String(raw)];
+      if (ref) return ref;
+      return stringify(raw);
+    };
 
-  const timeline = await getApprovalTimeline('custom', submissionId, employee);
+    const timeline = await getApprovalTimeline('custom', submissionId, employee);
+    return {
+      ok: true,
+      id: detail.id,
+      formKey: detail.key,
+      formName: detail.name,
+      formNumber: detail.formNumber,
+      status: detail.status,
+      version: detail.version,
+      applicantName: detail.applicantName,
+      departmentName: detail.departmentName,
+      submittedAt: detail.submittedAt ? detail.submittedAt.toISOString() : null,
+      isCurrentApprover: detail.isCurrentApprover,
+      canResubmit: detail.canResubmit,
+      href: `/f/${detail.key}/${detail.id}`,
+      header: [
+        { label: '申請人', value: detail.applicantName },
+        { label: '申請部門', value: detail.departmentName },
+        ...headerFields.map((f) => ({ label: f.label, value: labeled(detail.data[f.id]) })),
+      ],
+      fields: [
+        ...bodyFields.map((f) => ({ label: f.label, value: labeled(detail.data[f.id]) })),
+        ...tableFields.map((f) => ({ label: f.label, value: stringify(detail.data[f.id]) })),
+      ],
+      timeline: (timeline?.nodes ?? []).map((n) => ({
+        key: n.key,
+        label: n.label,
+        name: n.approverName,
+        state: n.state,
+        actedAt: n.actedAt,
+        comment: n.comment,
+      })),
+    };
+  }
+
+  // Fallback 1: Check Asset Inventory Handover Forms (【財產清點單】)
+  const { getInventoryHandoverFormDetail } = await import('@/lib/assets/inventory-forms');
+  const invDetail = await getInventoryHandoverFormDetail({ id: employee.id, role: employee.role }, submissionId);
+  if (invDetail) {
+    const totalLines = invDetail.lines.length;
+    const custodianConfirmed = invDetail.lines.filter((l) => l.state.custodianConfirmed).length;
+    const inspectorConfirmed = invDetail.lines.filter((l) => l.state.inspectorConfirmed).length;
+    const bothConfirmed = invDetail.lines.filter(
+      (l) => l.state.custodianConfirmed && l.state.inspectorConfirmed
+    ).length;
+    const custodianDone = totalLines > 0 && custodianConfirmed >= totalLines;
+    const isLocked = invDetail.status === 'locked';
+    const isCurrentApprover =
+      !isLocked &&
+      (invDetail.custodianEmployeeId === employee.id || invDetail.inspectorEmployeeId === employee.id);
+
+    return {
+      ok: true,
+      id: invDetail.id,
+      formKey: 'inventory_handover',
+      formName: '財產清點單',
+      formNumber: invDetail.formNumber,
+      status: isLocked ? 'approved' : 'pending_approval',
+      version: 1,
+      applicantName: invDetail.custodianName,
+      departmentName: invDetail.custodianDepartmentName,
+      submittedAt: invDetail.dispatchedAt || null,
+      isCurrentApprover,
+      canResubmit: false,
+      href: `/assets/inventory-forms/${invDetail.id}`,
+      header: [
+        { label: '保管人', value: `${invDetail.custodianName}（${invDetail.custodianEmployeeCode}）` },
+        { label: '所屬部門', value: invDetail.custodianDepartmentName },
+        { label: '清點人', value: invDetail.inspectorName },
+        ...(invDetail.scheduledAt ? [{ label: '點交時間', value: invDetail.scheduledAt.replace('T', ' ') }] : []),
+        ...(invDetail.meetingLocation ? [{ label: '點交地點', value: invDetail.meetingLocation }] : []),
+        { label: '清點進度', value: `已雙方確認 ${bothConfirmed}/${totalLines} 筆` },
+      ],
+      fields: invDetail.lines.map((l, idx) => ({
+        label: `${idx + 1}. ${l.assetTag}｜${l.state.assetName}`,
+        value: `存放位置：${l.state.confirmedLocation || l.state.originalLocation || '—'}｜狀態：${
+          l.state.existenceFact === 'exists'
+            ? '有此物'
+            : l.state.existenceFact === 'missing'
+              ? '無此物'
+              : '損壞/待報廢'
+        }｜保管人：${l.state.custodianConfirmed ? '已確認' : '待確認'}｜清點人：${
+          l.state.inspectorConfirmed ? '已確認' : '待確認'
+        }`,
+      })),
+      timeline: [
+        {
+          key: '1',
+          label: '保管人清點確認',
+          name: invDetail.custodianName,
+          state: custodianDone ? 'approved' : 'current',
+          actedAt: null,
+          comment: `已確認 ${custodianConfirmed}/${totalLines} 筆`,
+        },
+        {
+          key: '2',
+          label: '清點人複核封存',
+          name: invDetail.inspectorName,
+          state: isLocked ? 'approved' : custodianDone ? 'current' : 'waiting',
+          actedAt: invDetail.lockedAt ? invDetail.lockedAt.toISOString() : null,
+          comment: `已確認 ${inspectorConfirmed}/${totalLines} 筆`,
+        },
+      ],
+    };
+  }
+
+  // Fallback 2: Check Legacy Dedicated Form Tables (FORM_TABLE)
+  const { FORM_LABELS, FORM_ROUTE_PREFIX, FORM_TABLE, FORM_TYPES } = await import('@/lib/procurement/form-registry');
+  const { canReadForm } = await import('@/lib/authz/forms');
+  const { getFormApprovalSnapshot } = await import('./approval-snapshot');
+  const { getDb } = await import('@/lib/db');
+  const { sql } = await import('drizzle-orm');
+  const db = getDb();
+
+  let matchedType: Exclude<typeof FORM_TYPES[number], 'custom'> | null = null;
+  let legacyRow: {
+    row: Record<string, unknown>;
+    applicant_name: string | null;
+    department_name: string | null;
+    case_number: string | null;
+  } | null = null;
+
+  for (const ft of FORM_TYPES) {
+    if (ft === 'custom') continue;
+    const [found] = await db.execute<{
+      row: Record<string, unknown>;
+      applicant_name: string | null;
+      department_name: string | null;
+      case_number: string | null;
+    }>(sql`
+      select to_jsonb(f) as row,
+             e.name as applicant_name,
+             d.name as department_name,
+             pc.case_number
+        from ${sql.identifier(FORM_TABLE[ft])} f
+        left join employees e on e.id = f.applicant_employee_id
+        left join departments d on d.id = e.department_id
+        left join procurement_cases pc on pc.id = f.procurement_case_id
+       where f.id = ${submissionId}
+       limit 1`);
+    if (found) {
+      matchedType = ft;
+      legacyRow = found;
+      break;
+    }
+  }
+
+  if (!matchedType || !legacyRow) {
+    return { ok: false, error: '找不到單據或無權限閱讀。' };
+  }
+  if (!(await canReadForm(employee, matchedType, submissionId))) {
+    return { ok: false, error: '找不到單據或無權限閱讀。' };
+  }
+
+  const [snap, timeline] = await Promise.all([
+    getFormApprovalSnapshot(matchedType, submissionId),
+    getApprovalTimeline(matchedType, submissionId, employee),
+  ]);
+  const r = legacyRow.row;
+  const amount =
+    r.total_amount != null && !Number.isNaN(Number(r.total_amount))
+      ? `NT$ ${Number(r.total_amount).toLocaleString('en-US')}`
+      : null;
+
+  const fieldEntries: Array<{ label: string; value: string }> = [];
+  const labelMap: Array<[string, string]> = [
+    ['purpose', '事由／目的'],
+    ['subject', '主旨'],
+    ['description', '說明'],
+    ['document_description', '文件說明'],
+    ['counterparty_name', '對方單位／對象'],
+    ['customer_name', '客戶名稱'],
+    ['supplier_name', '供應商'],
+    ['destination', '地點'],
+    ['request_date', '申請日期'],
+    ['application_date', '申請日期'],
+    ['expected_payment_date', '預計付款日'],
+    ['remark', '備註'],
+    ['return_reason', '退回原因'],
+  ];
+  for (const [col, lbl] of labelMap) {
+    const val = r[col];
+    if (typeof val === 'string' && val.trim()) {
+      fieldEntries.push({ label: lbl, value: val.trim() });
+    }
+  }
+
   return {
     ok: true,
-    id: detail.id,
-    formKey: detail.key,
-    formName: detail.name,
-    formNumber: detail.formNumber,
-    status: detail.status,
-    version: detail.version,
-    applicantName: detail.applicantName,
-    departmentName: detail.departmentName,
-    submittedAt: detail.submittedAt ? detail.submittedAt.toISOString() : null,
-    isCurrentApprover: detail.isCurrentApprover,
-    href: `/f/${detail.key}/${detail.id}`,
+    id: submissionId,
+    formKey: matchedType,
+    formName: FORM_LABELS[matchedType] ?? '單據',
+    formNumber: legacyRow.case_number ?? String(r.case_number ?? r.form_number ?? submissionId.slice(0, 8)),
+    status: String(r.status ?? snap?.status ?? 'pending_approval'),
+    version: typeof r.version === 'number' ? r.version : (snap?.version ?? 1),
+    applicantName: legacyRow.applicant_name ?? '—',
+    departmentName: legacyRow.department_name ?? '—',
+    submittedAt: typeof r.created_at === 'string' ? r.created_at : null,
+    isCurrentApprover: Boolean(snap?.pendingApproverIds.includes(employee.id)),
+    canResubmit: false,
+    href: `${FORM_ROUTE_PREFIX[matchedType]}/${submissionId}`,
     header: [
-      { label: '申請人', value: detail.applicantName },
-      { label: '申請部門', value: detail.departmentName },
-      ...headerFields.map((f) => ({ label: f.label, value: labeled(detail.data[f.id]) })),
+      { label: '申請人', value: legacyRow.applicant_name ?? '—' },
+      { label: '申請部門', value: legacyRow.department_name ?? '—' },
+      ...(amount ? [{ label: '金額', value: amount }] : []),
     ],
-    fields: [
-      ...bodyFields.map((f) => ({ label: f.label, value: labeled(detail.data[f.id]) })),
-      ...tableFields.map((f) => ({ label: f.label, value: stringify(detail.data[f.id]) })),
-    ],
+    fields: fieldEntries,
     timeline: (timeline?.nodes ?? []).map((n) => ({
       key: n.key,
       label: n.label,
@@ -554,6 +755,224 @@ export async function getSubmissionPanelAction(submissionId: string): Promise<
       comment: n.comment,
     })),
   };
+}
+
+/** Universal approve action from AI Chat card or right-side SubmissionPanel (custom, legacy, or inventory handover). */
+export async function approveSubmissionFromChatAction(
+  submissionId: string,
+  expectedVersion?: number
+): Promise<{ ok: true; message?: string } | { ok: false; error: string }> {
+  const employee = await getCurrentEmployee();
+  if (!employee) return { ok: false, error: publicError('unauthenticated') };
+  if (!/^[0-9a-f-]{36}$/i.test(submissionId)) return { ok: false, error: '單據編號無效。' };
+
+  // 1. Check custom form
+  const { getSubmissionDetail } = await import('@/lib/custom-forms/queries');
+  const customDetail = await getSubmissionDetail(submissionId);
+  if (customDetail) {
+    if (!customDetail.isCurrentApprover) {
+      return { ok: false, error: '您目前不是這張單的簽核人。' };
+    }
+    const { approveCustomFormStep } = await import('@/lib/custom-forms/actions');
+    const res = await approveCustomFormStep(submissionId, expectedVersion ?? customDetail.version);
+    if (!res.ok) return { ok: false, error: res.error };
+    return { ok: true, message: `已核准 ${customDetail.formNumber}（${customDetail.name}）。` };
+  }
+
+  // 2. Check Asset Inventory Handover Form (【財產清點單】)
+  const {
+    getInventoryHandoverFormDetail,
+    updateAndConfirmHandoverLines,
+    completeInventoryHandoverForm,
+  } = await import('@/lib/assets/inventory-forms');
+  const invDetail = await getInventoryHandoverFormDetail({ id: employee.id, role: employee.role }, submissionId);
+  if (invDetail) {
+    if (invDetail.status === 'locked') {
+      return { ok: false, error: '此財產清點單已結案封存。' };
+    }
+    const actor = { id: employee.id, role: employee.role };
+    const lineIds = invDetail.lines.map((l) => l.id);
+    const party: 'custodian' | 'inspector' =
+      invDetail.custodianEmployeeId === employee.id && !invDetail.canActAsInspector
+        ? 'custodian'
+        : invDetail.canActAsCustodian && invDetail.custodianConfirmedLines < invDetail.totalLines
+          ? 'custodian'
+          : 'inspector';
+    const confirmRes = await updateAndConfirmHandoverLines(actor, {
+      batchId: invDetail.id,
+      lineIds,
+      party,
+      confirm: true,
+    });
+    if (!confirmRes.ok) return { ok: false, error: confirmRes.error };
+    if (invDetail.canActAsInspector && invDetail.custodianConfirmedLines >= invDetail.totalLines) {
+      await completeInventoryHandoverForm(actor, invDetail.id).catch(() => null);
+    }
+    return { ok: true, message: `已確認財產清點單 ${invDetail.formNumber}。` };
+  }
+
+  // 3. Check Legacy Forms (FORM_TABLE)
+  const panel = await getSubmissionPanelAction(submissionId);
+  if (!panel.ok) return { ok: false, error: panel.error };
+  if (!panel.isCurrentApprover) return { ok: false, error: '您目前不是這張單的簽核人。' };
+  const ver = expectedVersion ?? panel.version;
+  const ft = panel.formKey;
+
+  let res: { ok: true } | { ok: false; error: string };
+  switch (ft) {
+    case 'purchase_request': {
+      const { approvePurchaseRequestStep } = await import('@/lib/purchase-requests/actions');
+      res = await approvePurchaseRequestStep(submissionId, ver);
+      break;
+    }
+    case 'purchase_order': {
+      const { approvePurchaseOrderStep } = await import('@/lib/purchase-orders/actions');
+      res = await approvePurchaseOrderStep(submissionId, ver);
+      break;
+    }
+    case 'acceptance': {
+      const { approveAcceptanceStep } = await import('@/lib/acceptances/actions');
+      res = await approveAcceptanceStep(submissionId, ver);
+      break;
+    }
+    case 'expense_request': {
+      const { approveExpenseRequestStep } = await import('@/lib/expense-requests/actions');
+      res = await approveExpenseRequestStep(submissionId, ver);
+      break;
+    }
+    case 'travel_expense': {
+      const { approveTravelExpenseStep } = await import('@/lib/travel-expenses/actions');
+      res = await approveTravelExpenseStep(submissionId, ver);
+      break;
+    }
+    case 'department_expense':
+    case 'project_expense':
+    case 'revenue_expense':
+    case 'minor_expense': {
+      const { approveExpenseClaimStep } = await import('@/lib/expense-claims/actions');
+      const edition = ft.replace('_expense', '') as 'department' | 'project' | 'revenue' | 'minor';
+      res = await approveExpenseClaimStep(edition, submissionId, ver);
+      break;
+    }
+    case 'contract_seal_request': {
+      const { approveContractSealStep } = await import('@/lib/contract-seals/actions');
+      res = await approveContractSealStep(submissionId, ver);
+      break;
+    }
+    case 'general_seal_request': {
+      const { approveGeneralSealStep } = await import('@/lib/general-seals/actions');
+      res = await approveGeneralSealStep(submissionId, ver);
+      break;
+    }
+    case 'invoice_seal_request': {
+      const { approveInvoiceSealStep } = await import('@/lib/invoice-seals/actions');
+      res = await approveInvoiceSealStep(submissionId, ver);
+      break;
+    }
+    case 'asset_transfer': {
+      const { approveAssetTransferStep } = await import('@/lib/asset-transfers/actions');
+      res = await approveAssetTransferStep(submissionId, ver);
+      break;
+    }
+    default:
+      return { ok: false, error: '不支援此單據類型的快速簽核。' };
+  }
+  if (!res.ok) return { ok: false, error: res.error };
+  return { ok: true, message: `已核准 ${panel.formNumber}（${panel.formName}）。` };
+}
+
+/** Universal return action from AI Chat card or right-side SubmissionPanel (custom or legacy). */
+export async function returnSubmissionFromChatAction(
+  submissionId: string,
+  reason: string,
+  expectedVersion?: number
+): Promise<{ ok: true; message?: string } | { ok: false; error: string }> {
+  const employee = await getCurrentEmployee();
+  if (!employee) return { ok: false, error: publicError('unauthenticated') };
+  if (!/^[0-9a-f-]{36}$/i.test(submissionId)) return { ok: false, error: '單據編號無效。' };
+  const trimmedReason = reason.trim() || '（未填寫退回原因）';
+
+  // 1. Check custom form
+  const { getSubmissionDetail } = await import('@/lib/custom-forms/queries');
+  const customDetail = await getSubmissionDetail(submissionId);
+  if (customDetail) {
+    if (!customDetail.isCurrentApprover) {
+      return { ok: false, error: '您目前不是這張單的簽核人。' };
+    }
+    const { returnCustomFormStep } = await import('@/lib/custom-forms/actions');
+    const res = await returnCustomFormStep(submissionId, trimmedReason, expectedVersion ?? customDetail.version);
+    if (!res.ok) return { ok: false, error: res.error };
+    return { ok: true, message: `已退回 ${customDetail.formNumber}（${customDetail.name}）。` };
+  }
+
+  // 2. Check Legacy Forms (FORM_TABLE)
+  const panel = await getSubmissionPanelAction(submissionId);
+  if (!panel.ok) return { ok: false, error: panel.error };
+  if (!panel.isCurrentApprover) return { ok: false, error: '您目前不是這張單的簽核人。' };
+  const ver = expectedVersion ?? panel.version;
+  const ft = panel.formKey;
+
+  let res: { ok: true } | { ok: false; error: string };
+  switch (ft) {
+    case 'purchase_request': {
+      const { returnPurchaseRequestStep } = await import('@/lib/purchase-requests/actions');
+      res = await returnPurchaseRequestStep(submissionId, trimmedReason, ver);
+      break;
+    }
+    case 'purchase_order': {
+      const { returnPurchaseOrderStep } = await import('@/lib/purchase-orders/actions');
+      res = await returnPurchaseOrderStep(submissionId, trimmedReason, ver);
+      break;
+    }
+    case 'acceptance': {
+      const { returnAcceptanceStep } = await import('@/lib/acceptances/actions');
+      res = await returnAcceptanceStep(submissionId, trimmedReason, ver);
+      break;
+    }
+    case 'expense_request': {
+      const { returnExpenseRequestStep } = await import('@/lib/expense-requests/actions');
+      res = await returnExpenseRequestStep(submissionId, trimmedReason, ver);
+      break;
+    }
+    case 'travel_expense': {
+      const { returnTravelExpenseStep } = await import('@/lib/travel-expenses/actions');
+      res = await returnTravelExpenseStep(submissionId, trimmedReason, ver);
+      break;
+    }
+    case 'department_expense':
+    case 'project_expense':
+    case 'revenue_expense':
+    case 'minor_expense': {
+      const { returnExpenseClaimStep } = await import('@/lib/expense-claims/actions');
+      const edition = ft.replace('_expense', '') as 'department' | 'project' | 'revenue' | 'minor';
+      res = await returnExpenseClaimStep(edition, submissionId, trimmedReason, ver);
+      break;
+    }
+    case 'contract_seal_request': {
+      const { returnContractSealStep } = await import('@/lib/contract-seals/actions');
+      res = await returnContractSealStep(submissionId, trimmedReason, ver);
+      break;
+    }
+    case 'general_seal_request': {
+      const { returnGeneralSealStep } = await import('@/lib/general-seals/actions');
+      res = await returnGeneralSealStep(submissionId, trimmedReason, ver);
+      break;
+    }
+    case 'invoice_seal_request': {
+      const { returnInvoiceSealStep } = await import('@/lib/invoice-seals/actions');
+      res = await returnInvoiceSealStep(submissionId, trimmedReason, ver);
+      break;
+    }
+    case 'asset_transfer': {
+      const { returnAssetTransferStep } = await import('@/lib/asset-transfers/actions');
+      res = await returnAssetTransferStep(submissionId, trimmedReason, ver);
+      break;
+    }
+    default:
+      return { ok: false, error: '此單據類型不支援退回操作。' };
+  }
+  if (!res.ok) return { ok: false, error: res.error };
+  return { ok: true, message: `已退回 ${panel.formNumber}（${panel.formName}）。` };
 }
 
 /** Lightweight approval progress for outline cards (including older stored blocks). */
@@ -584,6 +1003,43 @@ export async function getSubmissionProgressAction(
   const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: publicError('unauthenticated') };
   if (!/^[0-9a-f-]{36}$/i.test(formId)) return { ok: false, error: '單據編號無效。' };
+
+  if (formType === 'inventory_handover') {
+    const { getInventoryHandoverFormDetail } = await import('@/lib/assets/inventory-forms');
+    const inv = await getInventoryHandoverFormDetail({ id: employee.id, role: employee.role }, formId);
+    if (!inv) return { ok: false, error: '找不到清點進度。' };
+    const totalLines = inv.lines.length;
+    const custDone = totalLines > 0 && inv.lines.every((l) => l.state.custodianConfirmed);
+    const isLocked = inv.status === 'locked';
+    const done = isLocked ? 2 : custDone ? 1 : 0;
+    return {
+      ok: true,
+      status: isLocked ? 'approved' : 'pending_approval',
+      progress: {
+        done,
+        total: 2,
+        remaining: 2 - done,
+        percent: Math.round((done / 2) * 100),
+        currentLabel: isLocked ? undefined : custDone ? '清點人複核封存' : '保管人清點確認',
+        waitingNames: isLocked ? undefined : [custDone ? inv.inspectorName : inv.custodianName],
+        steps: [
+          {
+            key: '1',
+            label: '保管人清點確認',
+            name: inv.custodianName,
+            state: custDone ? 'done' : 'current',
+          },
+          {
+            key: '2',
+            label: '清點人複核封存',
+            name: inv.inspectorName,
+            state: isLocked ? 'done' : custDone ? 'current' : 'waiting',
+          },
+        ],
+      },
+    };
+  }
+
   const { getFormApprovalSnapshot } = await import('./approval-snapshot');
   const { FORM_TABLE } = await import('@/lib/procurement/form-registry');
   const resolvedType =
@@ -748,22 +1204,34 @@ export async function submitDraftAction(input: {
 
   const draft = await getDraftForOwner(input.draftId, employee.id);
   if (draft) {
+    const { getFormApprovalSnapshot } = await import('./approval-snapshot');
+    const { cardsFromMySubmissions } = await import('./submission-cards');
+    const snap = await getFormApprovalSnapshot('custom', result.submissionId);
+    const blocks = cardsFromMySubmissions([
+      {
+        formType: 'custom',
+        formId: result.submissionId,
+        formKey: result.formKey,
+        formName: draft.title || result.formKey,
+        formNumber: result.formNumber,
+        status: snap?.status ?? 'pending_approval',
+        summary: draft.title || result.formNumber,
+        approvedAt: null,
+        version: snap?.version ?? 1,
+        href: `/f/${result.formKey}/${result.submissionId}`,
+        totalAmount: null,
+        currentNodeLabel: snap?.currentNodeLabel ?? null,
+        pendingApproverNames: snap?.pendingApproverNames ?? [],
+        snapshot: snap,
+        canApprove: Boolean(snap?.pendingApproverIds.includes(employee.id)),
+      },
+    ]);
     await appendMessage({
       conversationId: draft.conversationId,
       ownerEmployeeId: employee.id,
       role: 'model',
       contentText: warning ?? `單據已送出：${result.formNumber}`,
-      blocks: [
-        {
-          kind: 'action_result',
-          id: `submit_${result.submissionId}`,
-          action: 'submit',
-          ok: !result.copyFailures,
-          message: warning ?? `已送出 ${result.formNumber}`,
-          formNumber: result.formNumber,
-          href: `/f/${result.formKey}/${result.submissionId}`,
-        },
-      ],
+      blocks,
     });
   }
 
@@ -1100,15 +1568,30 @@ export async function pollLauncherEventsAction(input: {
   return { ok: true, ...page };
 }
 
-/** 補件 from a reminder: opens (or reopens) a draft of the returned form in a new conversation. */
+/** 補件 from a reminder or right-side panel: opens (or reopens) a draft of the returned form. */
 export async function startResubmissionAction(input: {
   submissionId: string;
-}): Promise<{ ok: true; conversationId: string; draftId: string; title: string } | { ok: false; error: string }> {
+  conversationId?: string;
+}): Promise<
+  | { ok: true; conversationId: string; draftId: string; title: string; formKey: string; version: number }
+  | { ok: false; error: string }
+> {
   const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: publicError('unauthenticated') };
-  const result = await startResubmission({ ownerEmployeeId: employee.id, submissionId: input.submissionId });
+  const result = await startResubmission({
+    ownerEmployeeId: employee.id,
+    submissionId: input.submissionId,
+    conversationId: input.conversationId,
+  });
   if (!result.ok) return { ok: false, error: result.error };
-  return { ok: true, conversationId: result.conversationId, draftId: result.draft.id, title: result.draft.title };
+  return {
+    ok: true,
+    conversationId: result.conversationId,
+    draftId: result.draft.id,
+    title: result.draft.title,
+    formKey: result.draft.formDefinitionKey,
+    version: result.draft.version,
+  };
 }
 
 export async function ackLauncherEventsAction(input: {

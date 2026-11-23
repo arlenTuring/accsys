@@ -1,5 +1,9 @@
 import type { AiMessageBlock } from './blocks';
-import type { ApprovalProgress, ApprovalSnapshot } from './approval-snapshot';
+import {
+  formatWaitingDuration,
+  type ApprovalProgress,
+  type ApprovalSnapshot,
+} from './approval-snapshot';
 import type { InboxItem } from './inbox';
 import type { MySubmissionHit } from './submissions-search';
 
@@ -68,20 +72,35 @@ export function cardsFromPendingApprovals(
   });
 }
 
-/** Build interactive outline cards for the owner's own submissions. */
+/** Build interactive outline cards for the owner's own submissions (or queried documents). */
 export function cardsFromMySubmissions(
-  items: Array<MySubmissionHit & { snapshot?: ApprovalSnapshot | null }>
+  items: Array<
+    MySubmissionHit & {
+      snapshot?: ApprovalSnapshot | null;
+      canApprove?: boolean;
+      applicantName?: string;
+      waitingFor?: string | null;
+    }
+  >
 ): AiMessageBlock[] {
   return items.slice(0, 30).map((i) => {
     const lines: Array<{ label: string; value: string }> = [];
+    if (i.applicantName) lines.push({ label: '申請人', value: i.applicantName });
     if (i.summary) lines.push({ label: '摘要', value: i.summary });
     lines.push({ label: '狀態', value: statusLabel(i.status) });
     if (i.currentNodeLabel) lines.push({ label: '目前關卡', value: i.currentNodeLabel });
+    const waitingText =
+      i.waitingFor ??
+      (i.status === 'pending_approval' && i.snapshot?.waitingSinceIso
+        ? formatWaitingDuration(i.snapshot.waitingSinceIso)
+        : null);
+    if (waitingText) lines.push({ label: '已等待', value: waitingText });
     const amt = money(i.totalAmount);
     if (amt) lines.push({ label: '金額', value: amt });
     if (i.returnReason) lines.push({ label: '退回原因', value: i.returnReason });
     if (i.approvedAt) lines.push({ label: '核准時間', value: i.approvedAt.replace('T', ' ').slice(0, 16) });
     const progress = cardProgress(i.snapshot, i.status);
+    const canApprove = Boolean(i.canApprove);
     return {
       kind: 'submission_card' as const,
       id: `sc_mine_${i.formId}`,
@@ -90,11 +109,12 @@ export function cardsFromMySubmissions(
       formKey: i.formKey || undefined,
       formNumber: i.formNumber,
       formName: i.formName,
-      mode: 'mine' as const,
+      mode: canApprove ? ('approve' as const) : ('mine' as const),
       status: i.status,
       summary: i.summary || i.formName,
       lines,
-      canApprove: false,
+      ...(i.applicantName ? { applicantName: i.applicantName } : {}),
+      canApprove,
       href: i.href || (i.formKey ? `/f/${i.formKey}/${i.formId}` : `/applications`),
       progress,
     };

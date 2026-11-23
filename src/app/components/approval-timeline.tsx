@@ -115,10 +115,12 @@ export async function ApprovalTimeline({ formType, formId }: { formType: FormTyp
         </p>
       ) : (
         <>
-          <Track applicantName={data.applicantName} submittedAt={data.submittedAt} nodes={data.nodes} />
+          <div className="print:hidden">
+            <Track applicantName={data.applicantName} submittedAt={data.submittedAt} nodes={data.nodes} />
+          </div>
 
           {/* Detailed Approval Record Table (always included in print, also visible as structured sign-off record) */}
-          <div className="mt-4 overflow-x-auto">
+          <div className="mt-4 overflow-x-auto print:mt-1.5">
             <table className="w-full border-collapse">
               <thead>
                 <tr>

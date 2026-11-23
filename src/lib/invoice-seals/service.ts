@@ -1,4 +1,5 @@
 import { asc, eq, sql } from 'drizzle-orm';
+import { CHAIRMAN_THRESHOLD } from '@/lib/approval/chain';
 import { recordAudit } from '@/lib/audit/record';
 import { assertLegacyOpen } from '@/lib/custom-forms/legacy';
 import { invoiceSealRequestItems, invoiceSealRequests, procurementCases } from '@/lib/db/schema';
@@ -75,13 +76,13 @@ async function insertItems(tx: Tx, formId: string, form: NormalizedInvoiceSeal) 
   );
 }
 
-/** Revenue, not spending: the invoice amount never brings in the chairman. Department manager → general manager. */
+/** 用印申請流程（第 38 條）：用印申請單需簽至董事長（申請人 → 申請單位主管 → 總經理 → 董事長）。 */
 function chainFor(tx: Tx, form: NormalizedInvoiceSeal) {
   return buildChain(tx, {
     applicantEmployeeId: form.applicantEmployeeId,
     departmentId: form.departmentId,
     budgetOwnerEmployeeId: null,
-    total: toCents('0'),
+    total: toCents(String(CHAIRMAN_THRESHOLD + 1)),
   });
 }
 

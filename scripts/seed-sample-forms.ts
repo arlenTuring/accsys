@@ -31,7 +31,9 @@ async function main() {
   const { PURCHASE_ADMIN_SAMPLE } = await import('@/lib/custom-forms/samples');
   const sql = getSql();
   try {
-    const [admin] = await sql`select id from employees where id = ${LOCAL_DEV_ADMIN}`;
+    const [admin] = await sql<{ id: string }[]>`
+      select id from employees where access_enabled and role = 'admin' order by (employee_code = '0054') desc, employee_code asc limit 1
+    `;
     if (!admin) {
       console.error('Local dev admin (db/seed-local-dev.sql) is missing; run ./start.sh first');
       process.exit(1);
@@ -44,7 +46,7 @@ async function main() {
       }
       const result = await runInTransaction('seed.publish_form', async (tx) => ({
         ok: true as const,
-        ...(await publishDefinition(tx, { ...JSON.parse(JSON.stringify(sample)), actorId: LOCAL_DEV_ADMIN })),
+        ...(await publishDefinition(tx, { ...JSON.parse(JSON.stringify(sample)), actorId: admin.id })),
       }));
       if (!result.ok) {
         console.error(`  ${sample.key}: ${result.error}`);

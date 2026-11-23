@@ -20,13 +20,21 @@ export function WithdrawButton({
   const [busy, setBusy] = useState(false);
 
   const onClick = async () => {
-    if (!(await confirmDialog({ title: '撤回這張表單？', message: '撤回後需重新填寫送出。', confirmLabel: '撤回', tone: 'danger' }))) return;
+    if (
+      !(await confirmDialog({
+        title: '作廢／撤回這張表單？',
+        message: '作廢撤回後，此單據與單號將完整保留於系統供日後查閱（不會刪除單據），您也可隨時點擊「複製此單據」重新建立申請。',
+        confirmLabel: '確認作廢／撤回',
+        tone: 'danger',
+      }))
+    )
+      return;
     setBusy(true);
     setError(null);
     const result = await onWithdraw(requestId);
     setBusy(false);
     if (result.ok) {
-      router.push(redirectTo);
+      router.refresh();
     } else {
       setError(result.error);
     }
@@ -40,7 +48,7 @@ export function WithdrawButton({
         disabled={busy}
         className="btn border border-red-200 bg-white text-red-700 hover:bg-red-50"
       >
-        {busy ? '撤回中…' : '撤回'}
+        {busy ? '作廢撤回中…' : '作廢／撤回'}
       </button>
       {error && <p className="mt-1 text-sm text-red-700">{error}</p>}
     </div>

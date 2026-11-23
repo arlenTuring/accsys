@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { DetailQueueNav } from '@/app/components/detail-queue-nav';
 import { ROLE_LABELS, STATUS_BADGE, STATUS_LABELS } from '@/app/components/form-labels';
 import { PrintButton } from '@/app/components/print-button';
 import { WithdrawButton } from '@/app/requests/[id]/withdraw-button';
@@ -45,7 +46,7 @@ export function DetailItem({ label, children, wide }: { label: string; children:
   );
 }
 
-export function SealDetailHeader({
+export async function SealDetailHeader({
   title,
   detail,
   viewerId,
@@ -63,13 +64,11 @@ export function SealDetailHeader({
   const { canSelfEdit, canResubmit, returnedStep } = sealAccess(detail, viewerId);
   return (
     <>
-      <nav className="text-sm text-td-muted print:hidden">
-        <Link href="/seal-requests" className="hover:text-td-blue">
-          用印申請
-        </Link>
-        <span className="mx-2">/</span>
-        <span className="text-td-blue-dark">{detail.caseNumber}</span>
-      </nav>
+      <DetailQueueNav
+        currentId={detail.id}
+        currentCaseNumber={detail.caseNumber}
+        currentFormLabel={title}
+      />
 
       <section className="flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -81,7 +80,7 @@ export function SealDetailHeader({
           </p>
         </div>
         <div className="flex flex-wrap gap-2 print:hidden">
-          {detail.status === 'approved' && <PrintButton label="列印用印申請單" />}
+          <PrintButton label="列印用印申請單 / PDF" />
           {canSelfEdit && (
             <Link href={`${basePath}/${detail.id}/edit`} className="btn-secondary">
               編輯

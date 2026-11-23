@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { replacementFor } from '@/lib/custom-forms/legacy';
 import { taipeiToday } from '@/lib/taipei-date';
-import { getTravelBudgetOptions } from '@/lib/travel-expenses/queries';
+import { getTravelBudgetOptions, getTravelCostCategories } from '@/lib/travel-expenses/queries';
 import { TravelExpenseForm } from '../travel-expense-form';
 
 export default async function NewTravelExpensePage() {
@@ -11,7 +11,10 @@ export default async function NewTravelExpensePage() {
   if (!employee) redirect('/login');
   const replacement = await replacementFor('travel_expense');
   if (replacement) redirect(`/f/${replacement}/new`);
-  const budgetOptions = await getTravelBudgetOptions();
+  const [budgetOptions, costCategories] = await Promise.all([
+    getTravelBudgetOptions(),
+    getTravelCostCategories(),
+  ]);
 
   return (
     <main className="page-shell">
@@ -27,6 +30,7 @@ export default async function NewTravelExpensePage() {
         departmentName={employee.departmentName}
         formDate={taipeiToday()}
         budgetOptions={budgetOptions}
+        costCategories={costCategories}
         mode={{ kind: 'create' }}
       />
     </main>

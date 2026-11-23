@@ -24,40 +24,44 @@ import { attachStagedFilesToDraft } from './attach-staged';
 import { getOrCreateApprovedPdfSnapshot } from './approved-pdf';
 import { draftOpenResource, type OpenResourceEvent } from './open-resource';
 import { loadAssistantInbox } from './inbox';
+import { factsFor, loadFormFacts } from './form-facts';
 import { cardsFromMySubmissions, cardsFromPendingApprovals } from './submission-cards';
 import { previewNudge } from './nudge';
 import { listRecentProjectsForEmployee, searchProjectsPaged } from './projects';
 import { startResubmission } from './resubmit';
 import { searchMyCustomSubmissions } from './submissions-search';
+import { translatePhrase, type Locale } from '@/lib/i18n/messages';
 
 async function approveOneForActor(
   employee: CurrentEmployee,
   formId: string,
   conversationId: string | null
 ): Promise<{ ok: boolean; message: string; formNumber?: string; error?: string }> {
-  const detail = await getSubmissionDetail(formId);
-  if (!detail) return { ok: false, error: 'not_found', message: '找不到單據或無權限閱讀。' };
-  if (!detail.isCurrentApprover) {
-    return { ok: false, error: 'not_current_approver', message: `您目前不是「${detail.formNumber}」的簽核人。` };
-  }
-  const result = await approveCustomFormStep(formId, detail.version);
+  const { approveSubmissionFromChatAction, getSubmissionPanelAction } = await import('./actions');
+  const panel = await getSubmissionPanelAction(formId);
+  if (!panel.ok) return { ok: false, error: 'not_found', message: panel.error };
+  const result = await approveSubmissionFromChatAction(formId, panel.version);
   if (!result.ok) {
-    return { ok: false, error: result.code, message: result.error, formNumber: detail.formNumber };
+    return { ok: false, error: 'approve_failed', message: result.error, formNumber: panel.formNumber };
   }
   await recordAudit(getDb(), {
     actorEmployeeId: employee.id,
     action: 'ai.approve_submission',
-    entityType: 'custom',
+    entityType: panel.formKey || 'custom',
     entityId: formId,
     requestId: conversationId,
     details: {
       via: 'ai_assistant',
-      formNumber: detail.formNumber,
-      formName: detail.name,
+      formNumber: panel.formNumber,
+      formName: panel.formName,
       conversationId,
     },
   });
-  return { ok: true, message: `已核准 ${detail.formNumber}（${detail.name}）。`, formNumber: detail.formNumber };
+  return {
+    ok: true,
+    message: result.message ?? `已核准 ${panel.formNumber}（${panel.formName}）。`,
+    formNumber: panel.formNumber,
+  };
 }
 
 async function returnOneForActor(
@@ -66,30 +70,32 @@ async function returnOneForActor(
   reason: string,
   conversationId: string | null
 ): Promise<{ ok: boolean; message: string; formNumber?: string; error?: string }> {
-  const detail = await getSubmissionDetail(formId);
-  if (!detail) return { ok: false, error: 'not_found', message: '找不到單據或無權限閱讀。' };
-  if (!detail.isCurrentApprover) {
-    return { ok: false, error: 'not_current_approver', message: `您目前不是「${detail.formNumber}」的簽核人。` };
-  }
-  const result = await returnCustomFormStep(formId, reason, detail.version);
+  const { getSubmissionPanelAction, returnSubmissionFromChatAction } = await import('./actions');
+  const panel = await getSubmissionPanelAction(formId);
+  if (!panel.ok) return { ok: false, error: 'not_found', message: panel.error };
+  const result = await returnSubmissionFromChatAction(formId, reason, panel.version);
   if (!result.ok) {
-    return { ok: false, error: result.code, message: result.error, formNumber: detail.formNumber };
+    return { ok: false, error: 'return_failed', message: result.error, formNumber: panel.formNumber };
   }
   await recordAudit(getDb(), {
     actorEmployeeId: employee.id,
     action: 'ai.return_submission',
-    entityType: 'custom',
+    entityType: panel.formKey || 'custom',
     entityId: formId,
     requestId: conversationId,
     details: {
       via: 'ai_assistant',
-      formNumber: detail.formNumber,
-      formName: detail.name,
+      formNumber: panel.formNumber,
+      formName: panel.formName,
       reason: reason.slice(0, 200),
       conversationId,
     },
   });
-  return { ok: true, message: `已退回 ${detail.formNumber}（${detail.name}）。`, formNumber: detail.formNumber };
+  return {
+    ok: true,
+    message: result.message ?? `已退回 ${panel.formNumber}（${panel.formName}）。`,
+    formNumber: panel.formNumber,
+  };
 }
 
 /** Only these names may be executed. Anything else is rejected. */
@@ -127,6 +133,13 @@ export const AI_CHAT_ALLOWED_TOOLS = [
   'rename_application_draft',
   'search_trip_companion_candidates',
   'search_my_assets',
+  'list_inventory_handover_forms',
+  'dispatch_inventory_handover_form',
+  'confirm_inventory_handover_items',
+  'get_my_pending_tasks_overview',
+  'list_my_budget_tasks_and_history',
+  'dispatch_budget_compilation_notice',
+  'get_budget_analytics_summary',
   'search_company_regulations',
   'list_company_announcements',
   'list_company_surveys',
@@ -149,6 +162,8 @@ export type AiToolContext = {
   recentStagedIds?: string[];
   /** Test-only draft write fault injection (ignored in production). */
   fill?: FillOptions;
+  /** Active user/UI locale ('zh-Hant' | 'en' | 'ja') for localized UI labels & receipts. */
+  locale?: Locale;
 };
 
 export type AiChatToolName = (typeof AI_CHAT_ALLOWED_TOOLS)[number];
@@ -314,7 +329,8 @@ export const AI_CHAT_TOOL_DECLARATIONS = [
   },
   {
     name: 'describe_application_draft',
-    description: '讀取草稿目前版本、已填資料、明細 row_id、尚缺必填與欄位規格。工作狀態沒有列出的草稿才需要呼叫。',
+    description:
+      '讀取單一指定草稿（draft_id）的目前版本、已填資料、明細 row_id、尚缺必填與欄位規格，並立即在畫面右側面板開啟／切換至該張草稿，同時於對話中僅顯示該張草稿的單一卡片。當使用者要求「切換至某張草稿」、「編輯另一張草稿」、「幫我開啟這張草稿」或檢視特定一張草稿時，請務必優先呼叫此工具（切勿呼叫 list_my_budget_tasks_and_history 等總覽清單工具，以免把其他無關單據一起列出來）。',
     parameters: {
       type: 'OBJECT',
       properties: {
@@ -646,6 +662,169 @@ export const AI_CHAT_TOOL_DECLARATIONS = [
       },
     },
   },
+  {
+    name: 'list_inventory_handover_forms',
+    description:
+      '查詢目前登入使用者可見的「財產清點／點交確認系統表單」（/assets/inventory-forms），回傳每張清點單的單號、財產擁有者、清點人、指定點交時間、總條數、雙方已確認條數與各條財產明細（現在位置、是否同意或需更改異動、存在事實、雙方確認狀態）。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        status: {
+          type: 'STRING',
+          description: '選填：open（點交確認中）／locked（已結案）／all（全部，預設）',
+          enum: ['open', 'locked', 'all'],
+        },
+      },
+    },
+  },
+  {
+    name: 'dispatch_inventory_handover_form',
+    description:
+      '清點人（財會、總務或系統管理員）於指定時間發給財產擁有者「財產清點／點交確認系統表單」。支援傳入保管人姓名、工號或 UUID（如 "阮振瑋" 或 "0017"），系統會自動撈取該員工名下所有在列財產建立點交單並發送通知。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        custodian: {
+          type: 'STRING',
+          description: '財產擁有者（保管人）之姓名、工號或 UUID（例如 "阮振瑋" 或 "0017"）',
+        },
+        scheduled_at: {
+          type: 'STRING',
+          description: '指定清點／點交時間（YYYY-MM-DDTHH:mm，若未指定則預設為今日 14:00）',
+        },
+        meeting_location: {
+          type: 'STRING',
+          description: '選填：點交地點（如 "台北辦公室 3F 自動駕駛系統部"）',
+        },
+        instructions: {
+          type: 'STRING',
+          description: '選填：點交說明事項',
+        },
+      },
+      required: ['custodian'],
+    },
+  },
+  {
+    name: 'confirm_inventory_handover_items',
+    description:
+      '財產擁有者（custodian）或清點人（inspector）於「財產清點／點交確認系統表單」上對財產進行點交確認：可點選「同意現在位置（agree_current）」或「需要更改異動（change_needed，並填 confirmed_location 新位置）」，確認此物品之存在事實（exists 正常存在／exists_damaged 損壞／missing 未尋獲）及其他說明（note）。當雙方每一條都確認後，若設 complete_if_ready=true 可一併完成結案並回寫財產保管清冊。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        batch_id: {
+          type: 'STRING',
+          description: '選填：清點單 batch UUID（若未填則可填 form_number 或自動取本人最新一張進行中的清點單）',
+        },
+        form_number: {
+          type: 'STRING',
+          description: '選填：清點單號（如 INV-20261113-0017-123）',
+        },
+        asset_tag: {
+          type: 'STRING',
+          description: '選填：指定要確認的財產編號（如 TD-IT-0054-01）；若省略則確認該單全部明細',
+        },
+        party: {
+          type: 'STRING',
+          description: '確認方身分：custodian（財產擁有者）／inspector（清點人）。若省略則依當前登入者身分自動判斷',
+          enum: ['custodian', 'inspector'],
+        },
+        location_action: {
+          type: 'STRING',
+          description: 'agree_current（同意現在位置無誤，預設）或 change_needed（需要更改位置或提出異動）',
+          enum: ['agree_current', 'change_needed'],
+        },
+        confirmed_location: {
+          type: 'STRING',
+          description: '當 location_action="change_needed" 時必填：更改後的新位置',
+        },
+        existence_fact: {
+          type: 'STRING',
+          description: '物品存在事實：exists（物品存在正常，預設）／exists_damaged（存在但損壞）／missing（未尋獲）',
+          enum: ['exists', 'exists_damaged', 'missing'],
+        },
+        note: {
+          type: 'STRING',
+          description: '選填：其他說明（會依確認方寫入財產人說明或清點人說明）',
+        },
+        complete_if_ready: {
+          type: 'BOOLEAN',
+          description: 'true＝若確認後雙方每一條明細都已確認完畢，立即將這張清點單結束結案並同步回寫財產清冊',
+        },
+      },
+    },
+  },
+  {
+    name: 'get_my_pending_tasks_overview',
+    description:
+      '查詢目前登入使用者在左側「我的待辦」導覽列各子項目的待處理事項數量與明細摘要：包含「簽核與單據追蹤（待我簽核＋被退回補件）」、「年度預算表填報（財會派發待填單）」、「我的資產管理（收到待確認之【財產清點單 INV-...】）」與「我的專屬問卷（待填問卷）」。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {},
+    },
+  },
+  {
+    name: 'list_my_budget_tasks_and_history',
+    description:
+      '查詢目前登入使用者在「我的待辦 → 年度預算表填報（/my-tasks/budget）」的完整總覽清單：包含（1）待填年度預算編列單與草稿進度、（2）歷年已填報並核准之歷史預算紀錄。注意：僅當使用者詢問「我有哪些預算任務／預算單總覽／歷年預算紀錄」時才呼叫此工具；若使用者是指定切換、開啟或編輯某一張特定預算草稿（例如指定某專案 NSC 或某部門草稿），請改呼叫 describe_application_draft(draft_id)，切勿呼叫此總覽工具以免把其他無關草稿與歷史單據一併列出。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        fiscal_year: {
+          type: 'STRING',
+          description: '選填：篩選特定歷年年度（例如 "115" 或 "114"），留空則回傳全部年度紀錄',
+        },
+        open_draft: {
+          type: 'BOOLEAN',
+          description: '選填：設為 true 時，若本人有填寫中的年度預算表草稿，自動在畫面右側彈出該張預算表草稿供繼續填寫',
+        },
+      },
+    },
+  },
+  {
+    name: 'dispatch_budget_compilation_notice',
+    description:
+      '財會人員或系統管理員派發「年度預算編列填寫單（budget_dispatch）」給指定員工或部門主管（對應 /budget-codes 預算發送人系統）。收到通知的員工即可在「我的待辦 → 年度預算表填報（/my-tasks/budget）」看到待辦並線上填寫 1～12 月預算表與差異分析。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        recipient: {
+          type: 'STRING',
+          description: '接收預算填寫單之員工姓名、工號（如 "阮振瑋"、"0017"），或填 "self" 發給當前登入帳號自己測試',
+        },
+        fiscal_year: {
+          type: 'STRING',
+          description: '預算編列年度（民國年，預設 "116" 即 2027 年度）',
+        },
+        scope: {
+          type: 'STRING',
+          description: '派發預算表類型：department（部門年度預算表）／project（專案年度預算表）／both（兩者皆發，預設）',
+          enum: ['department', 'project', 'both'],
+        },
+        deadline_date: {
+          type: 'STRING',
+          description: '填報截止日期（YYYY-MM-DD，預設 "2026-12-15"）',
+        },
+        custom_note: {
+          type: 'STRING',
+          description: '選填：財會派發備註說明',
+        },
+      },
+    },
+  },
+  {
+    name: 'get_budget_analytics_summary',
+    description:
+      '針對財會與管理人員提供「單一年度」具實質決策意義的預算管理指標（對應 /budget-codes 頂部 4 張財務治理卡片，避免跨年度混算）：回傳指定年度（預設最新年度如 115 年度）之核定預算總額、與前一年度（如 114 年度）之 YoY 增減金額與成長率、部門營運預算規模與部門編列涵蓋率、專案預算規模與專案編列涵蓋率，以及預算動支單據引用次數、0 元待補額度科目數、未指派負責人科目數等財會治理檢核指標。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        fiscal_year: {
+          type: 'STRING',
+          description: '選填：要分析的預算年度（如 "115"、"114"、"116"）；若未指定則自動以系統最新年度為基準計算並與前一年度對照',
+        },
+      },
+    },
+  },
 ] as const;
 
 function clip<T>(rows: T[], n: number): T[] {
@@ -675,8 +854,9 @@ export type ToolExecResult = {
   openResources?: OpenResourceEvent[];
 };
 
-export function toolUiLabel(name: string): string {
-  return TOOL_LABELS[name as AiChatToolName] ?? name;
+export function toolUiLabel(name: string, locale?: Locale): string {
+  const raw = TOOL_LABELS[name as AiChatToolName] ?? name;
+  return locale ? translatePhrase(raw, locale) : raw;
 }
 
 const TOOL_LABELS: Record<AiChatToolName, string> = {
@@ -713,6 +893,13 @@ const TOOL_LABELS: Record<AiChatToolName, string> = {
   rename_application_draft: '草稿改名',
   search_trip_companion_candidates: '搜尋同行候選',
   search_my_assets: '查詢資產',
+  list_inventory_handover_forms: '查詢財產清點單',
+  dispatch_inventory_handover_form: '派發財產清點單',
+  confirm_inventory_handover_items: '確認財產點交明細',
+  get_my_pending_tasks_overview: '查詢我的待辦總覽',
+  list_my_budget_tasks_and_history: '查詢年度預算任務與歷年紀錄',
+  dispatch_budget_compilation_notice: '派發年度預算編列單',
+  get_budget_analytics_summary: '年度預算財務與治理指標分析',
   search_company_regulations: '查詢公司規章',
   list_company_announcements: '查詢公司公告',
   list_company_surveys: '查詢公司問卷',
@@ -857,7 +1044,7 @@ export async function executeAiChatTool(
   }
 
   const tool = name as AiChatToolName;
-  const label = TOOL_LABELS[tool];
+  const label = toolUiLabel(tool, ctx?.locale);
   const employee = ctx?.actor ?? (await getCurrentEmployee());
   if (!employee) {
     return {
@@ -873,6 +1060,63 @@ export async function executeAiChatTool(
       name: tool,
       label,
       response: { error: 'forbidden', message: '對話擁有者不符。' },
+    };
+  }
+
+  const { getSystemFeatureFlags } = await import('@/lib/feature-flags/service');
+  const { getFeatureDefinition, resolveFeatureFlagForFormKey } = await import(
+    '@/lib/feature-flags/definitions'
+  );
+  const featureFlags = await getSystemFeatureFlags();
+
+  const TOOL_MODULE_FLAG: Partial<
+    Record<string, import('@/lib/feature-flags/definitions').FeatureFlagKey>
+  > = {
+    search_budget_codes: 'budget_management_platform',
+    list_my_budget_tasks_and_history: 'budget_management_platform',
+    dispatch_budget_compilation_notice: 'budget_management_platform',
+    get_budget_analytics_summary: 'budget_management_platform',
+    search_my_assets: 'asset_management_module',
+    list_inventory_handover_forms: 'asset_management_module',
+    dispatch_inventory_handover_form: 'asset_management_module',
+    confirm_inventory_handover_items: 'asset_management_module',
+    search_company_regulations: 'company_info_hub',
+    list_company_announcements: 'company_info_hub',
+    list_company_surveys: 'company_info_hub',
+    list_my_purchase_requests: 'procurement_module',
+    list_my_purchase_orders: 'procurement_module',
+    get_purchase_request_detail: 'procurement_module',
+    get_case_overview: 'procurement_module',
+    list_my_expense_claims: 'expense_claim_module',
+    search_trip_companion_candidates: 'expense_claim_module',
+  };
+
+  let requiredToolFlag = TOOL_MODULE_FLAG[tool] ?? null;
+  if (
+    !requiredToolFlag &&
+    (tool === 'create_application_draft' || tool === 'get_form_spec')
+  ) {
+    const rawFormKey =
+      typeof args?.form_key === 'string'
+        ? args.form_key
+        : typeof args?.formKey === 'string'
+          ? args.formKey
+          : '';
+    if (rawFormKey) {
+      requiredToolFlag = resolveFeatureFlagForFormKey(rawFormKey);
+    }
+  }
+
+  if (requiredToolFlag && !featureFlags[requiredToolFlag]) {
+    const def = getFeatureDefinition(requiredToolFlag);
+    return {
+      ok: false,
+      name: tool,
+      label,
+      response: {
+        error: 'module_unlicensed_or_disabled',
+        message: `「${def?.title ?? requiredToolFlag}」目前於全公司系統授權中為未開放／已關閉狀態，全體人員（含系統管理員）皆無法使用此功能模組。`,
+      },
     };
   }
 
@@ -940,7 +1184,7 @@ export async function executeAiChatTool(
           ok: true,
           name: tool,
           label,
-          response: { count: matched.length, budgetCodes: clip(matched, 25) },
+          response: { count: matched.length, budgetCodes: clip(matched, 25), href: '/budget-codes' },
         };
       }
 
@@ -1006,71 +1250,139 @@ export async function executeAiChatTool(
 
       case 'list_my_purchase_requests': {
         const rows = await getMyRequests();
+        const topRows = clip(rows, 25);
+        const cardRows = await Promise.all(
+          topRows.slice(0, 10).map(async (r) => {
+            const snap = await getFormApprovalSnapshot('purchase_request', r.id);
+            return {
+              formType: 'purchase_request',
+              formId: r.id,
+              formKey: 'purchase_request',
+              formName: '請購單',
+              formNumber: r.caseNumber,
+              status: r.status,
+              summary: `申請日期 ${r.requestDate}`,
+              approvedAt: null,
+              version: snap?.version ?? 1,
+              href: `/requests/${r.id}`,
+              totalAmount: Number(r.totalAmount ?? 0),
+              currentNodeLabel: snap?.currentNodeLabel ?? null,
+              pendingApproverNames: snap?.pendingApproverNames ?? [],
+              snapshot: snap,
+              canApprove: Boolean(snap?.pendingApproverIds.includes(employee.id)),
+            };
+          })
+        );
+        const blocks = cardsFromMySubmissions(cardRows);
         return {
           ok: true,
           name: tool,
           label,
           response: {
             count: rows.length,
-            requests: clip(
-              rows.map((r) => ({
-                id: r.id,
-                caseNumber: r.caseNumber,
-                status: r.status,
-                totalAmount: r.totalAmount,
-                requestDate: r.requestDate,
-                href: `/requests/${r.id}`,
-              })),
-              25
-            ),
+            requests: topRows.map((r) => ({
+              id: r.id,
+              caseNumber: r.caseNumber,
+              status: r.status,
+              totalAmount: r.totalAmount,
+              requestDate: r.requestDate,
+              href: `/requests/${r.id}`,
+            })),
           },
+          ...(blocks.length ? { blocks } : {}),
         };
       }
 
       case 'list_my_purchase_orders': {
         const rows = await getMyPurchaseOrders();
+        const topRows = clip(rows, 25);
+        const cardRows = await Promise.all(
+          topRows.slice(0, 10).map(async (o) => {
+            const snap = await getFormApprovalSnapshot('purchase_order', o.id);
+            return {
+              formType: 'purchase_order',
+              formId: o.id,
+              formKey: 'purchase_order',
+              formName: '採購單',
+              formNumber: o.caseNumber,
+              status: o.status,
+              summary: '採購單',
+              approvedAt: null,
+              version: snap?.version ?? 1,
+              href: `/purchase-orders/${o.id}`,
+              totalAmount: Number(o.totalAmount ?? 0),
+              currentNodeLabel: snap?.currentNodeLabel ?? null,
+              pendingApproverNames: snap?.pendingApproverNames ?? [],
+              snapshot: snap,
+              canApprove: Boolean(snap?.pendingApproverIds.includes(employee.id)),
+            };
+          })
+        );
+        const blocks = cardsFromMySubmissions(cardRows);
         return {
           ok: true,
           name: tool,
           label,
           response: {
             count: rows.length,
-            orders: clip(
-              rows.map((o) => ({
-                id: o.id,
-                caseNumber: o.caseNumber,
-                status: o.status,
-                totalAmount: o.totalAmount,
-                href: `/purchase-orders/${o.id}`,
-              })),
-              25
-            ),
+            orders: topRows.map((o) => ({
+              id: o.id,
+              caseNumber: o.caseNumber,
+              status: o.status,
+              totalAmount: o.totalAmount,
+              href: `/purchase-orders/${o.id}`,
+            })),
           },
+          ...(blocks.length ? { blocks } : {}),
         };
       }
 
       case 'list_my_expense_claims': {
         const rows = await getMyExpenseClaims();
+        const topRows = clip(rows, 25);
+        const cardRows = await Promise.all(
+          topRows.slice(0, 10).map(async (c) => {
+            const ft = `${c.edition}_expense` as FormType;
+            const snap = await getFormApprovalSnapshot(ft, c.id);
+            return {
+              formType: ft,
+              formId: c.id,
+              formKey: ft,
+              formName: FORM_LABELS[ft] ?? '費用報支單',
+              formNumber: c.caseNumber,
+              status: c.status,
+              summary: `${c.departmentName} · ${c.applicationDate}`,
+              approvedAt: null,
+              version: snap?.version ?? 1,
+              href: `/expense-claims/${c.edition}/${c.id}`,
+              totalAmount: Number(c.totalAmount ?? 0),
+              currentNodeLabel: snap?.currentNodeLabel ?? null,
+              pendingApproverNames: snap?.pendingApproverNames ?? [],
+              snapshot: snap,
+              canApprove: Boolean(snap?.pendingApproverIds.includes(employee.id)),
+            };
+          })
+        );
+        const blocks = cardsFromMySubmissions(cardRows);
         return {
           ok: true,
           name: tool,
           label,
           response: {
             count: rows.length,
-            claims: clip(
-              rows.map((c) => ({
-                id: c.id,
-                edition: c.edition,
-                caseNumber: c.caseNumber,
-                status: c.status,
-                totalAmount: c.totalAmount,
-                departmentName: c.departmentName,
-                applicationDate: c.applicationDate,
-                createdAt: c.createdAt.toISOString(),
-              })),
-              25
-            ),
+            claims: topRows.map((c) => ({
+              id: c.id,
+              edition: c.edition,
+              caseNumber: c.caseNumber,
+              status: c.status,
+              totalAmount: c.totalAmount,
+              departmentName: c.departmentName,
+              applicationDate: c.applicationDate,
+              createdAt: c.createdAt.toISOString(),
+              href: `/expense-claims/${c.edition}/${c.id}`,
+            })),
           },
+          ...(blocks.length ? { blocks } : {}),
         };
       }
 
@@ -1116,6 +1428,27 @@ export async function executeAiChatTool(
             response: { error: 'not_found_or_forbidden', message: '找不到或無權限閱讀此請購單。' },
           };
         }
+        const snap = await getFormApprovalSnapshot('purchase_request', detail.id);
+        const blocks = cardsFromMySubmissions([
+          {
+            formType: 'purchase_request',
+            formId: detail.id,
+            formKey: 'purchase_request',
+            formName: '請購單',
+            formNumber: detail.caseNumber,
+            status: detail.status,
+            summary: `${detail.departmentName} · 共 ${detail.items.length} 項`,
+            approvedAt: null,
+            version: snap?.version ?? 1,
+            href: `/requests/${detail.id}`,
+            totalAmount: Number(detail.totalAmount ?? 0),
+            currentNodeLabel: snap?.currentNodeLabel ?? null,
+            pendingApproverNames: snap?.pendingApproverNames ?? [],
+            snapshot: snap,
+            canApprove: Boolean(snap?.pendingApproverIds.includes(employee.id)),
+            applicantName: detail.applicantName,
+          },
+        ]);
         return {
           ok: true,
           name: tool,
@@ -1139,6 +1472,7 @@ export async function executeAiChatTool(
               href: `/requests/${detail.id}`,
             },
           },
+          blocks,
         };
       }
 
@@ -1154,14 +1488,116 @@ export async function executeAiChatTool(
         }
         const overview = await getCaseOverview(caseNumber.value);
         if (!overview) {
+          // Also check if caseNumber matches a custom form_submissions.form_number directly
+          const { formDefinitions: fdTable, employees: empTable } = await import('@/lib/db/schema');
+          const [customSub] = await getDb()
+            .select({
+              id: formSubmissions.id,
+              formNumber: formSubmissions.formNumber,
+              status: formSubmissions.status,
+              totalAmount: formSubmissions.totalAmount,
+              key: fdTable.key,
+              name: fdTable.name,
+              applicantName: empTable.name,
+            })
+            .from(formSubmissions)
+            .innerJoin(fdTable, eq(fdTable.id, formSubmissions.definitionId))
+            .innerJoin(empTable, eq(empTable.id, formSubmissions.applicantEmployeeId))
+            .where(eq(formSubmissions.formNumber, caseNumber.value))
+            .limit(1);
+          if (!customSub) {
+            return {
+              ok: false,
+              name: tool,
+              label,
+              response: { error: 'not_found_or_forbidden', message: '找不到案件，或你不是參與者。' },
+            };
+          }
+          const [snap, factsMap] = await Promise.all([
+            getFormApprovalSnapshot('custom', customSub.id),
+            loadFormFacts([{ formType: 'custom', formId: customSub.id }]),
+          ]);
+          const f = factsFor(factsMap, { formType: 'custom', formId: customSub.id });
+          const richSummary =
+            (f ? [f.what, f.where, f.when].filter(Boolean).join(' · ') : '') ||
+            customSub.name;
+          const totalAmt =
+            customSub.totalAmount != null
+              ? Number(customSub.totalAmount)
+              : (f?.amount ?? null);
+          const blocks = cardsFromMySubmissions([
+            {
+              formType: 'custom',
+              formId: customSub.id,
+              formKey: customSub.key,
+              formName: customSub.name,
+              formNumber: customSub.formNumber,
+              status: customSub.status,
+              summary: richSummary,
+              approvedAt: null,
+              version: snap?.version ?? 1,
+              href: `/f/${customSub.key}/${customSub.id}`,
+              totalAmount: totalAmt,
+              currentNodeLabel: snap?.currentNodeLabel ?? null,
+              pendingApproverNames: snap?.pendingApproverNames ?? [],
+              snapshot: snap,
+              canApprove: Boolean(snap?.pendingApproverIds.includes(employee.id)),
+              applicantName: customSub.applicantName,
+            },
+          ]);
           return {
-            ok: false,
+            ok: true,
             name: tool,
             label,
-            response: { error: 'not_found_or_forbidden', message: '找不到案件，或你不是參與者。' },
+            response: {
+              caseNumber: customSub.formNumber,
+              forms: [
+                {
+                  formType: 'custom',
+                  formKey: customSub.key,
+                  label: customSub.name,
+                  id: customSub.id,
+                  status: customSub.status,
+                  href: `/f/${customSub.key}/${customSub.id}`,
+                },
+              ],
+            },
+            blocks,
           };
         }
-        return { ok: true, name: tool, label, response: { overview } };
+        const readableForms = overview.forms.filter((f) => f.exists && !f.restricted && f.id);
+        const cardRows = await Promise.all(
+          readableForms.map(async (f) => {
+            const isCustomHref = Boolean(f.href?.startsWith('/f/'));
+            const resolvedType: FormType = isCustomHref ? 'custom' : f.formType;
+            const snap = await getFormApprovalSnapshot(resolvedType, f.id!);
+            return {
+              formType: resolvedType,
+              formId: f.id!,
+              formKey: isCustomHref ? (f.href?.split('/')[2] || 'custom') : f.formType,
+              formName: f.label,
+              formNumber: overview.caseNumber,
+              status: f.status ?? snap?.status ?? 'pending_approval',
+              summary: `${f.itemCode} · ${f.label}`,
+              approvedAt: null,
+              version: snap?.version ?? 1,
+              href: f.href ?? `${FORM_ROUTE_PREFIX[f.formType]}/${f.id}`,
+              totalAmount: null,
+              currentNodeLabel: snap?.currentNodeLabel ?? null,
+              pendingApproverNames: snap?.pendingApproverNames ?? [],
+              snapshot: snap,
+              canApprove: Boolean(snap?.pendingApproverIds.includes(employee.id)),
+            };
+          })
+        );
+        const blocks = cardsFromMySubmissions(cardRows);
+        return {
+          ok: true,
+          name: tool,
+          label,
+          response: { overview, href: '/case-tracking' },
+          ...(blocks.length ? { blocks } : {}),
+        };
       }
 
       case 'get_form_approval_status': {
@@ -1169,10 +1605,69 @@ export async function executeAiChatTool(
         const formId = requireUuid(args, 'form_id');
         if (!formType.ok) return { ok: false, name: tool, label, response: { error: formType.error } };
         if (!formId.ok) return { ok: false, name: tool, label, response: { error: formId.error } };
-        const snap = await getFormApprovalSnapshot(formType.value as FormType, formId.value);
+        const ft = formType.value as FormType;
+        const [snap, factsMap] = await Promise.all([
+          getFormApprovalSnapshot(ft, formId.value),
+          loadFormFacts([{ formType: ft, formId: formId.value }]),
+        ]);
         if (!snap) {
           return { ok: false, name: tool, label, response: { error: 'not_found', message: '找不到單據。' } };
         }
+        const f = factsFor(factsMap, { formType: ft, formId: formId.value });
+        let resolvedFormKey: string = ft;
+        let resolvedFormName: string = FORM_LABELS[ft] ?? '單據';
+        let resolvedApplicantName: string | undefined;
+        let resolvedAmount: number | null = f?.amount ?? null;
+        if (ft === 'custom') {
+          const { formDefinitions: fdTable, employees: empTable } = await import('@/lib/db/schema');
+          const [customSub] = await getDb()
+            .select({
+              key: fdTable.key,
+              name: fdTable.name,
+              applicantName: empTable.name,
+              totalAmount: formSubmissions.totalAmount,
+            })
+            .from(formSubmissions)
+            .innerJoin(fdTable, eq(fdTable.id, formSubmissions.definitionId))
+            .innerJoin(empTable, eq(empTable.id, formSubmissions.applicantEmployeeId))
+            .where(eq(formSubmissions.id, formId.value))
+            .limit(1);
+          if (customSub) {
+            resolvedFormKey = customSub.key;
+            resolvedFormName = customSub.name;
+            resolvedApplicantName = customSub.applicantName;
+            if (customSub.totalAmount != null) {
+              resolvedAmount = Number(customSub.totalAmount);
+            }
+          }
+        }
+        const richSummary =
+          (f ? [f.what, f.where, f.when].filter(Boolean).join(' · ') : '') ||
+          resolvedFormName;
+        const href =
+          ft === 'custom' && resolvedFormKey !== 'custom'
+            ? `/f/${resolvedFormKey}/${formId.value}`
+            : `${FORM_ROUTE_PREFIX[ft] ?? '/f/_'}/${formId.value}`;
+        const blocks = cardsFromMySubmissions([
+          {
+            formType: ft,
+            formId: formId.value,
+            formKey: resolvedFormKey,
+            formName: resolvedFormName,
+            formNumber: snap.caseNumber ?? formId.value.slice(0, 8),
+            status: snap.status,
+            summary: richSummary,
+            approvedAt: null,
+            version: snap.version ?? 1,
+            href,
+            totalAmount: resolvedAmount,
+            currentNodeLabel: snap.currentNodeLabel,
+            pendingApproverNames: snap.pendingApproverNames,
+            snapshot: snap,
+            canApprove: snap.pendingApproverIds.includes(employee.id),
+            applicantName: resolvedApplicantName,
+          },
+        ]);
         return {
           ok: true,
           name: tool,
@@ -1184,7 +1679,9 @@ export async function executeAiChatTool(
             waitingSinceIso: snap.waitingSinceIso,
             waitingFor: formatWaitingDuration(snap.waitingSinceIso),
             caseNumber: snap.caseNumber,
+            href,
           },
+          blocks,
         };
       }
 
@@ -1270,6 +1767,15 @@ export async function executeAiChatTool(
           };
         }
         const status = draftStatus(draftCtx.schema, draftCtx.draft.data, draftCtx.today);
+        const cardTitle = draftCtx.draft.title || draftCtx.name;
+        const open = draftOpenResource({
+          draftId: draftCtx.draft.id,
+          title: cardTitle,
+          version: draftCtx.draft.version,
+          operation: 'opened',
+          formKey: draftCtx.formKey,
+          status: draftCtx.draft.status,
+        });
         return {
           ok: true,
           name: tool,
@@ -1277,7 +1783,7 @@ export async function executeAiChatTool(
           response: {
             draftId: draftCtx.draft.id,
             formKey: draftCtx.formKey,
-            formName: draftCtx.name,
+            formName: cardTitle,
             version: draftCtx.draft.version,
             status: draftCtx.draft.status,
             data: draftCtx.draft.data,
@@ -1286,6 +1792,18 @@ export async function executeAiChatTool(
             fields: formSpec(draftCtx.schema, draftCtx.options),
             versionMismatch: draftCtx.versionMismatch,
           },
+          blocks: [
+            {
+              kind: 'draft_reference',
+              id: `draft_${draftCtx.draft.id}`,
+              draftId: draftCtx.draft.id,
+              formKey: draftCtx.formKey,
+              formName: cardTitle,
+              version: draftCtx.draft.version,
+              status: draftCtx.draft.status,
+            },
+          ],
+          openResources: [open],
         };
       }
 
@@ -1515,6 +2033,9 @@ export async function executeAiChatTool(
           pendingApproverNames: i.pendingApproverNames,
           returnReason: i.returnReason,
           returnedByName: i.returnedByName,
+          applicantName: employee.name,
+          waitingFor: i.waitingFor,
+          canApprove: i.status === 'pending_approval' && i.pendingApproverNames.includes(employee.name),
           snapshot: i.progress
             ? {
                 formType: i.formType,
@@ -1937,6 +2458,7 @@ export async function executeAiChatTool(
           response: {
             scope,
             count: rows.length,
+            href: '/assets/mine',
             assets: rows.map((r) => ({
               tag: r.tag,
               name: r.name,
@@ -2209,8 +2731,8 @@ export async function executeAiChatTool(
         if (inbox.loadError) {
           return { ok: false, name: tool, label, response: { error: 'inbox_unavailable', message: '待簽核清單暫時無法載入。' } };
         }
-        const custom = inbox.pendingApprovals.filter((i) => i.formType === 'custom' || Boolean(i.formKey));
-        if (custom.length === 0) {
+        const pendingItems = inbox.pendingApprovals;
+        if (pendingItems.length === 0) {
           return {
             ok: true,
             name: tool,
@@ -2221,7 +2743,7 @@ export async function executeAiChatTool(
         const results: Array<Record<string, unknown>> = [];
         let approved = 0;
         let failed = 0;
-        for (const item of custom.slice(0, limit)) {
+        for (const item of pendingItems.slice(0, limit)) {
           const outcome = await approveOneForActor(employee, item.id, ctx?.conversationId ?? null);
           results.push({
             formId: item.id,
@@ -2265,7 +2787,7 @@ export async function executeAiChatTool(
             query: query || '（全部核心規章）',
             count: items.length,
             regulations: items,
-            hint: '回答時請明確引用規章名稱、文號與條文規定，並可引導使用者前往「公司資訊 > 公司規章」（/regulations）閱覽完整條文或直接協助建立對應表單草稿。',
+            hint: '回答時請明確引用規章名稱與條文規定（不需提及規章編號），並可引導使用者前往「公司資訊 > 公司規章」（/regulations）閱覽完整條文或直接協助建立對應表單草稿。',
           },
         };
       }
@@ -2331,7 +2853,7 @@ export async function executeAiChatTool(
             unreadCount: published.filter((a) => !readMap.get(a.id)?.readAt).length,
             returnedCount: items.length,
             announcements: items,
-            hint: '請針對上述真實公司公告（置頂、重要度、分類、未讀狀態與內容重點）進行條理化整理，並提供 /announcements 連結；切勿混入個人的單據簽核或退回通知。',
+            hint: '請針對上述真實公司公告（置頂、重要度、分類、未讀狀態與內容重點）進行條理化整理；切勿混入個人的單據簽核或退回通知。',
           },
         };
       }
@@ -2383,6 +2905,1128 @@ export async function executeAiChatTool(
           response: {
             count: items.length,
             surveys: items,
+          },
+        };
+      }
+
+      case 'list_inventory_handover_forms': {
+        const statusFilter =
+          typeof args?.status === 'string' && ['open', 'locked', 'all'].includes(args.status)
+            ? (args.status as 'open' | 'locked' | 'all')
+            : 'all';
+        const { listInventoryHandoverForms, getInventoryHandoverFormDetail } = await import(
+          '@/lib/assets/inventory-forms'
+        );
+        const actor = { id: employee.id, role: employee.role };
+        const summaries = await listInventoryHandoverForms(actor);
+        const filtered =
+          statusFilter === 'all' ? summaries : summaries.filter((s) => s.status === statusFilter);
+        const details = await Promise.all(
+          filtered.slice(0, 10).map(async (s) => {
+            const d = await getInventoryHandoverFormDetail(actor, s.id);
+            return {
+              batchId: s.id,
+              formNumber: s.formNumber,
+              status: s.status,
+              custodianName: s.custodianName,
+              custodianEmployeeCode: s.custodianEmployeeCode,
+              custodianDepartmentName: s.custodianDepartmentName,
+              inspectorName: s.inspectorName,
+              scheduledAt: s.scheduledAt,
+              meetingLocation: s.meetingLocation,
+              totalLines: s.totalLines,
+              custodianConfirmedLines: s.custodianConfirmedLines,
+              inspectorConfirmedLines: s.inspectorConfirmedLines,
+              bothConfirmedLines: s.bothConfirmedLines,
+              allLinesConfirmedByBoth: s.allLinesConfirmedByBoth,
+              href: `/assets/inventory-forms/${s.id}`,
+              lines:
+                d?.lines.map((l) => ({
+                  lineId: l.id,
+                  assetTag: l.assetTag,
+                  assetName: l.state.assetName,
+                  originalLocation: l.state.originalLocation,
+                  locationAction: l.state.locationAction,
+                  confirmedLocation: l.state.confirmedLocation,
+                  existenceFact: l.state.existenceFact,
+                  custodianNote: l.state.custodianNote,
+                  inspectorNote: l.state.inspectorNote,
+                  custodianConfirmed: l.state.custodianConfirmed,
+                  inspectorConfirmed: l.state.inspectorConfirmed,
+                })) ?? [],
+            };
+          })
+        );
+        const blocks: AiMessageBlock[] = details.map((d) => {
+          const custDone = d.totalLines > 0 && d.custodianConfirmedLines >= d.totalLines;
+          const isLocked = d.status === 'locked';
+          const done = isLocked ? 2 : custDone ? 1 : 0;
+          const canApprove =
+            !isLocked && (d.custodianName === employee.name || d.inspectorName === employee.name);
+          return {
+            kind: 'submission_card' as const,
+            id: `sc_inv_${d.batchId}`,
+            formType: 'inventory_handover',
+            formId: d.batchId,
+            formKey: 'inventory_handover',
+            formNumber: d.formNumber,
+            formName: '財產清點單',
+            mode: canApprove ? ('approve' as const) : ('mine' as const),
+            status: isLocked ? 'approved' : 'pending_approval',
+            summary: `保管人：${d.custodianName} · 清點人：${d.inspectorName} · 已雙方確認 ${d.bothConfirmedLines}/${d.totalLines} 筆`,
+            lines: [
+              { label: '申請人', value: d.custodianName },
+              {
+                label: '摘要',
+                value: `清點人：${d.inspectorName} · 已雙方確認 ${d.bothConfirmedLines}/${d.totalLines} 筆`,
+              },
+            ],
+            applicantName: d.custodianName,
+            canApprove,
+            href: d.href,
+            progress: {
+              done,
+              total: 2,
+              remaining: 2 - done,
+              percent: Math.round((done / 2) * 100),
+              currentLabel: isLocked ? undefined : custDone ? '清點人複核封存' : '保管人清點確認',
+              waitingNames: isLocked ? undefined : [custDone ? d.inspectorName : d.custodianName],
+              steps: [
+                {
+                  key: '1',
+                  label: '保管人清點確認',
+                  name: d.custodianName,
+                  state: custDone ? ('done' as const) : ('current' as const),
+                },
+                {
+                  key: '2',
+                  label: '清點人複核封存',
+                  name: d.inspectorName,
+                  state: isLocked
+                    ? ('done' as const)
+                    : custDone
+                      ? ('current' as const)
+                      : ('waiting' as const),
+                },
+              ],
+            },
+          };
+        });
+        return {
+          ok: true,
+          name: tool,
+          label,
+          response: {
+            count: filtered.length,
+            forms: details,
+            message:
+              filtered.length === 0
+                ? '目前沒有符合條件的財產清點／點交系統表單。'
+                : `共找到 ${filtered.length} 張財產清點單。畫面已顯示單據大綱卡（含清點進度、詳情與快速簽核／確認按鈕），回覆請簡潔，勿重複抄寫卡片內容。`,
+          },
+          ...(blocks.length ? { blocks } : {}),
+        };
+      }
+
+      case 'dispatch_inventory_handover_form': {
+        const custQuery = requireString(args, 'custodian', { min: 1, max: 80 });
+        if (!custQuery.ok) {
+          return {
+            ok: false,
+            name: tool,
+            label,
+            response: { error: custQuery.error, message: '請指定要發送清點單的財產擁有者（保管人姓名或工號）。' },
+          };
+        }
+        const rawCust = custQuery.value.replace(/^[@＠]+/, '').trim();
+        const { employees: empTable } = await import('@/lib/db/schema');
+        const allEmps = await getDb()
+          .select({ id: empTable.id, code: empTable.employeeCode, name: empTable.name })
+          .from(empTable)
+          .where(eq(empTable.accessEnabled, true));
+        const matchedEmp = allEmps.find(
+          (e) =>
+            e.id.toLowerCase() === rawCust.toLowerCase() ||
+            e.code.toLowerCase() === rawCust.toLowerCase() ||
+            e.name === rawCust ||
+            e.name.includes(rawCust)
+        );
+        if (!matchedEmp) {
+          return {
+            ok: false,
+            name: tool,
+            label,
+            response: { error: 'custodian_not_found', message: `找不到保管人「${rawCust}」。` },
+          };
+        }
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const scheduledAt =
+          typeof args?.scheduled_at === 'string' && args.scheduled_at.trim()
+            ? args.scheduled_at.trim()
+            : `${todayStr}T14:00`;
+        const meetingLocation =
+          typeof args?.meeting_location === 'string' ? args.meeting_location.trim() : '';
+        const instructions =
+          typeof args?.instructions === 'string' ? args.instructions.trim() : '';
+
+        const { createInventoryHandoverForms } = await import('@/lib/assets/inventory-forms');
+        const created = await createInventoryHandoverForms(
+          { id: employee.id, role: employee.role },
+          {
+            custodianEmployeeIds: [matchedEmp.id],
+            scheduledAt,
+            meetingLocation,
+            instructions,
+          }
+        );
+        if (!created.ok) {
+          return {
+            ok: false,
+            name: tool,
+            label,
+            response: { error: created.code, message: created.error },
+          };
+        }
+        const first = created.createdForms[0];
+        const blocks: AiMessageBlock[] = created.createdForms.map((f) => ({
+          kind: 'submission_card' as const,
+          id: `sc_inv_created_${f.batchId}`,
+          formType: 'inventory_handover',
+          formId: f.batchId,
+          formKey: 'inventory_handover',
+          formNumber: f.formNumber,
+          formName: '財產清點單',
+          mode: 'approve' as const,
+          status: 'pending_approval',
+          summary: `保管人：${f.custodianName}（共 ${f.rowCount} 筆財產 · 點交時間 ${scheduledAt.replace('T', ' ')}）`,
+          lines: [
+            { label: '申請人', value: f.custodianName },
+            { label: '摘要', value: `共 ${f.rowCount} 筆財產 · 點交時間 ${scheduledAt.replace('T', ' ')}` },
+          ],
+          applicantName: f.custodianName,
+          canApprove: true,
+          href: `/assets/inventory-forms/${f.batchId}`,
+          progress: {
+            done: 0,
+            total: 2,
+            remaining: 2,
+            percent: 0,
+            currentLabel: '保管人清點確認',
+            waitingNames: [f.custodianName],
+            steps: [
+              {
+                key: '1',
+                label: '保管人清點確認',
+                name: f.custodianName,
+                state: 'current' as const,
+              },
+              {
+                key: '2',
+                label: '清點人複核封存',
+                name: employee.name,
+                state: 'waiting' as const,
+              },
+            ],
+          },
+        }));
+        return {
+          ok: true,
+          name: tool,
+          label,
+          response: {
+            createdForms: created.createdForms.map((f) => ({
+              ...f,
+              href: `/assets/inventory-forms/${f.batchId}`,
+            })),
+            message: first
+              ? `已成功發送財產清點單「${first.formNumber}」給 ${first.custodianName}（共 ${first.rowCount} 筆財產）。畫面已附上單據卡（可按「詳情」在右側面板檢視）。`
+              : '已建立財產清點單。',
+          },
+          ...(blocks.length ? { blocks } : {}),
+        };
+      }
+
+      case 'confirm_inventory_handover_items': {
+        const {
+          listInventoryHandoverForms,
+          getInventoryHandoverFormDetail,
+          updateAndConfirmHandoverLines,
+          completeInventoryHandoverForm,
+        } = await import('@/lib/assets/inventory-forms');
+        const actor = { id: employee.id, role: employee.role };
+        let batchId =
+          typeof args?.batch_id === 'string' && UUID_RE.test(args.batch_id.trim())
+            ? args.batch_id.trim()
+            : '';
+        const formNumberArg =
+          typeof args?.form_number === 'string' ? args.form_number.trim() : '';
+
+        if (!batchId) {
+          const allForms = await listInventoryHandoverForms(actor);
+          const openForms = allForms.filter((f) => f.status === 'open');
+          const found = formNumberArg
+            ? allForms.find((f) => f.formNumber.toLowerCase() === formNumberArg.toLowerCase())
+            : openForms[0] ?? allForms[0];
+          if (!found) {
+            return {
+              ok: false,
+              name: tool,
+              label,
+              response: { error: 'form_not_found', message: '找不到進行中的財產清點／點交系統表單。' },
+            };
+          }
+          batchId = found.id;
+        }
+
+        const detail = await getInventoryHandoverFormDetail(actor, batchId);
+        if (!detail) {
+          return {
+            ok: false,
+            name: tool,
+            label,
+            response: { error: 'not_found_or_forbidden', message: '找不到該張財產清點單或無權限操作。' },
+          };
+        }
+
+        const assetTagFilter =
+          typeof args?.asset_tag === 'string' ? args.asset_tag.trim().toLowerCase() : '';
+        const targetLines = assetTagFilter
+          ? detail.lines.filter(
+              (l) =>
+                l.assetTag.toLowerCase() === assetTagFilter ||
+                l.state.assetName.toLowerCase().includes(assetTagFilter)
+            )
+          : detail.lines;
+
+        if (targetLines.length === 0) {
+          return {
+            ok: false,
+            name: tool,
+            label,
+            response: { error: 'lines_not_found', message: `在此清點單中找不到財產「${assetTagFilter}」。` },
+          };
+        }
+
+        const partyArg = args?.party;
+        const party: 'custodian' | 'inspector' =
+          partyArg === 'custodian' || partyArg === 'inspector'
+            ? partyArg
+            : detail.custodianEmployeeId === employee.id
+              ? 'custodian'
+              : 'inspector';
+
+        const locationAction =
+          args?.location_action === 'change_needed' ? 'change_needed' : 'agree_current';
+        const confirmedLocation =
+          typeof args?.confirmed_location === 'string' ? args.confirmed_location.trim() : undefined;
+        const existenceFact =
+          args?.existence_fact === 'exists_damaged' || args?.existence_fact === 'missing'
+            ? args.existence_fact
+            : 'exists';
+        const note = typeof args?.note === 'string' ? args.note.trim() : undefined;
+
+        const updated = await updateAndConfirmHandoverLines(actor, {
+          batchId: detail.id,
+          lineIds: targetLines.map((l) => l.id),
+          party,
+          confirm: true,
+          locationAction,
+          confirmedLocation,
+          existenceFact,
+          ...(party === 'custodian' && note !== undefined ? { custodianNote: note } : {}),
+          ...(party === 'inspector' && note !== undefined ? { inspectorNote: note } : {}),
+        });
+
+        if (!updated.ok) {
+          return {
+            ok: false,
+            name: tool,
+            label,
+            response: { error: updated.code, message: updated.error },
+          };
+        }
+
+        let completedResult: { ok: boolean; message?: string; updatedAssetCount?: number } | null = null;
+        if (args?.complete_if_ready === true) {
+          const closed = await completeInventoryHandoverForm(actor, detail.id);
+          if (closed.ok) {
+            completedResult = {
+              ok: true,
+              updatedAssetCount: closed.updatedAssetCount,
+              message: `且雙方每一條皆已確認完畢，已正式結束結案並同步更新 ${closed.updatedAssetCount} 筆財產清冊！`,
+            };
+          } else {
+            completedResult = {
+              ok: false,
+              message: `（尚未結案：${closed.error}）`,
+            };
+          }
+        }
+
+        const refreshed = await getInventoryHandoverFormDetail(actor, detail.id);
+        const confirmMsg = `已完成「${detail.formNumber}」之${party === 'custodian' ? '財產擁有者' : '清點人'}確認（共 ${updated.updatedCount} 條明細，位置：${locationAction === 'change_needed' ? `更改為 ${confirmedLocation}` : '同意現在位置'}，存在事實：${existenceFact}）。${completedResult?.message ?? ''}`;
+        const refLines = refreshed?.lines ?? detail.lines;
+        const custDone = refLines.length > 0 && refLines.every((l) => l.state.custodianConfirmed);
+        const isLocked = (refreshed?.status ?? detail.status) === 'locked';
+        const done = isLocked ? 2 : custDone ? 1 : 0;
+        return {
+          ok: true,
+          name: tool,
+          label,
+          response: {
+            batchId: detail.id,
+            formNumber: detail.formNumber,
+            party,
+            confirmedLineCount: updated.updatedCount,
+            confirmedAt: updated.confirmedAt,
+            allLinesConfirmedByBoth: refreshed?.allLinesConfirmedByBoth ?? false,
+            status: refreshed?.status ?? detail.status,
+            completedResult,
+            href: `/assets/inventory-forms/${detail.id}`,
+            message: confirmMsg,
+          },
+          blocks: [
+            {
+              kind: 'submission_card' as const,
+              id: `sc_inv_confirmed_${detail.id}`,
+              formType: 'inventory_handover',
+              formId: detail.id,
+              formKey: 'inventory_handover',
+              formNumber: detail.formNumber,
+              formName: '財產清點單',
+              mode: 'mine' as const,
+              status: isLocked ? 'approved' : 'pending_approval',
+              summary: confirmMsg,
+              lines: [
+                { label: '申請人', value: detail.custodianName },
+                { label: '摘要', value: confirmMsg },
+              ],
+              applicantName: detail.custodianName,
+              canApprove: !isLocked,
+              href: `/assets/inventory-forms/${detail.id}`,
+              progress: {
+                done,
+                total: 2,
+                remaining: 2 - done,
+                percent: Math.round((done / 2) * 100),
+                currentLabel: isLocked ? undefined : custDone ? '清點人複核封存' : '保管人清點確認',
+                waitingNames: isLocked ? undefined : [custDone ? detail.inspectorName : detail.custodianName],
+                steps: [
+                  {
+                    key: '1',
+                    label: '保管人清點確認',
+                    name: detail.custodianName,
+                    state: custDone ? ('done' as const) : ('current' as const),
+                  },
+                  {
+                    key: '2',
+                    label: '清點人複核封存',
+                    name: detail.inspectorName,
+                    state: isLocked
+                      ? ('done' as const)
+                      : custDone
+                        ? ('current' as const)
+                        : ('waiting' as const),
+                  },
+                ],
+              },
+            },
+          ],
+        };
+      }
+
+      case 'get_my_pending_tasks_overview': {
+        const { getMyTaskCounts } = await import('@/lib/approvals/pending-count');
+        const { listInventoryHandoverForms } = await import('@/lib/assets/inventory-forms');
+        const { BUDGET_REQUEST_KEY } = await import('@/lib/custom-forms/migrated/budget');
+        const { formDrafts: draftTable } = await import('@/lib/db/schema');
+        const { createApplicationDraft } = await import('./drafts');
+        const { and, desc } = await import('drizzle-orm');
+
+        const [counts, inbox, openInvForms, budgetDraftRows] = await Promise.all([
+          getMyTaskCounts(),
+          loadAssistantInbox(15).catch(() => null),
+          listInventoryHandoverForms({ id: employee.id, role: employee.role }).catch(() => []),
+          getDb()
+            .select()
+            .from(draftTable)
+            .where(
+              and(
+                eq(draftTable.ownerEmployeeId, employee.id),
+                eq(draftTable.formKey, BUDGET_REQUEST_KEY)
+              )
+            )
+            .orderBy(desc(draftTable.updatedAt))
+            .limit(3)
+            .catch(() => []),
+        ]);
+        const items = [
+          {
+            key: 'approvalsAndReturned',
+            title: '簽核與單據追蹤',
+            href: '/applications',
+            count: counts.approvalsAndReturned,
+            description: '待我簽核單據與被退回需補件單據',
+          },
+          ...(featureFlags.budget_management_platform
+            ? [
+                {
+                  key: 'budgetTasks',
+                  title: '年度預算表填報',
+                  href: '/my-tasks/budget',
+                  count: counts.budgetTasks,
+                  description:
+                    '財會人員派發給本人帳號之待填年度預算編列單（含即時自動儲存草稿與歷年紀錄）',
+                },
+              ]
+            : []),
+          ...(featureFlags.asset_management_module
+            ? [
+                {
+                  key: 'assetHandovers',
+                  title: '我的資產管理',
+                  href: '/assets/mine',
+                  count: counts.assetHandovers,
+                  description:
+                    '保管人收到待逐筆點選確認／修改之【財產清點單】與複選資產轉移',
+                },
+              ]
+            : []),
+          ...(featureFlags.company_info_hub
+            ? [
+                {
+                  key: 'pendingSurveys',
+                  title: '我的專屬問卷',
+                  href: '/surveys',
+                  count: counts.pendingSurveys,
+                  description: '待填寫之公司開放問卷',
+                },
+              ]
+            : []),
+        ];
+
+        const approvalCards =
+          inbox && !inbox.loadError && inbox.pendingApprovals.length > 0
+            ? cardsFromPendingApprovals(inbox.pendingApprovals.slice(0, 10))
+            : [];
+
+        const returnedItems =
+          inbox && !inbox.loadError
+            ? inbox.myInProgress.filter((item) => item.status === 'returned')
+            : [];
+        const returnedCards =
+          returnedItems.length > 0
+            ? cardsFromMySubmissions(
+                returnedItems.slice(0, 5).map((r) => ({
+                  formType: r.formType,
+                  formId: r.id,
+                  formKey: r.formKey ?? r.formType,
+                  formName: r.label,
+                  formNumber: r.caseNumber,
+                  status: 'returned',
+                  summary: r.summary || r.label,
+                  approvedAt: null,
+                  version: 1,
+                  href: r.href,
+                  totalAmount: r.totalAmount,
+                  currentNodeLabel: r.currentNodeLabel ?? null,
+                  pendingApproverNames: [],
+                  snapshot: r.snapshot,
+                }))
+              )
+            : [];
+
+        const budgetDraftCards: AiMessageBlock[] = [];
+        if (ctx && budgetDraftRows.length > 0) {
+          for (const d of budgetDraftRows.slice(0, 2)) {
+            const synced = await createApplicationDraft({
+              conversationId: ctx.conversationId,
+              ownerEmployeeId: employee.id,
+              formDefinitionKey: BUDGET_REQUEST_KEY,
+              data: (d.data ?? {}) as Record<string, unknown>,
+              title: d.title || '116 年度預算表草稿',
+              createIdempotencyKey: `budget_draft_open_${d.id}`,
+            }).catch(() => null);
+            if (synced) {
+              budgetDraftCards.push({
+                kind: 'draft_reference',
+                id: `draft_${synced.draft.id}`,
+                draftId: synced.draft.id,
+                formKey: BUDGET_REQUEST_KEY,
+                formName: synced.draft.title || '預算申請單',
+                version: synced.draft.version,
+                status: 'draft',
+              });
+            }
+          }
+        }
+
+        const invCards: AiMessageBlock[] = openInvForms
+          .filter((s) => s.status === 'open')
+          .slice(0, 5)
+          .map((d) => {
+            const custDone = d.totalLines > 0 && d.custodianConfirmedLines >= d.totalLines;
+            const done = custDone ? 1 : 0;
+            const canApprove =
+              d.custodianName === employee.name || d.inspectorName === employee.name;
+            return {
+              kind: 'submission_card' as const,
+              id: `sc_inv_todo_${d.id}`,
+              formType: 'inventory_handover',
+              formId: d.id,
+              formKey: 'inventory_handover',
+              formNumber: d.formNumber,
+              formName: '財產清點單',
+              mode: canApprove ? ('approve' as const) : ('mine' as const),
+              status: 'pending_approval',
+              summary: `保管人：${d.custodianName} · 清點人：${d.inspectorName} · 已雙方確認 ${d.bothConfirmedLines}/${d.totalLines} 筆`,
+              lines: [
+                { label: '申請人', value: d.custodianName },
+                {
+                  label: '摘要',
+                  value: `清點人：${d.inspectorName} · 已雙方確認 ${d.bothConfirmedLines}/${d.totalLines} 筆`,
+                },
+              ],
+              applicantName: d.custodianName,
+              canApprove,
+              href: `/assets/inventory-forms/${d.id}`,
+              progress: {
+                done,
+                total: 2,
+                remaining: 2 - done,
+                percent: Math.round((done / 2) * 100),
+                currentLabel: custDone ? '清點人複核封存' : '保管人清點確認',
+                waitingNames: [custDone ? d.inspectorName : d.custodianName],
+                steps: [
+                  {
+                    key: '1',
+                    label: '保管人清點確認',
+                    name: d.custodianName,
+                    state: custDone ? ('done' as const) : ('current' as const),
+                  },
+                  {
+                    key: '2',
+                    label: '清點人複核封存',
+                    name: d.inspectorName,
+                    state: custDone ? ('current' as const) : ('waiting' as const),
+                  },
+                ],
+              },
+            };
+          });
+
+        const blocks: AiMessageBlock[] = [
+          ...approvalCards,
+          ...returnedCards,
+          ...budgetDraftCards,
+          ...invCards,
+        ];
+        return {
+          ok: true,
+          name: tool,
+          label,
+          response: {
+            totalPendingTasks: counts.total,
+            items,
+            pendingApprovals:
+              inbox && !inbox.loadError
+                ? inbox.pendingApprovals.slice(0, 10).map((i) => ({
+                    formType: i.formType,
+                    label: i.label,
+                    id: i.id,
+                    caseNumber: i.caseNumber,
+                    applicantName: i.applicantName,
+                    summary: i.summary,
+                    totalAmount: i.totalAmount,
+                    href: i.href,
+                    formKey: i.formKey,
+                  }))
+                : [],
+            message: `「我的待辦」目前共有 ${counts.total} 項待處理事項：簽核與單據追蹤 ${counts.approvalsAndReturned} 項、年度預算表填報 ${counts.budgetTasks} 項、我的資產管理（財產清點單）${counts.assetHandovers} 項、我的專屬問卷 ${counts.pendingSurveys} 項。畫面已顯示各單據與草稿卡片（點「詳情」即可在右側面板查看或編輯，自己待簽核的單據可直接點「✓ 快速簽核」），回覆請簡潔指引，勿重複抄寫卡片內容。`,
+          },
+          ...(blocks.length ? { blocks } : {}),
+        };
+      }
+
+      case 'list_my_budget_tasks_and_history': {
+        const { and, desc } = await import('drizzle-orm');
+        const {
+          departments: deptTable,
+          formDefinitions: defTable,
+          formDrafts: draftTable,
+          notifications: notifTable,
+          procurementCases: pcTable,
+          projects: projTable,
+        } = await import('@/lib/db/schema');
+        const { ensureEmployeeBudgetTasksAndHistory } = await import(
+          '@/lib/budget-codes/seed-budget-demo'
+        );
+        const { BUDGET_REQUEST_KEY } = await import('@/lib/custom-forms/migrated/budget');
+        const { createApplicationDraft } = await import('./drafts');
+
+        await ensureEmployeeBudgetTasksAndHistory(employee);
+
+        const db = getDb();
+        const filterYear =
+          typeof args?.fiscal_year === 'string' && args.fiscal_year.trim()
+            ? args.fiscal_year.trim()
+            : '';
+        const shouldOpenDraft = args?.open_draft === true;
+
+        const [notices, drafts, depts, projs, budgetDefs] = await Promise.all([
+          db
+            .select()
+            .from(notifTable)
+            .where(
+              and(
+                eq(notifTable.recipientEmployeeId, employee.id),
+                eq(notifTable.formType, 'budget_dispatch')
+              )
+            )
+            .orderBy(desc(notifTable.createdAt))
+            .limit(20),
+          db
+            .select()
+            .from(draftTable)
+            .where(
+              and(
+                eq(draftTable.ownerEmployeeId, employee.id),
+                eq(draftTable.formKey, BUDGET_REQUEST_KEY)
+              )
+            )
+            .orderBy(desc(draftTable.updatedAt)),
+          db.select().from(deptTable),
+          db.select().from(projTable),
+          db
+            .select({ id: defTable.id })
+            .from(defTable)
+            .where(eq(defTable.key, BUDGET_REQUEST_KEY))
+            .limit(1),
+        ]);
+
+        const deptMap = new Map(depts.map((d) => [d.id, `${d.code}｜${d.name}`]));
+        const projMap = new Map(projs.map((p) => [p.id, `${p.code}｜${p.name}`]));
+
+        const budgetDefId = budgetDefs[0]?.id;
+        const submissions = budgetDefId
+          ? await db
+              .select({
+                id: formSubmissions.id,
+                formNumber: formSubmissions.formNumber,
+                status: formSubmissions.status,
+                data: formSubmissions.data,
+                totalAmount: formSubmissions.totalAmount,
+                submittedAt: formSubmissions.submittedAt,
+                caseNumber: pcTable.caseNumber,
+              })
+              .from(formSubmissions)
+              .innerJoin(pcTable, eq(pcTable.id, formSubmissions.procurementCaseId))
+              .where(
+                and(
+                  eq(formSubmissions.definitionId, budgetDefId),
+                  eq(formSubmissions.applicantEmployeeId, employee.id)
+                )
+              )
+              .orderBy(desc(formSubmissions.submittedAt))
+          : [];
+
+        const parseMoney = (v: unknown): number => {
+          if (typeof v === 'number' && Number.isFinite(v)) return v;
+          if (typeof v === 'string') {
+            const n = Number(v.replace(/,/g, '').trim());
+            return Number.isFinite(n) ? n : 0;
+          }
+          return 0;
+        };
+
+        const historicalRecords = submissions
+          .map((sub) => {
+            const data = (sub.data ?? {}) as Record<string, unknown>;
+            const fy = String(data.fiscalYear ?? '115').trim();
+            const scope = data.budgetScope === 'project' ? '專案年度預算表' : '部門年度預算表';
+            const unitLabel =
+              data.budgetScope === 'project'
+                ? projMap.get(String(data.targetProjectId ?? '')) ?? '專案預算'
+                : deptMap.get(String(data.targetDepartmentId ?? '')) ?? '部門預算';
+            const itemsObj = (data.items ?? {}) as { rows?: Record<string, unknown>[] };
+            const rows = Array.isArray(itemsObj.rows) ? itemsObj.rows : [];
+            const lines = rows.map((r) => {
+              const prevApp = parseMoney(r.prevApprovedBudget);
+              const prevAct = parseMoney(r.prevActualAmount);
+              const annual = parseMoney(r.annualBudgetAmount);
+              return {
+                code: String(r.code ?? ''),
+                category: String(r.category ?? ''),
+                accountNumber: String(r.accountNumber ?? ''),
+                prevApprovedBudget: prevApp,
+                prevActualAmount: prevAct,
+                annualBudgetAmount: annual,
+                diffVsPrevApproved: annual - prevApp,
+                description: String(r.description ?? ''),
+              };
+            });
+            const totalPrevApproved = lines.reduce((s, l) => s + l.prevApprovedBudget, 0);
+            const totalPrevActual = lines.reduce((s, l) => s + l.prevActualAmount, 0);
+            const totalAnnualBudget =
+              lines.reduce((s, l) => s + l.annualBudgetAmount, 0) || parseMoney(sub.totalAmount);
+
+            return {
+              id: sub.id,
+              formNumber: sub.formNumber,
+              fiscalYear: fy,
+              scope,
+              unitLabel,
+              status: sub.status,
+              reason: String(data.reason ?? ''),
+              totalPrevApproved,
+              totalPrevActual,
+              totalAnnualBudget,
+              diffAmount: totalAnnualBudget - totalPrevApproved,
+              lineCount: lines.length,
+              lines,
+              href: `/f/${BUDGET_REQUEST_KEY}/${sub.id}`,
+            };
+          })
+          .filter((r) => !filterYear || r.fiscalYear === filterYear)
+          .sort((a, b) => Number(b.fiscalYear) - Number(a.fiscalYear));
+
+        const dispatchedTasks = notices.map((n) => {
+          const fyMatch = n.caseNumber.match(/BUDGET-(\d+)/);
+          const fy = fyMatch ? fyMatch[1]! : '116';
+          const isProj = n.caseNumber.includes('PROJ') || n.message.includes('專案預算');
+          return {
+            caseNumber: n.caseNumber,
+            fiscalYear: fy,
+            scope: isProj ? '專案年度預算表' : '部門年度預算表',
+            message: n.message,
+            isRead: n.isRead,
+            dispatchedAt: n.createdAt,
+          };
+        });
+
+        const openResources: OpenResourceEvent[] = [];
+        const blocks: AiMessageBlock[] = [];
+
+        // 1. Budget drafts (synced to ai_application_drafts so clicking「詳情」opens in right-side DraftPanel and AI can edit/write directly)
+        const autoSavedDrafts: Array<{
+          draftId: string;
+          formDraftId: string;
+          title: string;
+          fiscalYear: string;
+          scope: string;
+          rowCount: number;
+          totalAmount: number;
+          updatedAt: Date;
+        }> = [];
+
+        for (let idx = 0; idx < drafts.length; idx++) {
+          const d = drafts[idx]!;
+          const dData = (d.data ?? {}) as Record<string, unknown>;
+          const itemsObj = (dData.items ?? {}) as { rows?: Record<string, unknown>[]; total?: number };
+          const rows = Array.isArray(itemsObj.rows) ? itemsObj.rows : [];
+          let aiDraftId = d.id;
+          let aiDraftVersion = 1;
+          let aiDraftTitle = d.title || '116 年度預算表草稿';
+
+          if (ctx) {
+            const opened = await createApplicationDraft({
+              conversationId: ctx.conversationId,
+              ownerEmployeeId: employee.id,
+              formDefinitionKey: BUDGET_REQUEST_KEY,
+              data: dData,
+              title: aiDraftTitle,
+              createIdempotencyKey: `budget_draft_open_${d.id}`,
+            }).catch(() => null);
+            if (opened) {
+              aiDraftId = opened.draft.id;
+              aiDraftVersion = opened.draft.version;
+              aiDraftTitle = opened.draft.title || aiDraftTitle;
+              blocks.push({
+                kind: 'draft_reference',
+                id: `draft_${opened.draft.id}`,
+                draftId: opened.draft.id,
+                formKey: BUDGET_REQUEST_KEY,
+                formName: aiDraftTitle,
+                version: aiDraftVersion,
+                status: 'draft',
+              });
+              if (shouldOpenDraft && idx === 0) {
+                openResources.push(
+                  draftOpenResource({
+                    draftId: opened.draft.id,
+                    title: aiDraftTitle,
+                    version: aiDraftVersion,
+                    operation: 'opened',
+                    formKey: BUDGET_REQUEST_KEY,
+                    status: opened.draft.status,
+                  })
+                );
+              }
+            }
+          }
+
+          autoSavedDrafts.push({
+            draftId: aiDraftId,
+            formDraftId: d.id,
+            title: aiDraftTitle,
+            fiscalYear: String(dData.fiscalYear ?? '116'),
+            scope: dData.budgetScope === 'project' ? '專案年度預算表' : '部門年度預算表',
+            rowCount: rows.length,
+            totalAmount: parseMoney(itemsObj.total),
+            updatedAt: d.updatedAt,
+          });
+        }
+
+        // 2. Submitted / historical budget applications as submission_card (with approval progress stepper, quick approve if approver, and「詳情」opening right-side SubmissionPanel)
+        const historyToRender = historicalRecords.slice(0, 6);
+        const historyCardRows = await Promise.all(
+          historyToRender.map(async (r) => {
+            const snap = await getFormApprovalSnapshot('custom', r.id);
+            return {
+              formType: 'custom' as const,
+              formId: r.id,
+              formKey: BUDGET_REQUEST_KEY,
+              formName: `${r.fiscalYear} 年度${r.scope}`,
+              formNumber: r.formNumber,
+              status: r.status,
+              summary: `${r.unitLabel} · 共 ${r.lineCount} 項預算科目`,
+              approvedAt: null,
+              version: snap?.version ?? 1,
+              href: r.href,
+              totalAmount: r.totalAnnualBudget,
+              currentNodeLabel: snap?.currentNodeLabel ?? null,
+              pendingApproverNames: snap?.pendingApproverNames ?? [],
+              snapshot: snap,
+              canApprove: Boolean(snap?.pendingApproverIds.includes(employee.id)),
+            };
+          })
+        );
+        if (historyCardRows.length > 0) {
+          blocks.push(...cardsFromMySubmissions(historyCardRows));
+        }
+
+        return {
+          ok: true,
+          name: tool,
+          label,
+          response: {
+            designNote:
+              '畫面下方已直接顯示預算草稿卡片與單據卡片（每張卡片皆有「詳情」按鈕可在右側面板開啟檢視或編輯）。請勿在回覆文字中附加任何網址或 Markdown 連結，也請勿呼叫 present_choices 重複列出相同的草稿選項；僅需給出簡潔基本的說明，並提醒使用者可點卡片上的「詳情」在右側面板查看或編輯，或直接告訴你要如何撰寫／修改哪一欄資料。',
+            dispatchedTaskCount: dispatchedTasks.length,
+            dispatchedTasks,
+            autoSavedDraftCount: autoSavedDrafts.length,
+            autoSavedDrafts,
+            historicalRecordCount: historicalRecords.length,
+            historicalRecords: historicalRecords.map(({ href: _href, ...rest }) => rest),
+          },
+          ...(blocks.length > 0 ? { blocks } : {}),
+          ...(openResources.length > 0 ? { openResources } : {}),
+        };
+      }
+
+      case 'dispatch_budget_compilation_notice': {
+        const { employees: empTable, notifications: notifTable } = await import('@/lib/db/schema');
+        const fy =
+          typeof args?.fiscal_year === 'string' && args.fiscal_year.trim()
+            ? args.fiscal_year.trim()
+            : '116';
+        const deadline =
+          typeof args?.deadline_date === 'string' && args.deadline_date.trim()
+            ? args.deadline_date.trim()
+            : '2026-12-15';
+        const scopeArg =
+          typeof args?.scope === 'string' && ['department', 'project', 'both'].includes(args.scope)
+            ? (args.scope as 'department' | 'project' | 'both')
+            : 'both';
+        const rawRecipient =
+          typeof args?.recipient === 'string' && args.recipient.trim()
+            ? args.recipient.replace(/^[@＠]+/, '').trim()
+            : 'self';
+
+        const db = getDb();
+        let targetEmp = {
+          id: employee.id,
+          code: employee.employeeCode,
+          name: employee.name,
+        };
+
+        if (rawRecipient.toLowerCase() !== 'self' && rawRecipient !== '我' && rawRecipient !== '自己') {
+          const allEmps = await db
+            .select({ id: empTable.id, code: empTable.employeeCode, name: empTable.name })
+            .from(empTable)
+            .where(eq(empTable.accessEnabled, true));
+          const found = allEmps.find(
+            (e) =>
+              e.id.toLowerCase() === rawRecipient.toLowerCase() ||
+              e.code.toLowerCase() === rawRecipient.toLowerCase() ||
+              e.name === rawRecipient ||
+              e.name.includes(rawRecipient)
+          );
+          if (!found) {
+            return {
+              ok: false,
+              name: tool,
+              label,
+              response: {
+                error: 'recipient_not_found',
+                message: `找不到員工「${rawRecipient}」。`,
+              },
+            };
+          }
+          targetEmp = found;
+        }
+
+        const noteSuffix =
+          typeof args?.custom_note === 'string' && args.custom_note.trim()
+            ? `｜財會備註：${args.custom_note.trim()}`
+            : '';
+
+        const scopesToSend: Array<'department' | 'project'> =
+          scopeArg === 'both' ? ['department', 'project'] : [scopeArg];
+
+        const createdCases: string[] = [];
+        for (const sc of scopesToSend) {
+          const caseNumber = sc === 'project' ? `BUDGET-${fy}-PROJ` : `BUDGET-${fy}-DEPT`;
+          const labelText =
+            sc === 'project'
+              ? `${fy} 年度營收／產品專案預算表暨差異分析表`
+              : `${fy} 年度部門預算表暨差異分析表`;
+          const msg = `【${labelText}】由財會／管理員 ${employee.name} 派發予 ${targetEmp.name}：請於 ${deadline} 前至「我的待辦 → 年度預算表填報（/my-tasks/budget）」完成線上填寫（支援 1～12 月分月試算與即時自動儲存）${noteSuffix}。`;
+
+          await db.insert(notifTable).values({
+            recipientEmployeeId: targetEmp.id,
+            type: 'approval_requested',
+            formType: 'budget_dispatch',
+            formId: employee.id,
+            caseNumber,
+            message: msg,
+            isRead: false,
+          });
+          createdCases.push(`${caseNumber}（${labelText}）`);
+        }
+
+        const dispatchMsg = `已成功派發 ${createdCases.length} 張預算編列填寫單（${createdCases.join('、')}）給 ${targetEmp.name}（${targetEmp.code}），截止日 ${deadline}。`;
+        return {
+          ok: true,
+          name: tool,
+          label,
+          response: {
+            recipientName: targetEmp.name,
+            recipientCode: targetEmp.code,
+            fiscalYear: fy,
+            deadlineDate: deadline,
+            dispatchedCases: createdCases,
+            message: dispatchMsg,
+          },
+        };
+      }
+
+      case 'get_budget_analytics_summary': {
+        const { departments: deptTable, projects: projTable } = await import('@/lib/db/schema');
+        const db = getDb();
+        const [allCodes, depts, projs] = await Promise.all([
+          getBudgetCodeList({ includeInactive: true, includeUsage: true }),
+          db.select({ id: deptTable.id, code: deptTable.code }).from(deptTable).where(eq(deptTable.active, true)),
+          db.select({ id: projTable.id, code: projTable.code }).from(projTable),
+        ]);
+
+        const distinctYears = [...new Set(allCodes.map((b) => b.fiscalYear))].sort(
+          (a, b) => Number(b) - Number(a)
+        );
+        const requestedYear =
+          typeof args?.fiscal_year === 'string' && args.fiscal_year.trim()
+            ? args.fiscal_year.trim()
+            : '';
+        const focusYear =
+          requestedYear && distinctYears.includes(requestedYear)
+            ? requestedYear
+            : distinctYears[0] ?? '115';
+        const prevYear = String(Number(focusYear) - 1);
+
+        const activeYearCodes = allCodes.filter(
+          (b) => b.fiscalYear === focusYear && b.active !== false
+        );
+        const prevActiveCodes = allCodes.filter(
+          (b) => b.fiscalYear === prevYear && b.active !== false
+        );
+
+        const deptCodes = activeYearCodes.filter((b) => Boolean(b.departmentCode || b.departmentName));
+        const projCodes = activeYearCodes.filter((b) => Boolean(b.projectCode || b.projectName));
+
+        const deptBudgetSum = Math.round(
+          deptCodes.reduce((s, b) => s + (b.annualBudgetAmount && b.annualBudgetAmount > 0 ? b.annualBudgetAmount : 0), 0)
+        );
+        const projBudgetSum = Math.round(
+          projCodes.reduce((s, b) => s + (b.annualBudgetAmount && b.annualBudgetAmount > 0 ? b.annualBudgetAmount : 0), 0)
+        );
+        const totalYearBudget = deptBudgetSum + projBudgetSum;
+
+        const prevTotalBudget = Math.round(
+          prevActiveCodes.reduce(
+            (s, b) => s + (b.annualBudgetAmount && b.annualBudgetAmount > 0 ? b.annualBudgetAmount : 0),
+            0
+          )
+        );
+
+        const yoyDiff = prevTotalBudget > 0 ? totalYearBudget - prevTotalBudget : null;
+        const yoyGrowthPct =
+          prevTotalBudget > 0
+            ? Number((((totalYearBudget - prevTotalBudget) / prevTotalBudget) * 100).toFixed(1))
+            : null;
+
+        const coveredDeptCount = new Set(deptCodes.map((b) => b.departmentCode).filter(Boolean)).size;
+        const coveredProjCount = new Set(projCodes.map((b) => b.projectCode).filter(Boolean)).size;
+
+        const zeroAmountCount = activeYearCodes.filter(
+          (b) => !b.annualBudgetAmount || b.annualBudgetAmount <= 0
+        ).length;
+        const unassignedOwnerCount = activeYearCodes.filter((b) => !b.ownerEmployeeCode).length;
+        const utilizedCodeCount = activeYearCodes.filter((b) => (b.usageCount ?? 0) > 0).length;
+        const totalUsageRefs = activeYearCodes.reduce((s, b) => s + (b.usageCount ?? 0), 0);
+
+        const deptRatioPct =
+          totalYearBudget > 0 ? Math.round((deptBudgetSum / totalYearBudget) * 100) : 0;
+        const projRatioPct = totalYearBudget > 0 ? 100 - deptRatioPct : 0;
+
+        return {
+          ok: true,
+          name: tool,
+          label,
+          response: {
+            focusYear,
+            prevYear,
+            availableYears: distinctYears,
+            card1_YearTotalAndYoY: {
+              title: `${focusYear} 年度核定預算總額`,
+              totalYearBudget,
+              activeSubjectCount: activeYearCodes.length,
+              prevYearTotalBudget: prevTotalBudget,
+              yoyDiffAmount: yoyDiff,
+              yoyGrowthPct,
+            },
+            card2_DepartmentBudgetAndCoverage: {
+              title: `${focusYear} 年度部門營運預算`,
+              deptBudgetSum,
+              deptRatioPct,
+              deptSubjectCount: deptCodes.length,
+              coveredDeptCount,
+              totalActiveDepartments: depts.length,
+            },
+            card3_ProjectBudgetAndCoverage: {
+              title: `${focusYear} 年度專案預算規模`,
+              projBudgetSum,
+              projRatioPct,
+              projSubjectCount: projCodes.length,
+              coveredProjCount,
+              totalProjects: projs.length,
+            },
+            card4_UtilizationAndGovernanceCheck: {
+              title: `${focusYear} 年度動支與治理檢核`,
+              utilizedCodeCount,
+              totalLinkedFormReferences: totalUsageRefs,
+              zeroAmountSubjectCount: zeroAmountCount,
+              unassignedOwnerSubjectCount: unassignedOwnerCount,
+            },
           },
         };
       }

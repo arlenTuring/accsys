@@ -5,7 +5,8 @@ import type { OrgSnapshot } from '@/lib/approval/flow/types';
 import { validateQuoteCount } from '@/lib/procurement/quote-requirement';
 import { validatePurchaseRequestInput } from '@/lib/purchase-requests/validate';
 import { parseDefinition } from '../definition';
-import { allFields, parseFormSchema, PAYMENT_BATCH_KEY, sourceFieldOf, sourceTargets, SOURCE_ROW_KEY } from '../schema';
+import { allFields, adjustableSourceTargets, parseFormSchema, PAYMENT_BATCH_KEY, sourceFieldOf, sourceTargets, SOURCE_ROW_KEY } from '../schema';
+import { carryRows } from '../source';
 import { validateSubmission, type TableValue } from '../validate';
 import { MIGRATION_BATCHES } from '.';
 import { validateAcceptanceInput } from '@/lib/acceptances/validate';
@@ -48,8 +49,8 @@ function definition(form: MigratedForm) {
   return r;
 }
 
-type Line = { description?: string; quantity?: unknown; estimatedAmount?: unknown };
-const line = (p: Line = {}) => ({ budgetCodeId: BUDGET, description: '筆電', quantity: 2, estimatedAmount: '30000', ...p });
+type Line = { description?: string; quantity?: unknown; unitPrice?: unknown };
+const line = (p: Line = {}) => ({ budgetCodeId: BUDGET, description: '筆電', quantity: 2, unitPrice: '15000', ...p });
 
 /** What the old service accepted (prepare + validatePurchaseRequestInput, owner checks aside). */
 function oldRequest(lines: ReturnType<typeof line>[], days: number | null): boolean {
@@ -58,7 +59,7 @@ function oldRequest(lines: ReturnType<typeof line>[], days: number | null): bool
   for (const l of lines) {
     if (typeof l.description !== 'string' || l.description.length > 500) return false;
     if (!Number.isSafeInteger(l.quantity) || (l.quantity as number) > 1_000_000) return false;
-    if (!/^\d+(\.\d{1,2})?$/.test(String(l.estimatedAmount))) return false;
+    if (!/^\d+(\.\d{1,2})?$/.test(String(l.unitPrice))) return false;
   }
   return validatePurchaseRequestInput(
     lines.map((l) => ({
@@ -67,7 +68,7 @@ function oldRequest(lines: ReturnType<typeof line>[], days: number | null): bool
       itemCategory: '設備',
       description: l.description,
       quantity: l.quantity as number,
-      estimatedAmount: Number(l.estimatedAmount),
+      estimatedAmount: Math.round(Number(l.quantity) * Number(l.unitPrice) * 100) / 100,
     }))
   ).ok;
 }
@@ -115,9 +116,9 @@ describe('請購單: old service vs designer definition', () => {
     { name: 'fractional quantity', lines: [line({ quantity: 1.5 })], ok: false },
     { name: 'quantity 1,000,000', lines: [line({ quantity: 1_000_000 })], ok: true },
     { name: 'quantity over 1,000,000', lines: [line({ quantity: 1_000_001 })], ok: false },
-    { name: 'estimate 0', lines: [line({ estimatedAmount: '0' })], ok: false },
-    { name: 'estimate 0.01', lines: [line({ estimatedAmount: '0.01' })], ok: true },
-    { name: 'estimate with 3 decimals', lines: [line({ estimatedAmount: '1.234' })], ok: false },
+    { name: 'unit price 0', lines: [line({ unitPrice: '0' })], ok: false },
+    { name: 'unit price 0.01', lines: [line({ unitPrice: '0.01' })], ok: true },
+    { name: 'unit price with 3 decimals', lines: [line({ unitPrice: '1.234' })], ok: false },
   ];
   for (const c of cases) {
     it(c.name, () => {
@@ -126,7 +127,7 @@ describe('請購單: old service vs designer definition', () => {
       const after = validateSubmission(schema, { neededWithinDays: days ?? '', items: { rows: c.lines, total: null } }, TODAY);
       expect({ ok: after.ok, errors: after.ok ? undefined : after.errors }).toMatchObject({ ok: c.ok });
       if (after.ok) {
-        const total = c.lines.reduce((s, l) => s + Math.round(Number(l.estimatedAmount) * 100), 0);
+        const total = c.lines.reduce((s, l) => s + Math.round(Number(l.quantity) * Number(l.unitPrice) * 100), 0);
         expect(after.value.promoted.totalAmount).toBe((total / 100).toFixed(2));
         expect(after.value.refs.sameOwner.map((g) => ({ label: g.label, ids: [...new Set(g.ids)] }))).toEqual([{ label: '請購明細', ids: [BUDGET] }]);
       }
@@ -557,3 +558,78 @@ describe('批次 5 approval chain matches buildChain', () => {
     });
   }
 });
+
+describe('第 16、17 條：一張請購單對應多張採購、驗收、費用單與預付／非預付流程順序', () => {
+  it('enables allowMultiple and subset mode on 採購單、驗收單、費用申請單(採購付款)', () => {
+    for (const form of [PURCHASE_ORDER_FORM, ACCEPTANCE_FORM, PROCUREMENT_PAYMENT_FORM]) {
+      const { schema } = definition(form);
+      const src = sourceFieldOf(schema)!;
+      expect(src.sources.every((s) => s.allowMultiple === true)).toBe(true);
+      expect(src.sources.every((s) => s.rows?.mode === 'subset')).toBe(true);
+    }
+    expect([...(adjustableSourceTargets(definition(PURCHASE_ORDER_FORM).schema).get('items') ?? [])]).toEqual(['quantity']);
+    expect([...(adjustableSourceTargets(definition(ACCEPTANCE_FORM).schema).get('items') ?? [])]).toEqual(['quantity']);
+    expect([...(adjustableSourceTargets(definition(PROCUREMENT_PAYMENT_FORM).schema).get('items') ?? [])].sort()).toEqual(['amount', 'quantity']);
+  });
+
+  it('carryRows supports partial quantity and partial amount while clamping tampered values above source bounds', () => {
+    const poDef = definition(PURCHASE_ORDER_FORM);
+    const poRule = sourceFieldOf(poDef.schema)!.sources[0];
+    const prSource = {
+      id: SOURCE,
+      caseId: 'case-1',
+      formNumber: '20261113PR0001',
+      name: '請購單',
+      rule: poRule,
+      schema: definition(PURCHASE_REQUEST_FORM).schema,
+      data: {
+        items: {
+          rows: [
+            { budgetCodeId: BUDGET, description: '伺服器月租', quantity: 12, unitPrice: '5000', estimatedAmount: '60000.00' },
+            { budgetCodeId: BUDGET, description: '筆電', quantity: 2, unitPrice: '25000', estimatedAmount: '50000.00' },
+          ],
+          total: '110000.00',
+        },
+      },
+    };
+
+    // Partial quantity (3 out of 12) is preserved; tampered quantity (99 > 2) is clamped back to 2
+    const carriedPo = carryRows(prSource, {
+      items: {
+        rows: [
+          { [SOURCE_ROW_KEY]: 0, quantity: 3, unitPrice: '5000' },
+          { [SOURCE_ROW_KEY]: 1, quantity: 99, unitPrice: '25000' },
+        ],
+      },
+    });
+    const poRows = (carriedPo.items as TableValue).rows;
+    expect(poRows.map((r) => [r.description, r.quantity])).toEqual([
+      ['伺服器月租', 3],
+      ['筆電', 2],
+    ]);
+
+    // Partial acceptance scales amount proportionally when quantity is reduced (1 out of 2 -> 25000.00 out of 50000.00)
+    const acDef = definition(ACCEPTANCE_FORM);
+    const acRule = sourceFieldOf(acDef.schema)!.sources[0];
+    const poSource = {
+      id: SOURCE,
+      caseId: 'case-1',
+      formNumber: '20261113PO0001',
+      name: '採購單',
+      rule: acRule,
+      schema: poDef.schema,
+      data: {
+        items: {
+          rows: [{ budgetCodeId: BUDGET, description: '筆電', quantity: 2, unitPrice: '25000', totalPrice: '50000.00' }],
+          total: '50000.00',
+        },
+      },
+    };
+    const carriedAc = carryRows(poSource, {
+      items: { rows: [{ [SOURCE_ROW_KEY]: 0, quantity: 1, passFail: 'pass' }] },
+    });
+    const acRows = (carriedAc.items as TableValue).rows;
+    expect(acRows[0]).toMatchObject({ description: '筆電', quantity: 1, amount: '25000.00' });
+  });
+});
+

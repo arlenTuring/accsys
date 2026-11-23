@@ -103,6 +103,21 @@ const SCOPE_BADGE: Record<
   },
 };
 
+/** Finds a DriveItem by ID recursively inside a tree */
+function findDriveItemById(
+  items: HistoricalDriveItem[],
+  targetId: string
+): HistoricalDriveItem | null {
+  for (const item of items) {
+    if (item.id === targetId) return item;
+    if (item.children && item.children.length > 0) {
+      const found = findDriveItemById(item.children, targetId);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 /** Collects all folder IDs recursively so we can expand/collapse all at any depth */
 function collectAllFolderIds(items: HistoricalDriveItem[]): string[] {
   const ids: string[] = [];
@@ -115,6 +130,63 @@ function collectAllFolderIds(items: HistoricalDriveItem[]): string[] {
     }
   }
   return ids;
+}
+
+/**
+ * Default collapsed folder set when entering a project:
+ * Collapse folders so users can see each folder's subfolder/file counts upfront before clicking to expand.
+ * If a project has only a single top-level wrapper folder, keep that root folder open and collapse all its subfolders.
+ */
+function getInitialCollapsedFolderIds(items: HistoricalDriveItem[]): Set<string> {
+  const allIds = collectAllFolderIds(items);
+  if (items.length === 1 && items[0].kind === 'folder') {
+    const set = new Set(allIds);
+    set.delete(items[0].id);
+    return set;
+  }
+  return new Set(allIds);
+}
+
+/**
+ * Finds the chain of ancestor folder IDs leading to `targetId` so we can auto-expand
+ * the exact path when navigating from an AI citation.
+ */
+function findAncestorFolderIds(
+  items: HistoricalDriveItem[],
+  targetId: string,
+  ancestors: string[] = []
+): string[] | null {
+  for (const item of items) {
+    if (item.id === targetId) {
+      return item.kind === 'folder' ? [...ancestors, item.id] : ancestors;
+    }
+    if (item.children && item.children.length > 0) {
+      const found = findAncestorFolderIds(item.children, targetId, [
+        ...ancestors,
+        item.id,
+      ]);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+/** Counts direct subfolders and direct files inside a single folder */
+function countDirectFolderItems(children: HistoricalDriveItem[] | undefined): {
+  folders: number;
+  files: number;
+} {
+  if (!children || children.length === 0) return { folders: 0, files: 0 };
+  let folders = 0;
+  let files = 0;
+  for (const child of children) {
+    if (child.kind === 'folder') {
+      folders += 1;
+    } else {
+      files += 1;
+    }
+  }
+  return { folders, files };
 }
 
 /** Counts total items (folders + files) across all nested levels */
@@ -208,6 +280,10 @@ export function ProjectAssistantClient({
   const [liveFilesByProject, setLiveFilesByProject] = useState<
     Record<string, HistoricalDriveItem[]>
   >({});
+  const [dynamicFolderChildren, setDynamicFolderChildren] = useState<
+    Record<string, HistoricalDriveItem[]>
+  >({});
+  const [loadingFolderIds, setLoadingFolderIds] = useState<Set<string>>(new Set());
   const [driveAuthUser, setDriveAuthUser] = useState<string>(() => viewer.email || '');
   const hideLocked = true;
   const effectiveViewer = viewer;
@@ -307,11 +383,64 @@ export function ProjectAssistantClient({
   }, [authorizedGroups, selectedYear, query, scopeFilter]);
 
   function openProject(projId: string) {
+    const targetProj = allProjects.find((p) => p.id === projId);
     setSelectedProjectId(projId);
-    // Empty set = all folders at all levels expanded immediately upon entering
-    setCollapsedFolderIds(new Set());
+    setCollapsedFolderIds(
+      targetProj ? getInitialCollapsedFolderIds(targetProj.files) : new Set()
+    );
     setActiveFile(null);
     setIsEditingFile(false);
+  }
+
+  function handleNavigateToHistoryLocation(target: {
+    projectId: string;
+    year?: number;
+    fileId?: string;
+  }) {
+    const targetProject = allProjects.find((p) => p.id === target.projectId) ?? null;
+    if (target.year) {
+      setSelectedYear(target.year);
+    } else if (targetProject) {
+      setSelectedYear(targetProject.startYear);
+    }
+    setSelectedProjectId(target.projectId);
+    setIsEditingFile(false);
+
+    if (targetProject) {
+      const nextCollapsed = getInitialCollapsedFolderIds(targetProject.files);
+      if (target.fileId) {
+        const ancestorIds = findAncestorFolderIds(targetProject.files, target.fileId);
+        if (ancestorIds) {
+          for (const folderId of ancestorIds) {
+            nextCollapsed.delete(folderId);
+          }
+        }
+      }
+      setCollapsedFolderIds(nextCollapsed);
+    } else {
+      setCollapsedFolderIds(new Set());
+    }
+
+    if (target.fileId && targetProject) {
+      const matchedItem = findDriveItemById(targetProject.files, target.fileId);
+      if (matchedItem && matchedItem.kind !== 'folder') {
+        setActiveFile(matchedItem);
+      } else {
+        setActiveFile(null);
+      }
+    } else {
+      setActiveFile(null);
+    }
+
+    setActiveTab('history');
+
+    if (target.fileId) {
+      const domId = `hist-node-${target.fileId}`;
+      window.setTimeout(() => {
+        const el = document.getElementById(domId);
+        el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 80);
+    }
   }
 
   function toggleFolderCollapse(folderId: string) {
@@ -336,18 +465,14 @@ export function ProjectAssistantClient({
   }
 
   function handleFolderClick(item: HistoricalDriveItem, allowed: boolean) {
-    if (!allowed) return;
-    if (item.kind === 'folder' && item.children && item.children.length > 0) {
-      toggleFolderCollapse(item.id);
-    }
+    if (!allowed || item.kind !== 'folder') return;
+    toggleFolderCollapse(item.id);
   }
 
   function handleOpenNodePreview(item: HistoricalDriveItem, allowed: boolean) {
     if (!allowed) return;
     if (item.kind === 'folder') {
-      if (item.children && item.children.length > 0) {
-        toggleFolderCollapse(item.id);
-      }
+      handleFolderClick(item, allowed);
       return;
     }
     setActiveFile((prev) => {
@@ -406,8 +531,15 @@ export function ProjectAssistantClient({
           });
 
           const isFolder = item.kind === 'folder';
-          const hasChildren = isFolder && Boolean(item.children && item.children.length > 0);
-          const isExpanded = hasChildren && !collapsedFolderIds.has(item.id);
+          const effectiveChildren = isFolder
+            ? dynamicFolderChildren[item.id] ?? item.children
+            : undefined;
+          const hasChildren =
+            isFolder && Boolean(effectiveChildren && effectiveChildren.length > 0);
+          const folderStats = isFolder
+            ? countDirectFolderItems(effectiveChildren)
+            : null;
+          const isExpanded = isFolder && !collapsedFolderIds.has(item.id);
           const isSelected = activeFile?.id === item.id;
           const isEditableDoc = !isFolder && isEditableDocumentKind(item);
           const editPermission = isEditableDoc
@@ -431,10 +563,14 @@ export function ProjectAssistantClient({
             : item.driveUrl;
 
           return (
-            <div key={item.id} className="border-b border-slate-100 last:border-b-0">
+            <div
+              key={item.id}
+              id={`hist-node-${item.id}`}
+              className="border-b border-slate-100 last:border-b-0"
+            >
               <div
                 onClick={() => {
-                  if (isFolder && hasChildren) {
+                  if (isFolder) {
                     handleFolderClick(item, access.allowed);
                   }
                 }}
@@ -454,7 +590,7 @@ export function ProjectAssistantClient({
                 title={
                   !access.allowed
                     ? access.reason
-                    : isFolder && hasChildren
+                    : isFolder
                     ? '點擊展開或收合資料夾'
                     : '點兩下開啟檔案預覽'
                 }
@@ -463,7 +599,7 @@ export function ProjectAssistantClient({
                     ? 'cursor-not-allowed bg-slate-100/80 opacity-65'
                     : isSelected
                     ? 'cursor-pointer bg-blue-50/95 ring-1 ring-inset ring-td-blue/40'
-                    : isFolder && hasChildren
+                    : isFolder
                     ? 'cursor-pointer bg-amber-50/35 hover:bg-amber-50/70'
                     : 'cursor-pointer bg-white hover:bg-blue-50/40'
                 }`}
@@ -477,11 +613,9 @@ export function ProjectAssistantClient({
                           ? 'bg-amber-100 text-amber-800 ring-1 ring-amber-300/70'
                           : 'bg-slate-100 text-slate-400'
                       }`}
-                      title={
-                        hasChildren ? (isExpanded ? '點擊收合子目錄' : '點擊展開子目錄') : '雲端資料夾'
-                      }
+                      title={isExpanded ? '點擊收合子目錄' : '點擊展開子目錄'}
                     >
-                      {hasChildren ? (isExpanded ? '▼' : '▶') : '•'}
+                      {isExpanded ? '▼' : '▶'}
                     </span>
                   ) : (
                     <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-[10px] text-slate-300">
@@ -505,9 +639,9 @@ export function ProjectAssistantClient({
                           L{depth + 1}
                         </span>
                       )}
-                      {hasChildren && (
-                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">
-                          {isExpanded ? `已展開 (${item.children!.length})` : `已收合 (${item.children!.length})`}
+                      {isFolder && folderStats && (
+                        <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                          {folderStats.folders} 資料夾 · {folderStats.files} 檔案
                         </span>
                       )}
                       {itemScope !== 'company_wide' && (
@@ -543,7 +677,7 @@ export function ProjectAssistantClient({
                     <span className="inline-flex items-center gap-1 rounded-lg bg-slate-200 px-2.5 py-1 font-semibold text-slate-600">
                       🔒 權限限定
                     </span>
-                  ) : isFolder && hasChildren ? (
+                  ) : isFolder ? (
                     <span className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-amber-800 shadow-2xs">
                       <span>{isExpanded ? '收合 ▲' : '展開 ▼'}</span>
                     </span>
@@ -682,7 +816,7 @@ export function ProjectAssistantClient({
               {hasChildren && isExpanded && access.allowed && (
                 <div className="bg-slate-50/30 pb-1">
                   {renderTreeNodes(
-                    item.children!,
+                    effectiveChildren!,
                     depth + 1,
                     [...parentTrail, item.name],
                     itemScope,
@@ -736,19 +870,33 @@ export function ProjectAssistantClient({
         </div>
       )}
 
-      {activeTab === 'live' ? (
+      <div
+        className={
+          activeTab === 'live'
+            ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+            : 'hidden'
+        }
+      >
         <ProjectLiveCoAuthor
           groups={authorizedGroups}
           viewer={viewer}
           externalDocToOpen={externalCoAuthorDoc}
           onClearExternalDoc={() => setExternalCoAuthorDoc(null)}
           onSwitchToHistoryTab={() => setActiveTab('history')}
+          onNavigateToHistoryLocation={handleNavigateToHistoryLocation}
           onActiveDocChange={setIsCoAuthorDocOpen}
         />
-      ) : (
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
-          <div className="mx-auto max-w-7xl space-y-5">
-            {/* Top Filter & Search Bar */}
+      </div>
+
+      <div
+        className={
+          activeTab === 'history'
+            ? 'flex-1 overflow-y-auto p-4 sm:p-6'
+            : 'hidden'
+        }
+      >
+        <div className="mx-auto max-w-7xl space-y-5">
+          {/* Top Filter & Search Bar */}
             <div className="flex flex-col gap-3 rounded-2xl border border-td-border bg-white p-4 shadow-2xs lg:flex-row lg:items-center lg:justify-between">
         <div className="flex flex-wrap items-center gap-1.5">
           <button
@@ -904,16 +1052,25 @@ export function ProjectAssistantClient({
               <span className="font-bold text-td-blue-dark">{selectedProject.name}</span>
             </nav>
 
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedProjectId(null);
-                setActiveFile(null);
-              }}
-              className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-            >
-              ← 返回年份專案列表
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveTab('live')}
+                className="rounded-lg bg-td-blue px-3 py-1 text-xs font-bold text-white shadow-2xs transition hover:bg-td-blue-dark"
+              >
+                ← 返回即時助手對話
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedProjectId(null);
+                  setActiveFile(null);
+                }}
+                className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+              >
+                ← 返回年份專案列表
+              </button>
+            </div>
           </div>
 
           {/* Project Header Summary */}
@@ -959,7 +1116,7 @@ export function ProjectAssistantClient({
                   專案完整目錄樹（共 {projectTreeStats.folders} 個資料夾 · {projectTreeStats.files} 個檔案）
                 </h3>
                 <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700 ring-1 ring-emerald-200">
-                  預設全層級展開
+                  點擊資料夾無縫展開
                 </span>
               </div>
 
@@ -1109,9 +1266,8 @@ export function ProjectAssistantClient({
           ))}
         </div>
       )}
-          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

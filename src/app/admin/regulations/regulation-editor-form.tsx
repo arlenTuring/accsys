@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
+import { confirmDialog } from '@/app/components/dialog';
 import {
   createRegulationAction,
   deleteRegulationAction,
@@ -43,7 +44,6 @@ export function RegulationEditorForm(props: {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const [code, setCode] = useState(props.initial.code);
   const [title, setTitle] = useState(props.initial.title);
   const [category, setCategory] = useState(props.initial.category || 'hr_attendance');
   const [versionLabel, setVersionLabel] = useState(props.initial.versionLabel || '1.0');
@@ -74,7 +74,7 @@ export function RegulationEditorForm(props: {
       .filter(Boolean);
 
     const payload = {
-      code: code.trim() || 'TD-REG-001',
+      code: props.initial.code?.trim() || `REG-${Date.now()}`,
       title: title.trim(),
       category,
       versionLabel: versionLabel.trim() || '1.0',
@@ -143,9 +143,15 @@ export function RegulationEditorForm(props: {
     });
   }
 
-  function handleDeleteRegulation() {
+  async function handleDeleteRegulation() {
     if (!props.initial.id) return;
-    if (!window.confirm(`確定要刪除「${title}」嗎？此操作無法復原。`)) return;
+    const ok = await confirmDialog({
+      title: `刪除「${title}」？`,
+      message: '確定要刪除此規章嗎？此操作無法復原。',
+      confirmLabel: '刪除',
+      tone: 'danger',
+    });
+    if (!ok) return;
     startTransition(async () => {
       const res = await deleteRegulationAction(props.initial.id!);
       if (!res.ok) {
@@ -171,34 +177,18 @@ export function RegulationEditorForm(props: {
           </div>
         )}
 
-        <div className="grid gap-4 sm:grid-cols-3">
-          <div>
-            <label className="block text-xs font-semibold text-td-text">
-              規章編號 <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="text"
-              required
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="例如 TD-HR-001"
-              className="mt-1 w-full rounded-lg border border-td-border px-3 py-2 font-mono text-sm"
-            />
-          </div>
-
-          <div className="sm:col-span-2">
-            <label className="block text-xs font-semibold text-td-text">
-              規章名稱 <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="text"
-              required
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="例如 員工出差管理辦法"
-              className="mt-1 w-full rounded-lg border border-td-border px-3 py-2 text-sm"
-            />
-          </div>
+        <div>
+          <label className="block text-xs font-semibold text-td-text">
+            規章名稱 <span className="text-rose-500">*</span>
+          </label>
+          <input
+            type="text"
+            required
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="例如 員工出差管理辦法"
+            className="mt-1 w-full rounded-lg border border-td-border px-3 py-2 text-sm"
+          />
         </div>
 
         <div className="grid gap-4 sm:grid-cols-4">

@@ -15,16 +15,20 @@ export async function readSessionToken(): Promise<string | undefined> {
   return undefined;
 }
 
+const getRequestEmployee = cache(async (): Promise<CurrentEmployee | null> => {
+  return resolveSession(await readSessionToken());
+});
+
 /**
  * The employee behind the current request's session, or null. Checked against
  * the database on every request (revocation, access and role changes apply
  * immediately); memoized only within a single request.
  */
-export const getCurrentEmployee = cache(async (): Promise<CurrentEmployee | null> => {
+export async function getCurrentEmployee(): Promise<CurrentEmployee | null> {
   const scoped = sessionScope.getStore();
   if (scoped) return resolveSession(scoped);
-  return resolveSession(await readSessionToken());
-});
+  return getRequestEmployee();
+}
 
 /**
  * Server-side scripts and integration tests (no HTTP request) run code "as" a

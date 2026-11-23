@@ -1,4 +1,5 @@
 import { ASSET_TRANSFER_FORM } from './asset-transfer';
+import { BUDGET_FORMS } from './budget';
 import { BUSINESS_TRIP_FORM } from './business-trip';
 import { EXPENSE_CLAIM_FORMS } from './expense-claims';
 import { PROCUREMENT_FORMS } from './procurement';
@@ -16,4 +17,5 @@ export const MIGRATION_BATCHES: Record<number, { title: string; forms: MigratedF
   4: { title: '資產異動申請單', forms: [ASSET_TRANSFER_FORM] },
   5: { title: '採購流程（請購單、採購單、驗收單、採購付款、免走採購費用申請）', forms: PROCUREMENT_FORMS },
   6: { title: '公出差旅申請單', forms: [BUSINESS_TRIP_FORM] },
+  7: { title: '預算管理（預算申請單、預算變更／追加申請單）', forms: BUDGET_FORMS },
 };

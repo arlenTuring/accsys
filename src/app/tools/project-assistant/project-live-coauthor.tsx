@@ -1,6 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { confirmDialog } from '@/app/components/dialog';
+import { useI18n } from '@/lib/i18n/context';
+import { speakTextWithFemaleVoice, stopActiveSpeech } from '@/lib/tts/speech';
 import {
   buildDriveEmbedPreviewUrl,
   type HistoricalDriveItem,
@@ -70,9 +73,11 @@ type ChatMessage = {
   timestamp: string;
   targetBadge?: string;
   refusedCompanyAdmin?: boolean;
-  attachments?: Array<{ name: string; kindLabel: string }>;
+  attachments?: Array<{ name: string; kindLabel: string; previewDataUrl?: string }>;
   webSearch?: CoAuthorResponse['webSearch'];
   graphRetrieval?: CoAuthorResponse['graphRetrieval'];
+  historicalLocations?: CoAuthorResponse['historicalLocations'];
+  suggestedOptions?: CoAuthorResponse['suggestedOptions'];
   linkedSnippet?: {
     label: string;
     text: string;
@@ -101,6 +106,133 @@ type ChatMessage = {
     insertedInDoc?: boolean;
   }>;
 };
+
+type ProjectAssistantConversation = {
+  id: string;
+  title: string;
+  manualTitle?: boolean;
+  hasAiTitle?: boolean;
+  docId?: string | null;
+  docType?: CoAuthorDocType | 'attachment';
+  projectCode?: string;
+  fileName?: string;
+  updatedAt: string;
+  messages: ChatMessage[];
+};
+
+function deriveInitialDocConversationTitle(docTitle: string): string {
+  if (docTitle.includes('無人載具')) return '無人載具計畫書段落改寫與查證';
+  if (docTitle.includes('02584K') || docTitle.includes('車輛行車管理')) {
+    return '車輛行車管理系統施工規範撰寫';
+  }
+  if (docTitle.includes('時程表') || docTitle.includes('WBS')) {
+    return '雙週滾動里程碑與WBS時程排程';
+  }
+  if (docTitle.includes('施工協調會')) return '桃園T3施工協調會簡報大綱整理';
+  if (docTitle.includes('LiDAR') || docTitle.includes('外參校正')) {
+    return '光達外參校正技術報告數據核對';
+  }
+  return docTitle.replace(/\.[a-z0-9]+$/i, '').slice(0, 18) || '檔案協作對話';
+}
+
+function deriveConversationTitleFromTurn(opts: {
+  userText: string;
+  aiReply?: string;
+  aiTitle?: string;
+  changeSummary?: string;
+  fileName?: string;
+}): string {
+  const cleanAiTitle = (opts.aiTitle ?? '')
+    .replace(/[*#"`「」『』]/g, '')
+    .trim();
+  if (cleanAiTitle.length >= 4 && cleanAiTitle.length <= 28) {
+    return cleanAiTitle;
+  }
+
+  const cleanSummary = (opts.changeSummary ?? '')
+    .replace(/[*#"`]/g, '')
+    .trim();
+  if (cleanSummary.length >= 4) {
+    return cleanSummary.slice(0, 22);
+  }
+
+  const rawUser = opts.userText
+    .replace(/^已提供參考資料（[^）]*），?/, '')
+    .replace(
+      /^(請問一下|請問|請幫我|幫我|我想問|我想知道|我需要知道|請告訴我|可以幫我|請協助)/,
+      ''
+    )
+    .replace(/[？?！!。，,、\r\n]+/g, ' ')
+    .trim();
+
+  if (opts.aiReply) {
+    const designMatch = opts.aiReply.match(
+      /此圖片為「([^」]{2,24})」所設計之([^，。]{3,16})/
+    );
+    if (designMatch) {
+      const designer = designMatch[1].split(/[(\s]/)[0];
+      const subject = designMatch[2].replace(/外觀|之/g, '');
+      const suffix = /位置|在哪|哪裡|路徑/.test(opts.userText)
+        ? '位置查詢'
+        : '分析';
+      return `${designer}${subject}${suffix}`.slice(0, 22);
+    }
+    if (/位置|在哪|哪裡|路徑/.test(opts.userText) && opts.fileName) {
+      const shortFile = opts.fileName
+        .replace(/\.[a-z0-9]+$/i, '')
+        .slice(0, 12);
+      return `查詢「${shortFile}」歸檔位置`;
+    }
+  }
+
+  if (rawUser.length >= 2 && rawUser.length <= 6 && opts.fileName) {
+    const shortFile = opts.fileName.replace(/\.[a-z0-9]+$/i, '').slice(0, 12);
+    return `${shortFile}：${rawUser}`;
+  }
+
+  if (rawUser.length >= 2) {
+    return rawUser.slice(0, 20);
+  }
+
+  if (opts.fileName) {
+    const shortFile = opts.fileName.replace(/\.[a-z0-9]+$/i, '').slice(0, 14);
+    return `分析與處理：${shortFile}`;
+  }
+
+  return '專案討論對話';
+}
+
+function deriveConversationMetaFromMessages(msgs: ChatMessage[]): {
+  title: string;
+  fileName?: string;
+  hasContentTitle: boolean;
+} {
+  const userMsgs = msgs.filter((m) => m.role === 'user');
+  if (userMsgs.length === 0) {
+    return { title: '新對話', hasContentTitle: false };
+  }
+  let attachedFileName: string | undefined;
+  for (const um of userMsgs) {
+    if (um.attachments && um.attachments.length > 0) {
+      attachedFileName = um.attachments[0].name;
+      break;
+    }
+  }
+  const lastUser = userMsgs[userMsgs.length - 1];
+  const lastAssistant = [...msgs]
+    .reverse()
+    .find((m) => m.role === 'assistant' && m.id !== 'welcome-msg');
+  const title = deriveConversationTitleFromTurn({
+    userText: lastUser.text,
+    aiReply: lastAssistant?.text,
+    fileName: attachedFileName,
+  });
+  return {
+    title,
+    fileName: attachedFileName,
+    hasContentTitle: true,
+  };
+}
 
 type QueuedPromptItem = {
   id: string;
@@ -473,6 +605,7 @@ export function ProjectLiveCoAuthor({
   externalDocToOpen,
   onClearExternalDoc,
   onSwitchToHistoryTab,
+  onNavigateToHistoryLocation,
   onActiveDocChange,
 }: {
   groups: HistoricalYearGroup[];
@@ -480,6 +613,11 @@ export function ProjectLiveCoAuthor({
   externalDocToOpen?: CoAuthorDocument | null;
   onClearExternalDoc?: () => void;
   onSwitchToHistoryTab?: () => void;
+  onNavigateToHistoryLocation?: (target: {
+    projectId: string;
+    year?: number;
+    fileId?: string;
+  }) => void;
   onActiveDocChange?: (hasActiveDoc: boolean) => void;
 }) {
   const [documents, setDocuments] = useState<CoAuthorDocument[]>(() =>
@@ -747,6 +885,273 @@ export function ProjectLiveCoAuthor({
   const [composerInput, setComposerInput] = useState('');
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
+  // Live Claude-style thinking timer & Assistant Message Action Toolbar states (Copy / Pin / Speak)
+  const [aiThinkingStartedAt, setAiThinkingStartedAt] = useState<number | null>(null);
+  const [aiThinkingElapsedMs, setAiThinkingElapsedMs] = useState<number>(0);
+  const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
+  const [pinnedMsgIds, setPinnedMsgIds] = useState<Set<string>>(() => new Set());
+  const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
+  const { locale: uiLocale } = useI18n();
+
+  useEffect(() => {
+    if (!isAiWriting) {
+      setAiThinkingStartedAt(null);
+      setAiThinkingElapsedMs(0);
+      return;
+    }
+    const started = Date.now();
+    setAiThinkingStartedAt(started);
+    setAiThinkingElapsedMs(0);
+    const timer = window.setInterval(() => {
+      setAiThinkingElapsedMs(Date.now() - started);
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [isAiWriting]);
+
+  async function handleCopyAssistantMessage(msg: ChatMessage) {
+    const cleanText = (msg.modifiedCopyText || msg.text || '').replace(/\*\*/g, '').trim();
+    if (!cleanText) return;
+    try {
+      await navigator.clipboard.writeText(cleanText);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = cleanText;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+      } catch {
+        // ignore
+      }
+      document.body.removeChild(ta);
+    }
+    setCopiedMsgId(msg.id);
+    window.setTimeout(() => {
+      setCopiedMsgId((prev) => (prev === msg.id ? null : prev));
+    }, 2000);
+  }
+
+  function handleTogglePinMessage(msgId: string) {
+    setPinnedMsgIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(msgId)) {
+        next.delete(msgId);
+      } else {
+        next.add(msgId);
+      }
+      return next;
+    });
+  }
+
+  function handleToggleSpeakMessage(msg: ChatMessage) {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    if (speakingMsgId === msg.id) {
+      stopActiveSpeech();
+      setSpeakingMsgId(null);
+      return;
+    }
+    const cleanText = (msg.text || '').replace(/\*\*/g, '').trim();
+    if (!cleanText) return;
+    void speakTextWithFemaleVoice({
+      text: cleanText,
+      uiLocale,
+      onStart: () => setSpeakingMsgId(msg.id),
+      onEnd: () => setSpeakingMsgId((prev) => (prev === msg.id ? null : prev)),
+      onError: () => setSpeakingMsgId((prev) => (prev === msg.id ? null : prev)),
+    });
+  }
+
+  function handleFollowUpQuoteMessage(msg: ChatMessage) {
+    const snippet = (msg.text || '').replace(/\*\*/g, '').trim().split('\n')[0]?.slice(0, 32) || '';
+    const prefix = snippet ? `針對「${snippet}…」這部分，請問：` : '請問關於上述內容：';
+    setComposerInput((prev) => (prev.trim() ? `${prev} ` : prefix));
+    window.setTimeout(() => composerTextareaRef.current?.focus(), 40);
+  }
+
+  function formatThinkingTimerLabel(ms: number): string {
+    const totalTenths = Math.max(1, Math.floor(ms / 100));
+    const secs = (totalTenths / 10).toFixed(1);
+    if (ms < 60_000) return `${secs}s`;
+    const mins = Math.floor(ms / 60_000);
+    const remSec = ((ms % 60_000) / 1000).toFixed(1);
+    return `${mins}m ${remSec}s`;
+  }
+
+  function renderClaudeThinkingBanner(compact = false) {
+    const sec = aiThinkingElapsedMs / 1000;
+    const stepIndex = sec < 2.2 ? 0 : sec < 5.0 ? 1 : sec < 8.5 ? 2 : 3;
+    const steps = activeDoc
+      ? [
+          `正在解析指令與鎖定「${aiWritingTargetLabel || activeDoc.title}」段落脈絡…`,
+          '正在檢索 Graphify 知識圖譜與比對歷年專案規範…',
+          '正在深度推理並撰寫結構化技術內容…',
+          '正在完成格式校對與同步更新文件畫布…',
+        ]
+      : [
+          '正在解析問題脈絡與檢索 Graphify 公司知識圖譜…',
+          '正在比對歷年專案歸檔目錄與技術規範文件…',
+          '正在深度思考分析並組織結構化技術細節…',
+          '正在彙整完整回覆與歷史文件導引路徑…',
+        ];
+    const currentStepText = steps[stepIndex] ?? steps[0];
+
+    return (
+      <div
+        className={`flex flex-col gap-2 rounded-2xl border border-indigo-200/80 bg-gradient-to-r from-white via-indigo-50/40 to-amber-50/30 shadow-xs ${
+          compact ? 'p-3' : 'max-w-2xl px-4 py-3.5'
+        }`}
+        role="status"
+        aria-live="polite"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+            {/* Animated Claude-style starburst + orbital ring */}
+            <div className="relative flex h-6 w-6 shrink-0 items-center justify-center">
+              <span className="absolute inset-0 animate-ping rounded-full bg-amber-400/30" />
+              <span className="absolute inset-0 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-600 border-r-amber-500" />
+              <svg
+                viewBox="0 0 24 24"
+                className="h-3.5 w-3.5 animate-pulse text-amber-600"
+                fill="currentColor"
+                aria-hidden
+              >
+                <path d="M12 2L14.2 8.8L21 11L14.2 13.2L12 20L9.8 13.2L3 11L9.8 8.8L12 2Z" />
+              </svg>
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span className="truncate text-xs font-bold text-slate-800 sm:text-sm">
+                  {currentStepText}
+                </span>
+              </div>
+              <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-500">
+                <span>AI 深度分析進行中</span>
+                <span>·</span>
+                <span>步驟 {stepIndex + 1} / 4</span>
+                <span className="inline-flex items-center gap-0.5 pl-1">
+                  <span className="h-1 w-1 animate-bounce rounded-full bg-indigo-500 [animation-delay:-0.25s]" />
+                  <span className="h-1 w-1 animate-bounce rounded-full bg-indigo-500 [animation-delay:-0.12s]" />
+                  <span className="h-1 w-1 animate-bounce rounded-full bg-indigo-500" />
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Live ticking stopwatch badge */}
+          <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-indigo-200 bg-white px-2.5 py-1 font-mono text-xs font-bold text-indigo-700 tabular-nums shadow-2xs">
+            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+            <span>{formatThinkingTimerLabel(aiThinkingElapsedMs)}</span>
+          </div>
+        </div>
+
+        {/* Animated progress bar */}
+        <div className="h-1 w-full overflow-hidden rounded-full bg-slate-200/70">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-sky-500 to-amber-500 transition-all duration-300"
+            style={{
+              width: `${Math.min(95, Math.max(15, ((stepIndex + 1) / 4) * 85 + (sec % 3) * 4))}%`,
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  function renderAssistantActionBar(m: ChatMessage) {
+    const isCopied = copiedMsgId === m.id;
+    const isPinned = pinnedMsgIds.has(m.id);
+    const isSpeaking = speakingMsgId === m.id;
+
+    return (
+      <div className="mt-2.5 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2 text-slate-500">
+        {/* 1. Copy button (Image 3 first icon) */}
+        <button
+          type="button"
+          onClick={() => void handleCopyAssistantMessage(m)}
+          title={isCopied ? '已複製到剪貼簿' : '複製產生的內容'}
+          aria-label="複製產生的內容"
+          className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium transition ${
+            isCopied
+              ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
+              : 'hover:bg-slate-100 hover:text-slate-800'
+          }`}
+        >
+          {isCopied ? (
+            <>
+              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+              <span>已複製</span>
+            </>
+          ) : (
+            <>
+              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+                <rect x="9" y="9" width="11" height="11" rx="2" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
+              <span>複製</span>
+            </>
+          )}
+        </button>
+
+        {/* 2. Follow-up / Expand inquiry button (Image 3 second icon) */}
+        <button
+          type="button"
+          onClick={() => handleFollowUpQuoteMessage(m)}
+          title="針對此內容接續追問"
+          aria-label="針對此內容接續追問"
+          className="inline-flex items-center justify-center rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+        >
+          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 3h6v6M14 10l6.1-6.1M9 21H3v-6M10 14l-6.1 6.1" />
+          </svg>
+        </button>
+
+        {/* 3. Pin / Bookmark button (Image 3 third icon) */}
+        <button
+          type="button"
+          onClick={() => handleTogglePinMessage(m.id)}
+          title={isPinned ? '取消釘選此回覆' : '釘選此重要回覆'}
+          aria-label="釘選回覆"
+          className={`inline-flex items-center justify-center rounded-lg p-1.5 transition ${
+            isPinned
+              ? 'bg-amber-100 text-amber-700 ring-1 ring-amber-300'
+              : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
+          }`}
+        >
+          <svg viewBox="0 0 24 24" className="h-4 w-4" fill={isPinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.9">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16 3l5 5-7 7-4-1-5 5-1-1 5-5-1-4 7-7z" />
+          </svg>
+        </button>
+
+        {/* 4. Read Aloud / Speaker button (Image 3 fourth icon) */}
+        <button
+          type="button"
+          onClick={() => handleToggleSpeakMessage(m)}
+          title={isSpeaking ? '停止語音朗讀' : '語音朗讀此回覆'}
+          aria-label="語音朗讀"
+          className={`inline-flex items-center justify-center rounded-lg p-1.5 transition ${
+            isSpeaking
+              ? 'bg-indigo-100 text-indigo-700 ring-1 ring-indigo-300'
+              : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
+          }`}
+        >
+          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M11 5L6 9H2v6h4l5 4V5z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14" />
+          </svg>
+        </button>
+
+        {/* 5. Timestamp (Image 3 right side) */}
+        <span className="ml-1.5 text-xs text-slate-400" suppressHydrationWarning>
+          {m.timestamp}
+        </span>
+      </div>
+    );
+  }
+
   // Floating Selection Orb ("小球") & Linked Paragraph state
   const [selectionOrb, setSelectionOrb] = useState<FloatingSelectionOrbState>({
     visible: false,
@@ -939,8 +1344,276 @@ export function ProjectLiveCoAuthor({
     [viewer.name]
   );
 
-  // Per-document / per-session conversation history
+  // Per-document / per-session conversation history & Left Sidebar Conversation List
+  const chatStorageKey = `td_pa_live_messages_${viewer.email || 'default'}`;
+  const convListStorageKey = `td_pa_conversations_v2_${viewer.email || 'default'}`;
+  const activeConvIdStorageKey = `td_pa_active_conv_id_v2_${viewer.email || 'default'}`;
+
+  const defaultConversations = useMemo<ProjectAssistantConversation[]>(() => {
+    const docConvs: ProjectAssistantConversation[] = STARTER_COAUTHOR_DOCUMENTS.map(
+      (doc, idx) => ({
+        id: `conv-doc-${doc.id}`,
+        title: deriveInitialDocConversationTitle(doc.title),
+        hasAiTitle: true,
+        docId: doc.id,
+        docType: doc.docType,
+        projectCode: doc.projectCode,
+        fileName: doc.title,
+        updatedAt: new Date(Date.now() - (idx + 1) * 60_000).toISOString(),
+        messages: [
+          {
+            id: `init-msg-${doc.id}`,
+            role: 'assistant',
+            text: `已綁定檔案「${doc.title}」。可直接在此對話討論整份文件的優化方向，或點擊上方「開啟並排編輯畫布」進入檔案編輯模式。`,
+            timestamp: doc.updatedAt,
+          },
+        ],
+      })
+    );
+    const currentConv: ProjectAssistantConversation = {
+      id: 'conv-current',
+      title: '新對話',
+      docId: null,
+      updatedAt: new Date().toISOString(),
+      messages: [defaultWelcomeMessage],
+    };
+    return [currentConv, ...docConvs];
+  }, [defaultWelcomeMessage]);
+
+  const [conversations, setConversations] =
+    useState<ProjectAssistantConversation[]>(defaultConversations);
+  const [activeConversationId, setActiveConversationId] = useState<string>('conv-current');
+  const [convSearchQuery, setConvSearchQuery] = useState('');
+  const [convMenuOpenId, setConvMenuOpenId] = useState<string | null>(null);
+  const [renamingConvId, setRenamingConvId] = useState<string | null>(null);
+  const [renameDraftTitle, setRenameDraftTitle] = useState('');
+
   const [messages, setMessages] = useState<ChatMessage[]>([defaultWelcomeMessage]);
+  const hasRestoredSessionRef = useRef(false);
+
+  useEffect(() => {
+    if (hasRestoredSessionRef.current) return;
+    hasRestoredSessionRef.current = true;
+    try {
+      const savedConvsRaw = window.sessionStorage.getItem(convListStorageKey);
+      const savedActiveId = window.sessionStorage.getItem(activeConvIdStorageKey);
+      if (savedConvsRaw) {
+        const parsedConvs = JSON.parse(savedConvsRaw) as ProjectAssistantConversation[];
+        if (Array.isArray(parsedConvs) && parsedConvs.length > 0) {
+          const normalized = parsedConvs.map((c) => {
+            if (!c.manualTitle && c.messages?.some((m) => m.role === 'user')) {
+              const derived = deriveConversationMetaFromMessages(c.messages);
+              return {
+                ...c,
+                title: c.title === '新對話' ? derived.title : c.title,
+                fileName: c.fileName || derived.fileName,
+                docType: c.docType || (derived.fileName ? 'attachment' : undefined),
+              };
+            }
+            return c;
+          });
+          setConversations(normalized);
+          const targetConv =
+            normalized.find((c) => c.id === savedActiveId) ?? normalized[0];
+          if (targetConv) {
+            setActiveConversationId(targetConv.id);
+            if (Array.isArray(targetConv.messages) && targetConv.messages.length > 0) {
+              setMessages(targetConv.messages);
+            }
+          }
+          return;
+        }
+      }
+
+      // Migrate legacy single-thread sessionStorage if present
+      const raw = window.sessionStorage.getItem(chatStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as ChatMessage[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setMessages(parsed);
+          const derived = deriveConversationMetaFromMessages(parsed);
+          setConversations((prev) =>
+            prev.map((c, idx) =>
+              idx === 0
+                ? {
+                    ...c,
+                    title: derived.hasContentTitle ? derived.title : c.title,
+                    fileName: derived.fileName || c.fileName,
+                    docType: derived.fileName ? 'attachment' : c.docType,
+                    messages: parsed,
+                    updatedAt: new Date().toISOString(),
+                  }
+                : c
+            )
+          );
+        }
+      }
+    } catch {
+      // ignore storage read errors
+    }
+  }, [chatStorageKey, convListStorageKey, activeConvIdStorageKey]);
+
+  // Sync `messages` changes into the active conversation item and auto-title from content
+  useEffect(() => {
+    if (!hasRestoredSessionRef.current) return;
+    setConversations((prev) =>
+      prev.map((conv) => {
+        if (conv.id !== activeConversationId) return conv;
+        const derived = deriveConversationMetaFromMessages(messages);
+        const shouldAutoUpdateTitle =
+          !conv.manualTitle &&
+          !conv.hasAiTitle &&
+          derived.hasContentTitle;
+        const nextFileName = conv.fileName || derived.fileName;
+        const nextDocType =
+          conv.docType || (derived.fileName ? 'attachment' : undefined);
+        return {
+          ...conv,
+          title: shouldAutoUpdateTitle ? derived.title : conv.title,
+          fileName: nextFileName,
+          docType: nextDocType,
+          messages,
+        };
+      })
+    );
+    try {
+      window.sessionStorage.setItem(chatStorageKey, JSON.stringify(messages.slice(-40)));
+    } catch {
+      // ignore storage quota errors
+    }
+  }, [messages, activeConversationId, chatStorageKey]);
+
+  useEffect(() => {
+    if (!hasRestoredSessionRef.current) return;
+    try {
+      const compactConvs = conversations.slice(0, 30).map((c) => ({
+        ...c,
+        messages: c.messages.slice(-25),
+      }));
+      window.sessionStorage.setItem(convListStorageKey, JSON.stringify(compactConvs));
+      window.sessionStorage.setItem(activeConvIdStorageKey, activeConversationId);
+    } catch {
+      // ignore storage quota errors
+    }
+  }, [conversations, activeConversationId, convListStorageKey, activeConvIdStorageKey]);
+
+  const activeConversation = useMemo(
+    () =>
+      conversations.find((c) => c.id === activeConversationId) ??
+      conversations[0] ??
+      null,
+    [conversations, activeConversationId]
+  );
+
+  const boundConversationDoc = useMemo(
+    () =>
+      activeConversation?.docId
+        ? documents.find((d) => d.id === activeConversation.docId) ?? null
+        : null,
+    [documents, activeConversation]
+  );
+
+  const filteredConversations = useMemo(() => {
+    const q = convSearchQuery.trim().toLowerCase();
+    if (!q) return conversations;
+    return conversations.filter(
+      (c) =>
+        c.title.toLowerCase().includes(q) ||
+        (c.fileName ?? '').toLowerCase().includes(q) ||
+        (c.projectCode ?? '').toLowerCase().includes(q)
+    );
+  }, [conversations, convSearchQuery]);
+
+  function handleStartNewConversation() {
+    const newId = `conv-${Date.now()}`;
+    const newConv: ProjectAssistantConversation = {
+      id: newId,
+      title: '新對話',
+      docId: null,
+      updatedAt: new Date().toISOString(),
+      messages: [defaultWelcomeMessage],
+    };
+    setConversations((prev) => [newConv, ...prev]);
+    setActiveConversationId(newId);
+    setMessages([defaultWelcomeMessage]);
+    setActiveDocId(null);
+    setStagedRefFiles([]);
+    setComposerInput('');
+    setConvMenuOpenId(null);
+    window.setTimeout(() => composerTextareaRef.current?.focus(), 60);
+  }
+
+  function handleSelectConversation(conv: ProjectAssistantConversation) {
+    setActiveConversationId(conv.id);
+    setMessages(
+      conv.messages && conv.messages.length > 0
+        ? conv.messages
+        : [defaultWelcomeMessage]
+    );
+    setActiveDocId(null);
+    setConvMenuOpenId(null);
+  }
+
+  function handleRenameConversation(convId: string, rawTitle: string) {
+    const trimmed = rawTitle.trim();
+    if (!trimmed) {
+      setRenamingConvId(null);
+      return;
+    }
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === convId
+          ? {
+              ...c,
+              title: trimmed.slice(0, 40),
+              manualTitle: true,
+              updatedAt: new Date().toISOString(),
+            }
+          : c
+      )
+    );
+    setRenamingConvId(null);
+    setConvMenuOpenId(null);
+  }
+
+  async function handleDeleteConversation(convId: string) {
+    const targetConv = conversations.find((c) => c.id === convId);
+    const ok = await confirmDialog({
+      title: `刪除「${targetConv?.title || '新對話'}」？`,
+      message: '確定要刪除此對話嗎？刪除後將從您的對話清單移除（雲端硬碟與歷史文件不會刪除）。',
+      confirmLabel: '刪除',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    setConversations((prev) => {
+      const remaining = prev.filter((c) => c.id !== convId);
+      if (remaining.length === 0) {
+        const fallback: ProjectAssistantConversation = {
+          id: `conv-${Date.now()}`,
+          title: '新對話',
+          docId: null,
+          updatedAt: new Date().toISOString(),
+          messages: [defaultWelcomeMessage],
+        };
+        setActiveConversationId(fallback.id);
+        setMessages([defaultWelcomeMessage]);
+        setActiveDocId(null);
+        return [fallback];
+      }
+      if (convId === activeConversationId) {
+        const nextActive = remaining[0];
+        setActiveConversationId(nextActive.id);
+        setMessages(
+          nextActive.messages.length > 0
+            ? nextActive.messages
+            : [defaultWelcomeMessage]
+        );
+        setActiveDocId(null);
+      }
+      return remaining;
+    });
+    setConvMenuOpenId(null);
+  }
 
   const spriteEndRef = useRef<HTMLDivElement | null>(null);
   const fullChatEndRef = useRef<HTMLDivElement | null>(null);
@@ -2832,14 +3505,36 @@ export function ProjectLiveCoAuthor({
     if (doc.pptSlides?.[0]) setSelectedSlideId(doc.pptSlides[0].id);
     setSelectedCell(null);
     if (isNewSession) {
-      setMessages([
+      const initMsgs: ChatMessage[] = [
         {
           id: `session-${Date.now()}`,
           role: 'assistant',
           text: `已載入「${doc.title}」。可直接與我討論整份文件的優化方向，或點一下指定區域鎖定改稿。`,
           timestamp: '剛剛',
         },
-      ]);
+      ];
+      const newConvId = `conv-${Date.now()}`;
+      const newConv: ProjectAssistantConversation = {
+        id: newConvId,
+        title: '新對話',
+        docId: doc.id,
+        docType: doc.docType,
+        projectCode: doc.projectCode,
+        fileName: doc.title,
+        updatedAt: new Date().toISOString(),
+        messages: initMsgs,
+      };
+      setConversations((prev) => [newConv, ...prev]);
+      setActiveConversationId(newConvId);
+      setMessages(initMsgs);
+    } else {
+      const existing = conversations.find((c) => c.docId === doc.id);
+      if (existing && existing.id !== activeConversationId) {
+        setActiveConversationId(existing.id);
+        setMessages(
+          existing.messages.length > 0 ? existing.messages : [defaultWelcomeMessage]
+        );
+      }
     }
   }
 
@@ -2919,6 +3614,35 @@ export function ProjectLiveCoAuthor({
   async function handleDroppedOrSelectedFiles(fileList: FileList | null) {
     if (!fileList || fileList.length === 0 || uploadingDocState) return;
     const file = fileList[0];
+
+    // If user dropped an image or PDF onto "拖放檔案至此開啟新對話", start a new conversation with that file staged
+    const isRefAttachmentOnly =
+      file.type.startsWith('image/') ||
+      file.type.startsWith('video/') ||
+      file.type === 'application/pdf' ||
+      /\.(png|jpe?g|gif|webp|svg|pdf|mp4|mov)$/i.test(file.name);
+
+    if (isRefAttachmentOnly) {
+      const newId = `conv-${Date.now()}`;
+      const newConv: ProjectAssistantConversation = {
+        id: newId,
+        title: '新對話',
+        docId: null,
+        docType: 'attachment',
+        fileName: file.name,
+        updatedAt: new Date().toISOString(),
+        messages: [defaultWelcomeMessage],
+      };
+      setConversations((prev) => [newConv, ...prev]);
+      setActiveConversationId(newId);
+      setMessages([defaultWelcomeMessage]);
+      setActiveDocId(null);
+      setStagedRefFiles([]);
+      await stageReferenceFiles(fileList);
+      window.setTimeout(() => composerTextareaRef.current?.focus(), 60);
+      return;
+    }
+
     const docType = inferDocTypeFromFileName(file.name);
     const matchedMeta = findMatchingProjectAndDriveItem(file.name);
     const { projectCode, projectName, projectId, driveItem } = matchedMeta;
@@ -3132,7 +3856,31 @@ export function ProjectLiveCoAuthor({
     resolvedDocIdsRef.current.add(id);
     setDocuments((prev) => [newDoc, ...prev]);
     setUploadingDocState(null);
-    openDocumentInWorkbench(newDoc, true);
+
+    const initMsgs: ChatMessage[] = [
+      {
+        id: `session-${Date.now()}`,
+        role: 'assistant',
+        text: `已載入檔案「${newDoc.title}」並開啟新對話。您可以直接在此對話輸入問題或改稿指令（對話標題將根據您的對話內容自動命名），或點擊上方「開啟並排編輯畫布」進入檔案編輯模式。`,
+        timestamp: '剛剛',
+      },
+    ];
+    const newConvId = `conv-${Date.now()}`;
+    const newConv: ProjectAssistantConversation = {
+      id: newConvId,
+      title: '新對話',
+      docId: newDoc.id,
+      docType: newDoc.docType,
+      projectCode: newDoc.projectCode,
+      fileName: newDoc.title,
+      updatedAt: new Date().toISOString(),
+      messages: initMsgs,
+    };
+    setConversations((prev) => [newConv, ...prev]);
+    setActiveConversationId(newConvId);
+    setMessages(initMsgs);
+    setActiveDocId(null);
+    window.setTimeout(() => composerTextareaRef.current?.focus(), 60);
   }
 
   function createNewBlankDocument(docType: CoAuthorDocType) {
@@ -3466,7 +4214,7 @@ export function ProjectLiveCoAuthor({
     window.addEventListener('mouseup', onMouseUp);
   }
 
-  async function stageReferenceFiles(fileList: FileList | null) {
+  async function stageReferenceFiles(fileList: FileList | File[] | null) {
     if (!fileList || fileList.length === 0) return;
     const incoming: StagedRefAttachment[] = [];
 
@@ -3486,7 +4234,7 @@ export function ProjectLiveCoAuthor({
           extractedText = undefined;
         }
       } else if (
-        file.size <= 7 * 1024 * 1024 &&
+        file.size <= 20 * 1024 * 1024 &&
         (file.type.startsWith('image/') ||
           file.type.startsWith('video/') ||
           file.type === 'application/pdf')
@@ -3598,7 +4346,14 @@ export function ProjectLiveCoAuthor({
       timestamp: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }),
       attachments:
         attachedRefs.length > 0
-          ? attachedRefs.map((f) => ({ name: f.name, kindLabel: f.kindLabel }))
+          ? attachedRefs.map((f) => ({
+              name: f.name,
+              kindLabel: f.kindLabel,
+              previewDataUrl:
+                f.mimeType.startsWith('image/') && f.base64Data
+                  ? `data:${f.mimeType};base64,${f.base64Data}`
+                  : undefined,
+            }))
           : undefined,
       linkedSnippet: effectiveLinked
         ? {
@@ -3614,14 +4369,40 @@ export function ProjectLiveCoAuthor({
         : undefined,
     };
 
+    const contextDoc = activeDoc ?? boundConversationDoc;
+
     setMessages((prev) => [...prev, userMsg]);
+    setConversations((prev) =>
+      prev.map((c) => {
+        if (c.id !== activeConversationId) return c;
+        const nextFile = c.fileName || attachedRefs[0]?.name || contextDoc?.title;
+        const nextDocType =
+          c.docType ||
+          contextDoc?.docType ||
+          (attachedRefs.length > 0 ? 'attachment' : undefined);
+        const provisionalTitle =
+          !c.manualTitle && (!c.hasAiTitle || c.title === '新對話')
+            ? deriveConversationTitleFromTurn({
+                userText: text,
+                fileName: nextFile,
+              })
+            : c.title;
+        return {
+          ...c,
+          title: provisionalTitle,
+          fileName: nextFile,
+          docType: nextDocType,
+          updatedAt: new Date().toISOString(),
+        };
+      })
+    );
     setIsAiWriting(true);
     setSpriteMinimized(false);
     setAiWritingTargetLabel(
       effectiveLinked?.label ??
         item.targetLabelSnapshot ??
         (effectiveScopeMode === 'whole_doc'
-          ? activeDoc?.title ?? '專案內容'
+          ? contextDoc?.title ?? '專案內容'
           : currentTargetInfo.label ?? '指定區域')
     );
 
@@ -3653,14 +4434,14 @@ export function ProjectLiveCoAuthor({
                   base64Data: f.base64Data,
                 }))
               : undefined,
-          activeDoc: activeDoc
+          activeDoc: contextDoc
             ? {
-                id: activeDoc.id,
-                title: activeDoc.title,
-                docType: activeDoc.docType,
-                driveItemId: activeDoc.driveItemId,
-                projectCode: activeDoc.projectCode,
-                projectName: activeDoc.projectName,
+                id: contextDoc.id,
+                title: contextDoc.title,
+                docType: contextDoc.docType,
+                driveItemId: contextDoc.driveItemId,
+                projectCode: contextDoc.projectCode,
+                projectName: contextDoc.projectName,
                 selectedTargetId: effectiveTargetId,
                 selectedTargetLabel: effectiveTargetLabel,
                 selectedRowIndex: item.selectedRowIndexSnapshot ?? selectedCell?.row ?? null,
@@ -3786,10 +4567,34 @@ export function ProjectLiveCoAuthor({
           data.writeResult?.reason === 'auth_failed',
         webSearch: data.webSearch,
         graphRetrieval: data.graphRetrieval,
+        historicalLocations: data.historicalLocations,
+        suggestedOptions: data.suggestedOptions,
         generatedImages: generatedImgs.length > 0 ? generatedImgs : undefined,
         editResult: appliedEdit,
       };
       setMessages((prev) => [...prev, assistantMsg]);
+      setConversations((prev) =>
+        prev.map((c) => {
+          if (c.id !== activeConversationId) return c;
+          const nextFile = c.fileName || attachedRefs[0]?.name || contextDoc?.title;
+          const refinedTitle = !c.manualTitle
+            ? deriveConversationTitleFromTurn({
+                userText: text,
+                aiReply: displayReply,
+                aiTitle: data.conversationTitle,
+                changeSummary: data.changeSummary,
+                fileName: nextFile,
+              })
+            : c.title;
+          return {
+            ...c,
+            title: refinedTitle,
+            hasAiTitle: true,
+            fileName: nextFile,
+            updatedAt: new Date().toISOString(),
+          };
+        })
+      );
 
       let hasStreamAnimation = false;
 
@@ -4141,40 +4946,31 @@ export function ProjectLiveCoAuthor({
               : 'border-slate-200/80 bg-white'
           }`}
         >
-          <div className="border-b border-slate-100 p-4">
-            <h2 className="text-sm font-extrabold text-td-blue-dark">
-              專案協作檔案
-            </h2>
-
-            <div className="mt-3 grid grid-cols-3 gap-1.5">
-              <button
-                type="button"
-                onClick={() => createNewBlankDocument('word')}
-                className="flex flex-col items-center justify-center rounded-xl border border-blue-200 bg-blue-50/60 px-2 py-2 text-[11px] font-bold text-blue-700 transition hover:bg-blue-100/80"
-              >
-                <span>+ 新 Word</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => createNewBlankDocument('excel')}
-                className="flex flex-col items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50/60 px-2 py-2 text-[11px] font-bold text-emerald-700 transition hover:bg-emerald-100/80"
-              >
-                <span>+ 新 Excel</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => createNewBlankDocument('ppt')}
-                className="flex flex-col items-center justify-center rounded-xl border border-amber-200 bg-amber-50/60 px-2 py-2 text-[11px] font-bold text-amber-800 transition hover:bg-amber-100/80"
-              >
-                <span>+ 新 PPT</span>
-              </button>
+          <div className="border-b border-slate-100 p-3.5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-extrabold text-td-blue-dark">
+                專案助手 · 對話清單
+              </h2>
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">
+                {conversations.length} 則對話
+              </span>
             </div>
+
+            {/* Direct New Conversation Button */}
+            <button
+              type="button"
+              onClick={handleStartNewConversation}
+              className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-xl bg-td-blue px-3 py-2.5 text-xs font-bold text-white shadow-xs transition hover:bg-td-blue-dark"
+            >
+              <span className="text-sm leading-none">＋</span>
+              <span>開啟新對話</span>
+            </button>
 
             {/* Drag and Drop Zone to start a new conversation with a dropped file */}
             <input
               ref={fileInputRef}
               type="file"
-              accept=".doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md"
+              accept=".doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.pdf,.png,.jpg,.jpeg,.webp,.txt,.md"
               className="hidden"
               onChange={(e) => {
                 void handleDroppedOrSelectedFiles(e.target.files);
@@ -4185,7 +4981,7 @@ export function ProjectLiveCoAuthor({
               type="button"
               disabled={Boolean(uploadingDocState)}
               onClick={() => fileInputRef.current?.click()}
-              className={`mt-2.5 flex w-full flex-col items-center justify-center rounded-xl border border-dashed px-3 py-2.5 text-center transition ${
+              className={`mt-2 flex w-full flex-col items-center justify-center rounded-xl border border-dashed px-3 py-2 text-center transition ${
                 uploadingDocState
                   ? 'border-td-blue bg-blue-50/80 text-td-blue'
                   : isDraggingFileOverSidebar
@@ -4206,47 +5002,214 @@ export function ProjectLiveCoAuthor({
                     拖放檔案至此開啟新對話
                   </span>
                   <span className="mt-0.5 text-[10px] text-slate-400">
-                    支援 Word / Excel / PPT（或點擊上傳）
+                    支援 Word / Excel / PPT / PDF / 圖片（或點擊上傳）
                   </span>
                 </>
               )}
             </button>
+
+            {/* Compact New Blank Office Doc Buttons */}
+            <div className="mt-2 grid grid-cols-3 gap-1.5">
+              <button
+                type="button"
+                onClick={() => createNewBlankDocument('word')}
+                className="flex items-center justify-center rounded-lg border border-blue-200 bg-blue-50/60 px-2 py-1.5 text-[11px] font-bold text-blue-700 transition hover:bg-blue-100/80"
+              >
+                <span>+ 新 Word</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => createNewBlankDocument('excel')}
+                className="flex items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50/60 px-2 py-1.5 text-[11px] font-bold text-emerald-700 transition hover:bg-emerald-100/80"
+              >
+                <span>+ 新 Excel</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => createNewBlankDocument('ppt')}
+                className="flex items-center justify-center rounded-lg border border-amber-200 bg-amber-50/60 px-2 py-1.5 text-[11px] font-bold text-amber-800 transition hover:bg-amber-100/80"
+              >
+                <span>+ 新 PPT</span>
+              </button>
+            </div>
+
+            {/* Search Input */}
+            <div className="mt-2">
+              <input
+                type="text"
+                value={convSearchQuery}
+                onChange={(e) => setConvSearchQuery(e.target.value)}
+                placeholder="搜尋對話標題或處理檔案…"
+                className="w-full rounded-lg border border-slate-200 bg-slate-50/70 px-2.5 py-1.5 text-xs text-slate-800 placeholder:text-slate-400 focus:border-td-blue focus:bg-white focus:outline-hidden"
+              />
+            </div>
           </div>
 
           <div className="flex-1 space-y-2 overflow-y-auto p-3">
-            <p className="px-1.5 text-[11px] font-bold text-slate-400">
-              專案檔案清單
-            </p>
-            {documents.map((doc) => {
+            <div className="flex items-center justify-between px-1">
+              <p className="text-[11px] font-bold text-slate-400">
+                對話清單
+              </p>
+              <span className="text-[10px] text-slate-400">
+                依對話內容自動命名
+              </span>
+            </div>
+
+            {filteredConversations.map((conv) => {
+              const isActive = conv.id === activeConversationId;
+              const isRenaming = renamingConvId === conv.id;
+              const boundDoc = conv.docId
+                ? documents.find((d) => d.id === conv.docId)
+                : null;
               const badgeColor =
-                doc.docType === 'word'
+                conv.docType === 'word'
                   ? 'bg-blue-50 text-blue-700 ring-blue-200'
-                  : doc.docType === 'excel'
+                  : conv.docType === 'excel'
                   ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
-                  : 'bg-amber-50 text-amber-800 ring-amber-200';
+                  : conv.docType === 'ppt'
+                  ? 'bg-amber-50 text-amber-800 ring-amber-200'
+                  : conv.docType === 'attachment' || conv.fileName
+                  ? 'bg-indigo-50 text-indigo-700 ring-indigo-200'
+                  : 'bg-slate-100 text-slate-500 ring-slate-200';
+              const badgeLabel =
+                conv.docType === 'word'
+                  ? 'WORD'
+                  : conv.docType === 'excel'
+                  ? 'EXCEL'
+                  : conv.docType === 'ppt'
+                  ? 'PPT'
+                  : conv.fileName
+                  ? '附件'
+                  : '純對話';
+
               return (
-                <button
-                  key={doc.id}
-                  type="button"
-                  onClick={() => openDocumentInWorkbench(doc, true)}
-                  className="group flex w-full items-start gap-2.5 rounded-xl border border-slate-200/80 bg-white p-3 text-left transition hover:border-td-blue hover:bg-blue-50/30 hover:shadow-xs"
+                <div
+                  key={conv.id}
+                  onClick={() => {
+                    if (!isRenaming) handleSelectConversation(conv);
+                  }}
+                  className={`group relative flex w-full cursor-pointer flex-col gap-1.5 rounded-xl border p-3 text-left transition ${
+                    isActive
+                      ? 'border-td-blue bg-blue-50/50 shadow-xs ring-1 ring-td-blue/30'
+                      : 'border-slate-200/80 bg-white hover:border-td-blue/60 hover:bg-blue-50/20 hover:shadow-2xs'
+                  }`}
                 >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <span
-                        className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-bold ring-1 ${badgeColor}`}
+                  {isRenaming ? (
+                    <form
+                      onClick={(e) => e.stopPropagation()}
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        handleRenameConversation(conv.id, renameDraftTitle);
+                      }}
+                      className="flex items-center gap-1.5"
+                    >
+                      <input
+                        type="text"
+                        value={renameDraftTitle}
+                        onChange={(e) => setRenameDraftTitle(e.target.value)}
+                        autoFocus
+                        className="min-w-0 flex-1 rounded-lg border border-td-blue bg-white px-2 py-1 text-xs font-bold text-slate-900 focus:outline-hidden"
+                      />
+                      <button
+                        type="submit"
+                        className="shrink-0 rounded-lg bg-td-blue px-2 py-1 text-[11px] font-bold text-white"
                       >
-                        {doc.docType.toUpperCase()}
-                      </span>
-                      <span className="font-mono text-[10px] font-semibold text-slate-400">
-                        {doc.projectCode}
-                      </span>
+                        儲存
+                      </button>
+                    </form>
+                  ) : (
+                    <div className="flex items-start justify-between gap-1.5">
+                      <p className="line-clamp-2 flex-1 text-xs font-extrabold text-td-blue-dark group-hover:text-td-blue">
+                        {conv.title || '新對話'}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setConvMenuOpenId((prev) =>
+                            prev === conv.id ? null : conv.id
+                          );
+                        }}
+                        className="shrink-0 rounded px-1.5 py-0.5 text-xs text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                        title="對話選項"
+                      >
+                        ⋯
+                      </button>
                     </div>
-                    <p className="mt-1 line-clamp-2 text-xs font-bold text-td-blue-dark group-hover:text-td-blue">
-                      {doc.title}
-                    </p>
+                  )}
+
+                  {/* File being processed indicator */}
+                  <div className="flex items-center gap-1.5 rounded-lg bg-slate-50/90 px-2 py-1 ring-1 ring-slate-200/70">
+                    <span
+                      className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] font-bold ring-1 ${badgeColor}`}
+                    >
+                      {badgeLabel}
+                    </span>
+                    {conv.projectCode && (
+                      <span className="shrink-0 font-mono text-[10px] font-semibold text-slate-400">
+                        {conv.projectCode}
+                      </span>
+                    )}
+                    <span
+                      className="min-w-0 flex-1 truncate text-[11px] font-medium text-slate-600"
+                      title={conv.fileName || '尚未綁定特定檔案（可直接對話或拖放檔案）'}
+                    >
+                      {conv.fileName || '尚未綁定特定檔案'}
+                    </span>
                   </div>
-                </button>
+
+                  {/* Bottom row: timestamp + quick open workbench button if bound to a document */}
+                  <div className="flex items-center justify-between gap-2 pt-0.5 text-[10px] text-slate-400">
+                    <span suppressHydrationWarning>
+                      {new Date(conv.updatedAt).toLocaleString('zh-TW', {
+                        month: 'numeric',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                    {boundDoc && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSelectConversation(conv);
+                          openDocumentInWorkbench(boundDoc, false);
+                        }}
+                        className="rounded-md bg-white px-2 py-0.5 text-[10px] font-bold text-td-blue ring-1 ring-td-blue/30 transition hover:bg-td-blue hover:text-white"
+                      >
+                        開啟檔案畫布 →
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Rename / Delete Popover Menu */}
+                  {convMenuOpenId === conv.id && !isRenaming && (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="mt-1 flex items-center justify-end gap-3 border-t border-slate-100 pt-1.5 text-[11px]"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRenameDraftTitle(conv.title);
+                          setRenamingConvId(conv.id);
+                          setConvMenuOpenId(null);
+                        }}
+                        className="font-semibold text-slate-600 underline hover:text-td-blue"
+                      >
+                        重新命名
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteConversation(conv.id)}
+                        className="font-semibold text-rose-600 underline hover:text-rose-700"
+                      >
+                        刪除對話
+                      </button>
+                    </div>
+                  )}
+                </div>
               );
             })}
 
@@ -4264,6 +5227,42 @@ export function ProjectLiveCoAuthor({
 
         {/* Center Main AI Project Assistant Chat Area */}
         <div className="flex flex-1 flex-col overflow-hidden">
+          {/* Active Conversation Header Bar showing Conversation Title & File being processed */}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 bg-white px-4 py-2.5 sm:px-8">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <h3 className="truncate text-sm font-extrabold text-td-blue-dark">
+                  {activeConversation?.title || '新對話'}
+                </h3>
+                <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+                  對話內容自動命名
+                </span>
+              </div>
+              <div className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-500">
+                <span className="shrink-0 font-semibold text-slate-400">處理檔案：</span>
+                {activeConversation?.fileName ? (
+                  <span className="truncate font-semibold text-indigo-700">
+                    {activeConversation.fileName}
+                  </span>
+                ) : (
+                  <span className="truncate text-slate-400">
+                    尚未綁定特定檔案（可直接提問、貼上圖片或從左側拖放檔案）
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {boundConversationDoc && (
+              <button
+                type="button"
+                onClick={() => openDocumentInWorkbench(boundConversationDoc, false)}
+                className="shrink-0 rounded-xl bg-td-blue px-3.5 py-1.5 text-xs font-bold text-white shadow-2xs transition hover:bg-td-blue-dark"
+              >
+                開啟並排編輯畫布（{boundConversationDoc.docType.toUpperCase()}）→
+              </button>
+            )}
+          </div>
+
           <div className="flex-1 space-y-4 overflow-y-auto px-4 py-6 sm:px-8">
             <div className="mx-auto max-w-4xl space-y-4">
               {/* Chat Conversation Messages */}
@@ -4287,6 +5286,30 @@ export function ProjectLiveCoAuthor({
                       </span>
                       <span>{m.timestamp}</span>
                     </div>
+                    {m.attachments && m.attachments.length > 0 && (
+                      <div className="mb-2 flex flex-wrap gap-2">
+                        {m.attachments.map((att, idx) => (
+                          <div
+                            key={idx}
+                            className={`inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-medium ${
+                              m.role === 'user'
+                                ? 'bg-white/15 text-white ring-1 ring-white/25'
+                                : 'bg-slate-100 text-slate-700'
+                            }`}
+                          >
+                            {att.previewDataUrl && (
+                              <img
+                                src={att.previewDataUrl}
+                                alt={att.name}
+                                className="h-10 w-10 rounded object-cover ring-1 ring-black/10"
+                              />
+                            )}
+                            <span>參考資料：{att.name}</span>
+                            <span className="opacity-75">({att.kindLabel})</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     {m.role === 'assistant' && m.webSearch && (
                       <div className="mb-2 rounded-lg border border-sky-200/80 bg-sky-50/70 px-2.5 py-1.5 text-xs text-sky-900">
                         <div className="flex flex-wrap items-center gap-1.5 font-semibold text-sky-800">
@@ -4335,9 +5358,88 @@ export function ProjectLiveCoAuthor({
                       </div>
                     )}
                     <div className="whitespace-pre-wrap">{m.text}</div>
+                    {m.role === 'assistant' && m.historicalLocations && m.historicalLocations.length > 0 && (
+                      <div className="mt-3 rounded-xl border border-indigo-200/80 bg-indigo-50/60 p-3">
+                        <div className="mb-2 flex items-center justify-between gap-2 text-xs font-bold text-indigo-900">
+                          <span>歷史文件整理位置（點擊下方按鈕直接導引前往）</span>
+                          {onSwitchToHistoryTab && (
+                            <button
+                              type="button"
+                              onClick={onSwitchToHistoryTab}
+                              className="rounded-lg bg-white px-2.5 py-1 text-[11px] font-bold text-indigo-700 shadow-2xs ring-1 ring-indigo-200 transition hover:bg-indigo-600 hover:text-white"
+                            >
+                              切換至「歷史文件」總覽 →
+                            </button>
+                          )}
+                        </div>
+                        <div className="space-y-1.5">
+                          {m.historicalLocations.map((loc, lIdx) => (
+                            <div
+                              key={`${loc.projectId}-${loc.fileId ?? lIdx}`}
+                              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-indigo-100 bg-white px-3 py-2 text-xs shadow-2xs"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="font-semibold text-slate-800">
+                                  {loc.historyPath}
+                                </div>
+                                {loc.summary && (
+                                  <div className="mt-0.5 line-clamp-1 text-[11px] text-slate-500">
+                                    {loc.summary}
+                                  </div>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (onNavigateToHistoryLocation) {
+                                    onNavigateToHistoryLocation({
+                                      projectId: loc.projectId,
+                                      year: loc.year,
+                                      fileId: loc.fileId,
+                                    });
+                                  } else {
+                                    onSwitchToHistoryTab?.();
+                                  }
+                                }}
+                                className="shrink-0 rounded-lg bg-td-blue px-3 py-1.5 text-xs font-bold text-white shadow-2xs transition hover:bg-td-blue-dark"
+                              >
+                                {loc.fileId && loc.kind === 'file'
+                                  ? '前往歷史文件並預覽 →'
+                                  : '前往此歷史專案位置 →'}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {m.role === 'assistant' && m.suggestedOptions && m.suggestedOptions.length > 0 && (
+                      <div className="mt-3 border-t border-slate-100 pt-2.5">
+                        <div className="mb-1.5 text-xs font-semibold text-slate-500">
+                          您可以點選以下選項繼續詢問：
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {m.suggestedOptions.map((opt, oIdx) => (
+                            <button
+                              key={`${m.id}-opt-${oIdx}`}
+                              type="button"
+                              onClick={() => void handleSendPrompt(opt)}
+                              className="rounded-xl border border-indigo-200 bg-indigo-50/70 px-3 py-1.5 text-left text-xs font-semibold text-indigo-800 transition hover:border-indigo-400 hover:bg-indigo-100"
+                            >
+                              {opt} →
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {m.role === 'assistant' && renderAssistantActionBar(m)}
                   </div>
                 </div>
               ))}
+              {isAiWriting && (
+                <div className="flex justify-start">
+                  {renderClaudeThinkingBanner(false)}
+                </div>
+              )}
               <div ref={fullChatEndRef} />
             </div>
           </div>
@@ -4352,6 +5454,13 @@ export function ProjectLiveCoAuthor({
                       key={rf.id}
                       className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50/80 px-2.5 py-1 text-xs font-semibold text-indigo-800"
                     >
+                      {rf.mimeType.startsWith('image/') && rf.base64Data && (
+                        <img
+                          src={`data:${rf.mimeType};base64,${rf.base64Data}`}
+                          alt={rf.name}
+                          className="h-7 w-7 rounded object-cover ring-1 ring-indigo-300/60"
+                        />
+                      )}
                       <span>參考資料：{rf.name}</span>
                       <span className="text-[10px] text-indigo-500">({rf.kindLabel})</span>
                       <button
@@ -4751,7 +5860,7 @@ export function ProjectLiveCoAuthor({
               <button
                 type="button"
                 onClick={() => setActiveDocId(null)}
-                title="回到上一頁（檔案清單）"
+                title="回到上一頁（對話清單）"
                 className="flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold text-slate-600 transition hover:bg-slate-200/60 hover:text-slate-900"
               >
                 ←
@@ -4908,7 +6017,7 @@ export function ProjectLiveCoAuthor({
                   className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-200/60 hover:text-slate-900"
                 >
                   <span>←</span>
-                  <span>檔案清單</span>
+                  <span>對話清單</span>
                 </button>
 
                 <div className="flex items-center gap-1">
@@ -6037,6 +7146,13 @@ export function ProjectLiveCoAuthor({
                       key={rf.id}
                       className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 shadow-2xs"
                     >
+                      {rf.mimeType.startsWith('image/') && rf.base64Data && (
+                        <img
+                          src={`data:${rf.mimeType};base64,${rf.base64Data}`}
+                          alt={rf.name}
+                          className="h-7 w-7 rounded object-cover ring-1 ring-slate-200"
+                        />
+                      )}
                       <span>參考資料：{rf.name}</span>
                       <span className="text-[10px] text-slate-400">({rf.kindLabel})</span>
                       <button
@@ -6306,8 +7422,15 @@ export function ProjectLiveCoAuthor({
                       {m.attachments.map((att, idx) => (
                         <span
                           key={idx}
-                          className="inline-flex items-center gap-1 rounded-md bg-slate-200/70 px-2.5 py-0.5 text-xs font-medium text-slate-700"
+                          className="inline-flex items-center gap-1.5 rounded-md bg-slate-200/70 px-2.5 py-1 text-xs font-medium text-slate-700"
                         >
+                          {att.previewDataUrl && (
+                            <img
+                              src={att.previewDataUrl}
+                              alt={att.name}
+                              className="h-7 w-7 rounded object-cover ring-1 ring-slate-300"
+                            />
+                          )}
                           <span>參考資料：{att.name}</span>
                           <span className="opacity-75">({att.kindLabel})</span>
                         </span>
@@ -6361,6 +7484,72 @@ export function ProjectLiveCoAuthor({
                     </div>
                   )}
                   <div className="whitespace-pre-wrap">{m.text.replace(/\*\*/g, '')}</div>
+                  {m.role === 'assistant' && m.historicalLocations && m.historicalLocations.length > 0 && (
+                    <div className="mt-2.5 rounded-xl border border-indigo-200/80 bg-indigo-50/60 p-2.5">
+                      <div className="mb-1.5 flex items-center justify-between gap-2 text-[11px] font-bold text-indigo-900">
+                        <span>歷史文件整理位置（點擊直接導引）</span>
+                        {onSwitchToHistoryTab && (
+                          <button
+                            type="button"
+                            onClick={onSwitchToHistoryTab}
+                            className="rounded bg-white px-2 py-0.5 text-[10px] font-bold text-indigo-700 ring-1 ring-indigo-200 transition hover:bg-indigo-600 hover:text-white"
+                          >
+                            歷史文件總覽 →
+                          </button>
+                        )}
+                      </div>
+                      <div className="space-y-1.5">
+                        {m.historicalLocations.map((loc, lIdx) => (
+                          <div
+                            key={`${loc.projectId}-${loc.fileId ?? lIdx}`}
+                            className="flex flex-col gap-1.5 rounded-lg border border-indigo-100 bg-white p-2 text-xs shadow-2xs"
+                          >
+                            <div className="font-semibold text-slate-800">
+                              {loc.historyPath}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (onNavigateToHistoryLocation) {
+                                  onNavigateToHistoryLocation({
+                                    projectId: loc.projectId,
+                                    year: loc.year,
+                                    fileId: loc.fileId,
+                                  });
+                                } else {
+                                  onSwitchToHistoryTab?.();
+                                }
+                              }}
+                              className="self-start rounded-md bg-td-blue px-2.5 py-1 text-[11px] font-bold text-white shadow-2xs transition hover:bg-td-blue-dark"
+                            >
+                              {loc.fileId && loc.kind === 'file'
+                                ? '前往歷史文件並預覽 →'
+                                : '前往此歷史專案位置 →'}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {m.role === 'assistant' && m.suggestedOptions && m.suggestedOptions.length > 0 && (
+                    <div className="mt-2.5 border-t border-slate-100 pt-2">
+                      <div className="mb-1.5 text-[11px] font-semibold text-slate-500">
+                        您可以點選以下選項繼續詢問：
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {m.suggestedOptions.map((opt, oIdx) => (
+                          <button
+                            key={`${m.id}-sopt-${oIdx}`}
+                            type="button"
+                            onClick={() => void handleSendPrompt(opt)}
+                            className="rounded-lg border border-indigo-200 bg-indigo-50/70 px-2.5 py-1 text-left text-[11px] font-semibold text-indigo-800 transition hover:border-indigo-400 hover:bg-indigo-100"
+                          >
+                            {opt} →
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   {m.role === 'assistant' && m.editResult && (
                     <EditResultPanel
                       edit={m.editResult}
@@ -6429,15 +7618,11 @@ export function ProjectLiveCoAuthor({
                       ))}
                     </div>
                   )}
+                  {m.role === 'assistant' && renderAssistantActionBar(m)}
                 </div>
               ))}
 
-              {isAiWriting && (
-                <div className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-slate-50 p-3 text-base font-medium text-slate-700">
-                  <span className="inline-block h-2.5 w-2.5 animate-ping rounded-full bg-emerald-500" />
-                  <span>正在分析與撰寫…</span>
-                </div>
-              )}
+              {isAiWriting && renderClaudeThinkingBanner(true)}
 
               {promptQueue.length > 0 && (
                 <div className="space-y-2.5">

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useTransition } from 'react';
+import { confirmDialog } from '@/app/components/dialog';
 import { abandonDraftAction, listDraftLibraryAction } from '@/lib/ai-chat/actions';
 
 type Props = {
@@ -109,7 +110,13 @@ export function DraftLibraryPanel({ onOpenDraft }: Props) {
                   type="button"
                   className="mt-1 text-xs text-amber-800 underline"
                   onClick={async () => {
-                    if (!window.confirm('確定放棄此草稿？此操作不可從頁籤關閉復原。')) return;
+                    const ok = await confirmDialog({
+                      title: `放棄草稿「${item.title}」？`,
+                      message: '確定放棄此草稿？此操作不可從頁籤關閉復原。',
+                      confirmLabel: '放棄草稿',
+                      tone: 'danger',
+                    });
+                    if (!ok) return;
                     const res = await abandonDraftAction({ draftId: item.id });
                     if (res.ok) reload(0);
                   }}

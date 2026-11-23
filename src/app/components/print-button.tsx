@@ -4,74 +4,83 @@ import { useEffect, useState } from 'react';
 import { useI18n } from '@/lib/i18n/context';
 
 /**
- * Triggers the browser's native print dialog for a given application detail URL
- * by loading the full detail page (including all fields, tables, and the complete
- * ApprovalTimeline) inside an offscreen iframe and invoking `contentWindow.print()`.
+ * Directly prepares the full printable application document in the background
+ * on the current page and invokes the OS native printer dialog (`window.print()`)
+ * without navigating away or opening a new browser tab.
  */
-export function triggerPrintUrl(href: string, onDone?: () => void) {
+export async function triggerPrintUrl(href: string, onDone?: () => void) {
   if (typeof window === 'undefined') return;
 
-  const printUrl = `${href}${href.includes('?') ? '&' : '?'}print=1`;
+  const cleanup = () => {
+    document.body.classList.remove('accsys-direct-printing');
+    const existing = document.getElementById('accsys-direct-print-root');
+    if (existing) existing.remove();
+  };
 
-  // Remove any previous print iframe
-  const existing = document.getElementById('accsys-hidden-print-frame');
-  if (existing) existing.remove();
-
-  const iframe = document.createElement('iframe');
-  iframe.id = 'accsys-hidden-print-frame';
-  iframe.src = printUrl;
-  iframe.setAttribute('aria-hidden', 'true');
-  iframe.style.position = 'fixed';
-  iframe.style.left = '-9999px';
-  iframe.style.top = '0';
-  iframe.style.width = '1024px';
-  iframe.style.height = '900px';
-  iframe.style.border = '0';
-  iframe.style.opacity = '0';
-  iframe.style.pointerEvents = 'none';
-
-  let printed = false;
-
-  const doPrint = () => {
-    if (printed) return;
-    printed = true;
-    window.removeEventListener('message', onMessage);
-    window.clearTimeout(fallbackTimer);
-    try {
-      const cw = iframe.contentWindow;
-      if (cw) {
-        cw.focus();
-        cw.print();
-        onDone?.();
-        return;
-      }
-    } catch {
-      /* fallback to opening in new tab if iframe print fails */
+  try {
+    const res = await fetch(href, {
+      credentials: 'same-origin',
+      headers: { Accept: 'text/html' },
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to fetch printable document (${res.status})`);
     }
-    window.open(printUrl, '_blank', 'noopener,noreferrer');
+    const html = await res.text();
+    const parser = new DOMParser();
+    const parsedDoc = parser.parseFromString(html, 'text/html');
+    const mainEl = parsedDoc.querySelector('main');
+    if (!mainEl) {
+      throw new Error('Printable main section not found');
+    }
+
+    // Remove interactive / navigation elements that should not appear on paper
+    mainEl
+      .querySelectorAll(
+        'nav, button, input, select, textarea, .print\\:hidden, [aria-label="簽核與單據追蹤導覽列"]'
+      )
+      .forEach((el) => el.remove());
+
+    cleanup();
+
+    const printRoot = document.createElement('div');
+    printRoot.id = 'accsys-direct-print-root';
+    printRoot.setAttribute('aria-hidden', 'true');
+    printRoot.appendChild(document.importNode(mainEl, true));
+
+    document.body.appendChild(printRoot);
+    document.body.classList.add('accsys-direct-printing');
+
+    let finished = false;
+    const finishPrint = () => {
+      if (finished) return;
+      finished = true;
+      window.removeEventListener('afterprint', finishPrint);
+      cleanup();
+      onDone?.();
+    };
+
+    window.addEventListener('afterprint', finishPrint, { once: true });
+
+    // Wait 2 animation frames so styles & layout are ready, then open the printer dialog directly
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        try {
+          window.print();
+        } finally {
+          // Fallback cleanup in case afterprint does not fire in certain environments
+          window.setTimeout(finishPrint, 1000);
+        }
+      });
+    });
+  } catch {
+    cleanup();
     onDone?.();
-  };
-
-  const onMessage = (e: MessageEvent) => {
-    if (e.origin !== window.location.origin) return;
-    if (e.data && typeof e.data === 'object' && e.data.type === 'accsys-print-ready') {
-      window.setTimeout(doPrint, 120);
-    }
-  };
-
-  window.addEventListener('message', onMessage);
-
-  iframe.onload = () => {
-    window.setTimeout(doPrint, 450);
-  };
-
-  const fallbackTimer = window.setTimeout(doPrint, 4000);
-  document.body.appendChild(iframe);
+  }
 }
 
 /**
- * Rendered on form detail pages (`status === 'approved'`).
- * Also coordinates `?print=1` auto-printing when opened directly or via `triggerPrintUrl`.
+ * Rendered on form detail pages.
+ * Directly triggers `window.print()` on the current page.
  */
 export function PrintButton({ label }: { label: string }) {
   useEffect(() => {
@@ -79,15 +88,6 @@ export function PrintButton({ label }: { label: string }) {
     const params = new URLSearchParams(window.location.search);
     if (params.get('print') !== '1') return;
 
-    if (window.self !== window.top) {
-      // Loaded inside the hidden print iframe: notify parent that detail + timeline are mounted
-      const id = window.requestAnimationFrame(() => {
-        window.parent.postMessage({ type: 'accsys-print-ready' }, window.location.origin);
-      });
-      return () => window.cancelAnimationFrame(id);
-    }
-
-    // Opened directly in a browser tab with ?print=1
     params.delete('print');
     const cleanSearch = params.toString();
     const cleanUrl = `${window.location.pathname}${cleanSearch ? `?${cleanSearch}` : ''}${window.location.hash}`;
@@ -112,8 +112,9 @@ export function PrintButton({ label }: { label: string }) {
 }
 
 /**
- * Compact shortcut button for approved application rows in「我的申請」and AI chat cards.
- * Directly loads the detailed application + approval results and pops up the OS printer dialog.
+ * Compact shortcut button for application rows in「簽核與單據追蹤」and AI chat cards.
+ * Prepares the full printable form + approval timeline in the background and
+ * pops up the OS printer dialog directly on the current page without navigating away.
  */
 export function QuickPrintButton({
   href,
@@ -130,12 +131,13 @@ export function QuickPrintButton({
       type="button"
       disabled={printing}
       onClick={(e) => {
+        e.preventDefault();
         e.stopPropagation();
         if (printing) return;
         setPrinting(true);
-        triggerPrintUrl(href, () => setPrinting(false));
+        void triggerPrintUrl(href, () => setPrinting(false));
       }}
-      title="列印完整申請單與詳細簽核結果"
+      title="直接準備此單據完整內容並開啟印表機列印"
       className={
         size === 'xs'
           ? 'inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50/70 px-2.5 py-1 text-xs font-semibold text-emerald-800 transition hover:bg-emerald-100 disabled:cursor-wait disabled:opacity-60 print:hidden'

@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useMemo, useRef, useState, useTransition } from 'react';
+import { confirmDialog } from '@/app/components/dialog';
 import {
   deleteQuestionAction,
   publishSurveyAction,
@@ -184,9 +185,15 @@ function QuestionCard(props: {
           type="button"
           className="text-sm text-amber-900 underline"
           disabled={props.pending}
-          onClick={(e) => {
+          onClick={async (e) => {
             e.stopPropagation();
-            if (!confirm('確定刪除此題？')) return;
+            const ok = await confirmDialog({
+              title: `刪除第 ${props.index + 1} 題？`,
+              message: '確定刪除此題？',
+              confirmLabel: '刪除',
+              tone: 'danger',
+            });
+            if (!ok) return;
             props.start(async () => {
               props.onError(null);
               const res = await deleteQuestionAction(props.surveyId, q.id);

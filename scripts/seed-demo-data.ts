@@ -100,55 +100,109 @@ async function main() {
     await tx`delete from purchase_requests where procurement_case_id = any(${IDS.cases}::uuid[])`;
     await tx`delete from procurement_cases where id = any(${IDS.cases}::uuid[])`;
 
-    await tx`
+    const [rdDept] = await tx<{ id: string }[]>`
       insert into departments (id, code, name)
-      values
-        (${IDS.deptRd}::uuid, 'RD', '研發部'),
-        (${IDS.deptFin}::uuid, 'FIN', '財務部')
-      on conflict (id) do update set code = excluded.code, name = excluded.name
+      values (${IDS.deptRd}::uuid, 'ADS', '自動駕駛系統部')
+      on conflict (code) do update set name = excluded.name
+      returning id
     `;
+    const [finDept] = await tx<{ id: string }[]>`
+      insert into departments (id, code, name)
+      values (${IDS.deptFin}::uuid, 'AD', '管理部')
+      on conflict (code) do update set name = excluded.name
+      returning id
+    `;
+    const [goDept] = await tx<{ id: string }[]>`
+      insert into departments (id, code, name)
+      values (${IDS.deptDev}::uuid, 'GO', '總經理室')
+      on conflict (code) do update set name = excluded.name
+      returning id
+    `;
+    IDS.deptRd = rdDept.id;
+    IDS.deptFin = finDept.id;
+    IDS.deptDev = goDept.id;
 
-    await tx`
+    const [staffEmp] = await tx<{ id: string }[]>`
       insert into employees (
         id, employee_code, name, department_id, title, google_email, role,
         is_general_manager, is_chairman
-      ) values
-        (
-          ${IDS.empStaff}::uuid, 'E001', '林小明', ${IDS.deptRd}::uuid,
-          '軟體工程師', 'staff@turing-drive.com', 'staff', false, false
-        ),
-        (
-          ${IDS.empMgr}::uuid, 'E002', '王主管', ${IDS.deptRd}::uuid,
-          '研發部經理', 'mgr@turing-drive.com', 'staff', false, false
-        ),
-        (
-          ${IDS.empFinance}::uuid, 'E003', '陳財會', ${IDS.deptFin}::uuid,
-          '財務專員', 'finance@turing-drive.com', 'finance', false, false
-        )
-      on conflict (id) do update set
-        employee_code = excluded.employee_code,
+      ) values (
+        ${IDS.empStaff}::uuid, '0017', '阮振瑋', ${IDS.deptRd}::uuid,
+        '工程經理', 'wayne@turing-drive.com', 'staff', false, false
+      )
+      on conflict (employee_code) do update set
         name = excluded.name,
         department_id = excluded.department_id,
         title = excluded.title,
-        google_email = excluded.google_email,
+        google_email = coalesce(employees.google_email, excluded.google_email),
         role = excluded.role,
         is_general_manager = excluded.is_general_manager,
         is_chairman = excluded.is_chairman
+      returning id
     `;
+    const [mgrEmp] = await tx<{ id: string }[]>`
+      insert into employees (
+        id, employee_code, name, department_id, title, google_email, role,
+        is_general_manager, is_chairman
+      ) values (
+        ${IDS.empMgr}::uuid, '0053', '楊為任', ${IDS.deptRd}::uuid,
+        '軟體研發副總', 'nickyang@turing-drive.com', 'staff', false, false
+      )
+      on conflict (employee_code) do update set
+        name = excluded.name,
+        department_id = excluded.department_id,
+        title = excluded.title,
+        google_email = coalesce(employees.google_email, excluded.google_email),
+        role = excluded.role,
+        is_general_manager = excluded.is_general_manager,
+        is_chairman = excluded.is_chairman
+      returning id
+    `;
+    const [finEmp] = await tx<{ id: string }[]>`
+      insert into employees (
+        id, employee_code, name, department_id, title, google_email, role,
+        is_general_manager, is_chairman
+      ) values (
+        ${IDS.empFinance}::uuid, '0009', '許雲茹', ${IDS.deptFin}::uuid,
+        '行政財會', 'lucia@turing-drive.com', 'finance', false, false
+      )
+      on conflict (employee_code) do update set
+        name = excluded.name,
+        department_id = excluded.department_id,
+        title = excluded.title,
+        google_email = coalesce(employees.google_email, excluded.google_email),
+        role = excluded.role,
+        is_general_manager = excluded.is_general_manager,
+        is_chairman = excluded.is_chairman
+      returning id
+    `;
+    const [devEmp] = await tx<{ id: string }[]>`
+      insert into employees (
+        id, employee_code, name, department_id, title, google_email, role,
+        is_general_manager, is_chairman
+      ) values (
+        ${IDS.empDev}::uuid, '0002', '沈大維', ${IDS.deptDev}::uuid,
+        '執行長', 'david_shen@turing-drive.com', 'admin', true, false
+      )
+      on conflict (employee_code) do update set
+        name = excluded.name,
+        department_id = excluded.department_id,
+        title = excluded.title,
+        google_email = coalesce(employees.google_email, excluded.google_email),
+        role = excluded.role,
+        is_general_manager = true
+      returning id
+    `;
+    IDS.empStaff = staffEmp.id;
+    IDS.empMgr = mgrEmp.id;
+    IDS.empFinance = finEmp.id;
+    IDS.empDev = devEmp.id;
 
     await tx`
       update departments set manager_employee_id = ${IDS.empMgr}::uuid where id = ${IDS.deptRd}::uuid
     `;
     await tx`
-      update departments set manager_employee_id = ${IDS.empFinance}::uuid where id = ${IDS.deptFin}::uuid
-    `;
-    await tx`
-      update employees set
-        name = '本機開發者',
-        title = '資訊管理',
-        is_general_manager = true,
-        is_chairman = true
-      where id = ${IDS.empDev}::uuid
+      update departments set manager_employee_id = (select id from employees where employee_code = '0065' limit 1) where id = ${IDS.deptFin}::uuid and exists (select 1 from employees where employee_code = '0065')
     `;
 
     await tx`
@@ -169,11 +223,11 @@ async function main() {
         id, code, department_id, category, owner_employee_id, fiscal_year, annual_budget_amount
       ) values
         (
-          ${IDS.budgetRd}::uuid, '115RD001', ${IDS.deptRd}::uuid,
+          ${IDS.budgetRd}::uuid, '115ADSSE15', ${IDS.deptRd}::uuid,
           '研發耗材', ${IDS.empMgr}::uuid, '115', 2500000
         ),
         (
-          ${IDS.budgetFin}::uuid, '115FIN001', ${IDS.deptFin}::uuid,
+          ${IDS.budgetFin}::uuid, '115ADSE08', ${IDS.deptFin}::uuid,
           '行政費用', ${IDS.empFinance}::uuid, '115', 800000
         )
       on conflict (id) do update set
@@ -569,15 +623,15 @@ async function main() {
       ) values
         (
           ${IDS.empMgr}::uuid, 'approval_requested', 'purchase_request', ${pr1}::uuid,
-          ${CASE_NUMBERS[0]}, '林小明 提交請購單待您簽核', false
+          ${CASE_NUMBERS[0]}, '阮振瑋 提交請購單待您簽核', false
         ),
         (
           ${IDS.empMgr}::uuid, 'approval_requested', 'purchase_order', ${po2}::uuid,
-          ${CASE_NUMBERS[1]}, '林小明 提交採購單待您簽核', false
+          ${CASE_NUMBERS[1]}, '阮振瑋 提交採購單待您簽核', false
         ),
         (
           ${IDS.empMgr}::uuid, 'approval_requested', 'expense_request', ${exp4}::uuid,
-          ${CASE_NUMBERS[3]}, '林小明 提交費用申請待您簽核', false
+          ${CASE_NUMBERS[3]}, '阮振瑋 提交費用申請待您簽核', false
         ),
         (
           ${IDS.empDev}::uuid, 'approval_requested', 'acceptance', ${acc3}::uuid,
@@ -602,10 +656,10 @@ async function main() {
 
   console.log('Demo seed complete.');
   console.log('Try logging in as:');
-  console.log('  staff@turing-drive.com   — 林小明（申請人）');
-  console.log('  mgr@turing-drive.com     — 王主管（簽核人，3 件待辦）');
-  console.log('  finance@turing-drive.com — 陳財會（簽核追蹤）');
-  console.log('  dev@turing-drive.com     — 管理員（2 件高階待辦）');
+  console.log('  wayne@turing-drive.com      — 阮振瑋（申請人）');
+  console.log('  nickyang@turing-drive.com   — 楊為任（簽核人，3 件待辦）');
+  console.log('  lucia@turing-drive.com      — 許雲茹（簽核追蹤）');
+  console.log('  david_shen@turing-drive.com — 沈大維（執行長，2 件高階待辦）');
 }
 
 main()

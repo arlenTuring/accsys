@@ -1,5 +1,4 @@
 import { getMyAcceptanceApprovalQueue } from '@/lib/acceptances/queries';
-import { ensureDemoPendingApprovals } from '@/lib/applications/seed-pending-demo';
 import { getMyAssetTransferApprovalQueue } from '@/lib/asset-transfers/queries';
 import { getMyCustomApprovalQueue } from '@/lib/custom-forms/queries';
 import { getMyExpenseClaimApprovalQueue } from '@/lib/expense-claims/queries';
@@ -40,40 +39,22 @@ async function queryAllQueues() {
 
 /** Every form waiting for the current employee's decision, across all form types. */
 export async function getMyApprovalQueueAll(): Promise<ApprovalQueueItem[]> {
+  const { getSystemFeatureFlags } = await import('@/lib/feature-flags/service');
+  const { resolveFeatureFlagForFormKey } = await import('@/lib/feature-flags/definitions');
   const [
-    requests,
-    orders,
-    acceptances,
-    expenseRequests,
-    travelExpenses,
-    expenseClaims,
-    seals,
-    assetTransfers,
-    initialCustom,
-  ] = await queryAllQueues();
-  let custom = initialCustom;
-
-  const initialTotal =
-    requests.length +
-    orders.length +
-    acceptances.length +
-    expenseRequests.length +
-    travelExpenses.length +
-    expenseClaims.length +
-    seals.length +
-    assetTransfers.length +
-    custom.length;
-
-  if (initialTotal === 0) {
-    try {
-      const created = await ensureDemoPendingApprovals();
-      if (created > 0) {
-        custom = await getMyCustomApprovalQueue();
-      }
-    } catch {
-      // Ignore demo seed errors so queue loading never fails
-    }
-  }
+    featureFlags,
+    [
+      requests,
+      orders,
+      acceptances,
+      expenseRequests,
+      travelExpenses,
+      expenseClaims,
+      seals,
+      assetTransfers,
+      custom,
+    ],
+  ] = await Promise.all([getSystemFeatureFlags(), queryAllQueues()]);
 
   const items: (Omit<ApprovalQueueItem, 'label' | 'href'> & { label?: string })[] = [
     ...requests.map((q) => ({ ...q, formType: 'purchase_request' as const })),
@@ -86,13 +67,18 @@ export async function getMyApprovalQueueAll(): Promise<ApprovalQueueItem[]> {
     ...assetTransfers,
     ...custom,
   ];
-  return items.map((q) => {
-    const formKey = 'formKey' in q && typeof q.formKey === 'string' ? q.formKey : undefined;
-    return {
-      ...q,
-      label: q.label ?? FORM_LABELS[q.formType],
-      href: formKey ? `/f/${formKey}/${q.id}` : `${FORM_ROUTE_PREFIX[q.formType]}/${q.id}`,
-      formKey,
-    };
-  });
+  return items
+    .map((q) => {
+      const formKey = 'formKey' in q && typeof q.formKey === 'string' ? q.formKey : undefined;
+      return {
+        ...q,
+        label: q.label ?? FORM_LABELS[q.formType],
+        href: formKey ? `/f/${formKey}/${q.id}` : `${FORM_ROUTE_PREFIX[q.formType]}/${q.id}`,
+        formKey,
+      };
+    })
+    .filter((q) => {
+      const flag = resolveFeatureFlagForFormKey(q.formKey ?? q.formType);
+      return !flag || Boolean(featureFlags[flag]);
+    });
 }

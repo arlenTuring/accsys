@@ -423,7 +423,6 @@ export async function searchRegulationsForAi(input: {
   if (!rawQuery) {
     return rows.slice(0, limit).map((r) => ({
       id: r.id,
-      code: r.code,
       title: r.title,
       category: r.category,
       categoryLabel: getRegulationCategoryMeta(r.category).label,
@@ -500,7 +499,6 @@ export async function searchRegulationsForAi(input: {
 
   return finalItems.map(({ row: r, excerpts }) => ({
     id: r.id,
-    code: r.code,
     title: r.title,
     category: r.category,
     categoryLabel: getRegulationCategoryMeta(r.category).label,

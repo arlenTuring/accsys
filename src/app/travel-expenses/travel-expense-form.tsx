@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Field, FieldRow, Info, Req, inputCls, readOnlyCls } from '@/app/components/form-fields';
 import { AddRowButton, TrashButton, cellInputCls, tdCls, thCls } from '@/app/components/line-item-table';
 import { PendingFilesField } from '@/app/components/pending-files-field';
+import { TwoTierBudgetSelect } from '@/app/components/two-tier-budget-select';
 import { attachmentFieldLabel } from '@/lib/attachments/policy';
 import { centsToNumber, toCents, type Cents } from '@/lib/money';
 import { reviseTravelExpense, submitTravelExpense } from '@/lib/travel-expenses/actions';
@@ -74,6 +75,7 @@ export function TravelExpenseForm({
   departmentName,
   formDate,
   budgetOptions,
+  costCategories = TRAVEL_COST_CATEGORIES,
   mode,
   initial,
 }: {
@@ -81,6 +83,7 @@ export function TravelExpenseForm({
   departmentName: string;
   formDate: string;
   budgetOptions: TravelBudgetOption[];
+  costCategories?: readonly string[];
   mode: TravelExpenseFormMode;
   initial?: TravelExpenseInput;
 }) {
@@ -145,7 +148,7 @@ export function TravelExpenseForm({
       costItems,
     };
     if (!budgetCodeId) return setError('請選擇預算來源');
-    const parsed = parseTravelExpenseInput(input);
+    const parsed = parseTravelExpenseInput(input, costCategories);
     if (!parsed.ok) return setError(parsed.error);
     if (files.length + existingAttachments === 0) return setError('請上傳至少一個附件（報支單據、購票證明等）');
 
@@ -193,13 +196,12 @@ export function TravelExpenseForm({
           {budgetOptions.length === 0 ? (
             <p className="rounded bg-amber-50 px-3 py-2 text-sm text-amber-700">目前沒有可用的預算來源，請聯絡財會建立預算編號。</p>
           ) : (
-            <select value={budgetCodeId} onChange={(e) => setBudgetCodeId(e.target.value)} className={`${inputCls} !bg-white`}>
-              {budgetOptions.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.label}
-                </option>
-              ))}
-            </select>
+            <TwoTierBudgetSelect
+              value={budgetCodeId}
+              onChange={(val) => setBudgetCodeId(val)}
+              options={budgetOptions}
+              ariaLabel="預算來源"
+            />
           )}
         </Field>
         <Field label="預支金額" hint="如於出差前已先向公司暫借旅費，請填入暫借之金額">
@@ -343,14 +345,14 @@ export function TravelExpenseForm({
                 </th>
                 <th className={`${thCls} w-32`}>
                   類別<Req />
-                  <Info text="交通費請填起訖站（自行開車請填里程）；住宿費、膳雜費與其他費用不需填起訖站。" />
+                  <Info text="類別選項可由後台表單設計管理；交通費請填起訖站（自行開車請填里程），住宿費、膳雜費與其他費用不需填起訖站。" />
                 </th>
                 <th className={`${thCls} w-32`}>起站</th>
                 <th className={`${thCls} w-32`}>迄站</th>
                 <th className={`${thCls} w-24`}>里程</th>
                 <th className={thCls}>
-                  摘要<Req />
-                  <Info text="簡述費用內容，例如：高鐵台北－左營、○○飯店住宿 2 晚、計程車往返客戶端。" />
+                  備註說明(起-迄點、油資補助公里數等)<Req />
+                  <Info text="請填寫備註說明（例如：起-迄點、油資補助公里數、高鐵台北－左營、飯店住宿 2 晚等）。" />
                 </th>
                 <th className={`${thCls} w-32`}>
                   幣別<Req />
@@ -393,7 +395,7 @@ export function TravelExpenseForm({
                         }
                         className={`${cellInputCls} !bg-white`}
                       >
-                        {TRAVEL_COST_CATEGORIES.map((cat) => (
+                        {costCategories.map((cat) => (
                           <option key={cat} value={cat}>
                             {cat}
                           </option>
@@ -478,6 +480,16 @@ export function TravelExpenseForm({
                 );
               })}
             </tbody>
+            <tfoot>
+              <tr className="bg-slate-50 font-semibold">
+                <td colSpan={11} className={`${tdCls} text-right`}>
+                  合計
+                </td>
+                <td className={`${tdCls} text-right font-bold tabular-nums text-td-blue-dark`}>
+                  NT$ {fmtMoney(centsToNumber(totalCents as Cents))}
+                </td>
+              </tr>
+            </tfoot>
           </table>
         </div>
         <AddRowButton onClick={() => setCostItems((prev) => [...prev, emptyCost()])} disabled={costItems.length >= 50} />

@@ -28,6 +28,9 @@ export type KnowledgeGraphNode = {
   projectCode?: string;
   projectId?: string;
   year?: number;
+  yearGroupLabel?: string;
+  projectName?: string;
+  historyPathTrail?: string[];
   department?: string;
   fileKind?: DriveItemKind;
   driveUrl?: string;
@@ -169,22 +172,22 @@ const DOMAIN_CONCEPTS: Array<{
   {
     id: 'concept:fms-occ-teleop',
     kind: 'concept',
-    label: '中央行控系統 (OCC / FMS) 與 5G 低延遲遠端接管 (Teleoperation)',
+    label: '中央行控系統 (OCC / FMS)、MQTT / WebSocket / ROS Bridge 訂閱與 5G 遠端接管',
     communityId: 'comm-fms-occ',
     summary:
-      '車隊班距動態調度、SOC 低電量自動派發充電、5G 企業專網 (≤50 ms) 多視角串流與 NSC Remote 遠端控制接管。',
-    patterns: /fms|occ|行控|調度|班距|遠端接管|teleop|nsc|5g|圖台|監控|充電/i,
-    keywords: ['fms', 'occ', '行控中心', '車隊調度', '遠端接管', 'teleoperation', '5g專網'],
+      '車隊班距動態調度、MQTT (QoS 1/2) 車地遙測與 WebSocket / ROS Bridge 即時狀態訂閱、SOC 低電量自動派發充電、5G 企業專網 (≤50 ms) 多視角串流與 NSC Remote 遠端控制接管。',
+    patterns: /fms|occ|行控|調度|班距|遠端接管|teleop|nsc|5g|圖台|監控|充電|mqtt|websocket|ros\s*bridge|訂閱|雙層通訊|車聯網/i,
+    keywords: ['fms', 'occ', '行控中心', '車隊調度', '遠端接管', 'teleoperation', '5g專網', 'mqtt', 'websocket', 'ros bridge', '車聯網', '雙層通訊'],
   },
   {
     id: 'concept:psd-v2x-icd',
     kind: 'concept',
-    label: '月台門 (PSD) 安全連鎖、V2X 號誌連動與跨標案介面控制 (ICD)',
+    label: '月台門 (PSD) 安全連鎖、V2X / TSP 號誌優先通行與跨標案介面控制 (ICD)',
     communityId: 'comm-transit-infra',
     summary:
-      '車站月台門 (PSD) ±10 cm 精準停靠對位連鎖、路側 RSU 智慧號誌優先通行，以及跨標案電力／通訊／機電介面控制文件 (ICD)。',
-    patterns: /psd|月台門|v2x|rsu|號誌|icd|介面|施工協調|套繪|廊道|航廈|t3/i,
-    keywords: ['psd', '月台門', 'v2x', 'rsu', '號誌連動', 'icd', '介面控制', 't3', '第三航廈'],
+      '車站月台門 (PSD) ±10 cm 精準停靠對位連鎖、路側 RSU 智慧號誌優先通行 (TSP / SPaT)、車載相機與 V2X 號誌融合邏輯，以及跨標案電力／通訊／機電介面控制文件 (ICD)。',
+    patterns: /psd|月台門|v2x|rsu|tsp|spat|號誌|紅綠燈|icd|介面|施工協調|套繪|廊道|航廈|t3|車聯網/i,
+    keywords: ['psd', '月台門', 'v2x', 'rsu', 'tsp', '號誌連動', '紅綠燈', 'icd', '介面控制', 't3', '第三航廈'],
   },
   {
     id: 'concept:hil-fat-sat-kpi',
@@ -224,23 +227,78 @@ const GRAPH_CACHE_PATH = path.join(process.cwd(), 'graphify-out', 'company-files
 let cachedGraphState: CompanyKnowledgeGraphState | null = null;
 const dynamicIngestedNodes = new Map<string, KnowledgeGraphNode>();
 
+const GENERIC_STOP_TOKENS = new Set([
+  '照片',
+  '圖片',
+  '圖檔',
+  '影片',
+  '文件',
+  '檔案',
+  '資料',
+  '資料夾',
+  '位置',
+  '路徑',
+  '需要',
+  '知道',
+  '請問',
+  '哪裡',
+  '在哪',
+  '剪貼',
+  '貼簿',
+  '剪貼簿',
+  '剪貼簿圖',
+  '參考',
+  '我們',
+  '公司',
+  '專案',
+  '系統',
+  '這個',
+  '那個',
+  '可以',
+  '幫我',
+  '歷史',
+  '歷史文件',
+  '簡報',
+  '報告',
+  '紀錄',
+  '總覽',
+  '一般',
+  'general',
+  'png',
+  'jpg',
+  'jpeg',
+  'pdf',
+  'doc',
+  'docx',
+  'ppt',
+  'pptx',
+  'xls',
+  'xlsx',
+  'mp4',
+  'mov',
+]);
+
 function tokenizeText(text: string): string[] {
   const clean = text.toLowerCase();
   const tokens = new Set<string>();
 
   // Extract English / alphanumeric / ISO / code tokens
   for (const m of clean.matchAll(/[a-z0-9_.-]{2,}/g)) {
-    tokens.add(m[0]);
+    if (!GENERIC_STOP_TOKENS.has(m[0]) && !/^\d+$/.test(m[0])) {
+      tokens.add(m[0]);
+    }
   }
 
   // Extract meaningful Chinese 2-grams and 3-grams + domain terms
   const cjkRuns = clean.match(/[\u4e00-\u9fa5]{2,}/g) ?? [];
   for (const run of cjkRuns) {
-    if (run.length <= 6) tokens.add(run);
+    if (run.length <= 6 && !GENERIC_STOP_TOKENS.has(run)) tokens.add(run);
     for (let i = 0; i < run.length - 1; i++) {
-      tokens.add(run.slice(i, i + 2));
+      const bi = run.slice(i, i + 2);
+      if (!GENERIC_STOP_TOKENS.has(bi)) tokens.add(bi);
       if (i < run.length - 2) {
-        tokens.add(run.slice(i, i + 3));
+        const tri = run.slice(i, i + 3);
+        if (!GENERIC_STOP_TOKENS.has(tri)) tokens.add(tri);
       }
     }
   }
@@ -321,10 +379,13 @@ export function buildAndOptimizeCompanyKnowledgeGraph(
         projectCode: proj.code,
         projectId: proj.id,
         year: proj.startYear,
+        yearGroupLabel: group.label,
+        projectName: proj.name,
+        historyPathTrail: ['歷史文件', group.label, `[${proj.code}] ${proj.name}`],
         department: proj.department,
         driveUrl: proj.driveFolderUrl,
         updatedAt: proj.period,
-        summary: `${proj.summary}｜代表檔案與亮點：${proj.highlights.join('、')}`,
+        summary: `${proj.summary}｜歷史文件位置：歷史文件 > ${group.label} > [${proj.code}] ${proj.name}｜代表檔案與亮點：${proj.highlights.join('、')}`,
         keywords: tokenizeText(projFullText).slice(0, 60),
         accessScope: proj.accessScope ?? 'company_wide',
         allowedDepartments: proj.allowedDepartments,
@@ -361,6 +422,7 @@ export function buildAndOptimizeCompanyKnowledgeGraph(
       const walkDriveItems = (
         items: HistoricalDriveItem[],
         parentNodeId: string,
+        folderTrail: string[],
         inheritedScope?: AccessScopeLevel,
         inheritedDepts?: string[],
         inheritedRoles?: string[]
@@ -371,7 +433,14 @@ export function buildAndOptimizeCompanyKnowledgeGraph(
           const effectiveDepts = item.allowedDepartments ?? inheritedDepts ?? proj.allowedDepartments;
           const effectiveRoles = item.allowedRoles ?? inheritedRoles ?? proj.allowedRoles;
           const takeawaysText = (item.keyTakeaways ?? []).join('；');
-          const itemFullText = `${proj.code} ${proj.name} ${item.name} ${item.sizeOrNote ?? ''} ${takeawaysText}`;
+          const fullTrail = [
+            '歷史文件',
+            group.label,
+            `[${proj.code}] ${proj.name}`,
+            ...folderTrail,
+            item.name,
+          ];
+          const itemFullText = `${proj.code} ${proj.name} ${folderTrail.join(' ')} ${item.name} ${item.sizeOrNote ?? ''} ${takeawaysText}`;
           const itemComm = assignBestCommunity(itemFullText, proj.startYear);
 
           nodesMap.set(itemNodeId, {
@@ -381,11 +450,15 @@ export function buildAndOptimizeCompanyKnowledgeGraph(
             projectCode: proj.code,
             projectId: proj.id,
             year: proj.startYear,
+            yearGroupLabel: group.label,
+            projectName: proj.name,
+            historyPathTrail: fullTrail,
             department: proj.department,
             fileKind: item.kind,
             driveUrl: item.driveUrl,
             updatedAt: item.updatedAt ?? proj.period,
             summary: [
+              `歷史文件位置：${fullTrail.join(' > ')}`,
               `所屬專案：${proj.code} ${proj.name}（${proj.period}）`,
               item.sizeOrNote ? `規格／類型：${item.sizeOrNote}` : '',
               takeawaysText ? `關鍵內容摘要：${takeawaysText}` : '',
@@ -437,6 +510,7 @@ export function buildAndOptimizeCompanyKnowledgeGraph(
             walkDriveItems(
               item.children,
               itemNodeId,
+              [...folderTrail, item.name],
               effectiveScope,
               effectiveDepts,
               effectiveRoles
@@ -448,6 +522,7 @@ export function buildAndOptimizeCompanyKnowledgeGraph(
       walkDriveItems(
         proj.files,
         projNodeId,
+        [],
         proj.accessScope,
         proj.allowedDepartments,
         proj.allowedRoles

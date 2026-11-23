@@ -173,6 +173,7 @@ function num(v: unknown, decimals: number, min: number | null, max: number | nul
   if (!Number.isFinite(n)) bad('需為數字');
   if (Math.abs(n) > 1e12) bad('數字過大');
   if (Number(n.toFixed(decimals)) !== n) bad(decimals === 0 ? '需為整數' : `最多 ${decimals} 位小數`);
+  if (n < 0 && min !== null && min >= 0) bad(min > 0 ? `不可為負數（不可小於 ${min}）` : '不可為負數');
   if (min !== null && n < min) bad(`不可小於 ${min}`);
   if (max !== null && n > max) bad(`不可大於 ${max}`);
   return n;
@@ -217,17 +218,28 @@ function scaleCents(c: Cents, factor: number, decimals: number): Cents {
  * which passes raw input and treats a throw as "not computable yet".
  */
 export function computeFormula(col: TableColumn, row: Record<string, unknown>, byId: Map<string, TableColumn>): unknown {
-  const [a, b] = col.formula!.of.map((id) => ({ col: byId.get(id)!, value: row[id] }));
-  if (a.value === null || a.value === undefined || b.value === null || b.value === undefined) return null;
+  const parts = col.formula!.of.map((id) => {
+    const c = byId.get(id)!;
+    const raw = row[id];
+    const value = raw === null || raw === undefined || (typeof raw === 'string' && raw.trim() === '') ? c.default : raw;
+    return { col: c, value };
+  });
+  if (parts.some((p) => p.value === null || p.value === undefined || (typeof p.value === 'string' && p.value.trim() === ''))) return null;
   if (col.type === 'money') {
-    const money = a.col.type === 'money' ? a : b;
-    const factor = a.col.type === 'money' ? b : a;
-    const n = Number(factor.value);
-    if (!Number.isFinite(n)) bad('需為數字');
-    return centsToDecimal(scaleCents(toCents(money.value), n, factor.col.decimals ?? 0));
+    const money = parts.find((p) => p.col.type === 'money')!;
+    const factors = parts.filter((p) => p !== money);
+    let c = toCents(money.value);
+    if (c < 0) bad('金額與數量不可為負數');
+    for (const factor of factors) {
+      const n = Number(factor.value);
+      if (!Number.isFinite(n)) bad('需為數字');
+      if (n < 0) bad('金額與數量不可為負數');
+      c = scaleCents(c, n, factor.col.decimals ?? 0);
+    }
+    return centsToDecimal(c);
   }
   const decimals = col.decimals ?? 0;
-  const product = Number(a.value) * Number(b.value);
+  const product = parts.reduce((acc, p) => acc * Number(p.value), 1);
   if (!Number.isFinite(product) || Math.abs(product) > 1e12) bad('計算結果超出上限');
   return Number(product.toFixed(decimals));
 }
@@ -345,12 +357,23 @@ function table(
         continue;
       }
       attempt(col, () => {
-        row[col.id] = col.rateFor !== undefined ? rateCell(col, r[col.id], row[col.rateFor]) : cell(col, r[col.id]);
+        const rawCell = blank(r[col.id]) && col.default !== undefined && col.type === 'number' ? col.default : r[col.id];
+        row[col.id] = col.rateFor !== undefined ? rateCell(col, r[col.id], row[col.rateFor]) : cell(col, rawCell);
         if (row[col.id] === null) return;
         if (col.pickFrom) checkPicked(col, row[col.id], values, fieldOf);
         if (col.unique) {
-          const twin = rows.findIndex((prev) => prev[col.id] === row[col.id]);
-          if (twin !== -1) bad(`與第 ${twin + 1} 列重複`);
+          const currVal =
+            typeof row[col.id] === 'string'
+              ? (row[col.id] as string).trim().toUpperCase()
+              : row[col.id];
+          const twin = rows.findIndex((prev) => {
+            const prevVal =
+              typeof prev[col.id] === 'string'
+                ? (prev[col.id] as string).trim().toUpperCase()
+                : prev[col.id];
+            return prevVal === currVal;
+          });
+          if (twin !== -1) bad(`與第 ${twin + 1} 列重複（必須為唯一值）`);
         }
       });
     }

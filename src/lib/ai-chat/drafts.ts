@@ -4,10 +4,14 @@ import { recordAudit } from '@/lib/audit/record';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import * as customService from '@/lib/custom-forms/service';
 import { parseDefinition } from '@/lib/custom-forms/definition';
-import { getPickerOptions } from '@/lib/custom-forms/queries';
+import { publishDefinition } from '@/lib/custom-forms/publish';
+import { ensureUnifiedExpenseClaimPublished, getPickerOptions } from '@/lib/custom-forms/queries';
+import { MIGRATION_BATCHES } from '@/lib/custom-forms/migrated';
+import { UNIFIED_EXPENSE_CLAIM_FORM, UNIFIED_EXPENSE_CLAIM_KEY } from '@/lib/custom-forms/migrated/expense-claims';
 import { allFields, isDisplayOnly, type FormSchema } from '@/lib/custom-forms/schema';
 import { validateSubmission } from '@/lib/custom-forms/validate';
 import { canFile, parseVisibility } from '@/lib/custom-forms/visibility';
+import { runInTransaction } from '@/lib/workflow/tx';
 import { getDb } from '@/lib/db';
 import {
   aiApplicationDrafts,
@@ -17,6 +21,7 @@ import {
   employees,
   formDefinitionVersions,
   formDefinitions,
+  formDrafts,
   formSubmissions,
   jobRoles,
 } from '@/lib/db/schema';
@@ -302,6 +307,28 @@ export function mapDraft(row: {
   };
 }
 
+export const FORM_KEY_ALIASES: Record<string, string> = {
+  'department-expense': UNIFIED_EXPENSE_CLAIM_KEY,
+  'minor-expense': UNIFIED_EXPENSE_CLAIM_KEY,
+  'project-expense': UNIFIED_EXPENSE_CLAIM_KEY,
+  'revenue-expense': UNIFIED_EXPENSE_CLAIM_KEY,
+  'expense-claim-dept': UNIFIED_EXPENSE_CLAIM_KEY,
+  'expense-claim-sales': UNIFIED_EXPENSE_CLAIM_KEY,
+  'expense-claim-project': UNIFIED_EXPENSE_CLAIM_KEY,
+  'expense-claim-personal': UNIFIED_EXPENSE_CLAIM_KEY,
+  'expense-reimbursement': UNIFIED_EXPENSE_CLAIM_KEY,
+  'small-purchase': UNIFIED_EXPENSE_CLAIM_KEY,
+  'general-procurement': 'purchase-request',
+  'seal-request': 'contract-seal',
+  'contract-seal-request': 'contract-seal',
+  'general-seal-request': 'general-seal',
+  'invoice-seal-request': 'invoice-seal',
+};
+
+const ALL_MIGRATED_BY_KEY = new Map(
+  [UNIFIED_EXPENSE_CLAIM_FORM, ...Object.values(MIGRATION_BATCHES).flatMap((b) => b.forms)].map((f) => [f.key, f])
+);
+
 /** Resolve published form key → version id the given employee may file (no request cookies). */
 export async function resolvePublishedForm(
   formKey: string,
@@ -314,6 +341,7 @@ export async function resolvePublishedForm(
 } | null> {
   if (typeof formKey !== 'string' || formKey.length < 1 || formKey.length > 40) return null;
   if (typeof ownerEmployeeId !== 'string' || !ownerEmployeeId) return null;
+  const resolvedKey = FORM_KEY_ALIASES[formKey.trim()] ?? formKey.trim();
   const db = getDb();
   const [emp] = await db
     .select({ id: employees.id, departmentId: employees.departmentId })
@@ -321,12 +349,12 @@ export async function resolvePublishedForm(
     .where(eq(employees.id, ownerEmployeeId))
     .limit(1);
   if (!emp) return null;
-  const roleRows = await db
-    .select({ code: jobRoles.code })
-    .from(employeeJobRoles)
-    .innerJoin(jobRoles, eq(jobRoles.id, employeeJobRoles.jobRoleId))
-    .where(eq(employeeJobRoles.employeeId, ownerEmployeeId));
-  const [row] = await db
+
+  if (resolvedKey === UNIFIED_EXPENSE_CLAIM_KEY) {
+    await ensureUnifiedExpenseClaimPublished(ownerEmployeeId);
+  }
+
+  let [row] = await db
     .select({
       definitionId: formDefinitions.id,
       versionId: formDefinitions.publishedVersionId,
@@ -335,9 +363,36 @@ export async function resolvePublishedForm(
       visibility: formDefinitions.visibility,
     })
     .from(formDefinitions)
-    .where(and(eq(formDefinitions.key, formKey), eq(formDefinitions.status, 'published')))
+    .where(and(eq(formDefinitions.key, resolvedKey), eq(formDefinitions.status, 'published')))
     .limit(1);
+
+  if (!row?.versionId) {
+    const migrated = ALL_MIGRATED_BY_KEY.get(resolvedKey);
+    if (migrated) {
+      await runInTransaction(`custom_form.ensure_${resolvedKey}`, async (tx) => {
+        const r = await publishDefinition(tx, { ...migrated, actorId: ownerEmployeeId });
+        return { ok: true as const, ...r };
+      }).catch(() => null);
+      [row] = await db
+        .select({
+          definitionId: formDefinitions.id,
+          versionId: formDefinitions.publishedVersionId,
+          name: formDefinitions.name,
+          key: formDefinitions.key,
+          visibility: formDefinitions.visibility,
+        })
+        .from(formDefinitions)
+        .where(and(eq(formDefinitions.key, resolvedKey), eq(formDefinitions.status, 'published')))
+        .limit(1);
+    }
+  }
+
   if (!row?.versionId) return null;
+  const roleRows = await db
+    .select({ code: jobRoles.code })
+    .from(employeeJobRoles)
+    .innerJoin(jobRoles, eq(jobRoles.id, employeeJobRoles.jobRoleId))
+    .where(eq(employeeJobRoles.employeeId, ownerEmployeeId));
   const visibility = parseVisibility(row.visibility);
   if (
     !visibility.ok ||
@@ -378,10 +433,44 @@ export async function createApplicationDraft(input: {
         )
       )
       .limit(1);
-    if (existing) return { draft: mapDraft(existing), created: false };
+    if (existing) {
+      if (existing.conversationId !== input.conversationId) {
+        await db
+          .insert(aiConversationDraftLinks)
+          .values({
+            conversationId: input.conversationId,
+            draftId: existing.id,
+            ownerEmployeeId: input.ownerEmployeeId,
+          })
+          .onConflictDoNothing();
+      }
+      return { draft: mapDraft(existing), created: false };
+    }
   }
 
-  const title = (input.title?.trim() || published.name || published.key).slice(0, 160);
+  let initialData = input.data ?? {};
+  let initialTitle = input.title?.trim() || '';
+  if (Object.keys(initialData).length === 0 && published.key === 'budget-request') {
+    const [existingFormDraft] = await db
+      .select()
+      .from(formDrafts)
+      .where(
+        and(
+          eq(formDrafts.ownerEmployeeId, input.ownerEmployeeId),
+          eq(formDrafts.formKey, published.key)
+        )
+      )
+      .orderBy(desc(formDrafts.updatedAt))
+      .limit(1);
+    if (existingFormDraft) {
+      initialData = asData(existingFormDraft.data);
+      if (!initialTitle && existingFormDraft.title) {
+        initialTitle = existingFormDraft.title;
+      }
+    }
+  }
+
+  const title = (initialTitle || published.name || published.key).slice(0, 160);
   try {
     const [row] = await db
       .insert(aiApplicationDrafts)
@@ -391,7 +480,7 @@ export async function createApplicationDraft(input: {
         formDefinitionKey: published.key,
         formVersionId: published.versionId,
         title,
-        data: input.data ?? {},
+        data: initialData,
         version: 1,
         status: 'draft',
         createIdempotencyKey: idem,
@@ -411,7 +500,19 @@ export async function createApplicationDraft(input: {
           )
         )
         .limit(1);
-      if (existing) return { draft: mapDraft(existing), created: false };
+      if (existing) {
+        if (existing.conversationId !== input.conversationId) {
+          await db
+            .insert(aiConversationDraftLinks)
+            .values({
+              conversationId: input.conversationId,
+              draftId: existing.id,
+              ownerEmployeeId: input.ownerEmployeeId,
+            })
+            .onConflictDoNothing();
+        }
+        return { draft: mapDraft(existing), created: false };
+      }
     }
     throw err;
   }
@@ -519,6 +620,32 @@ export async function patchApplicationDraft(input: {
     } catch {
       // usage is best-effort
     }
+  }
+
+  // Keep form_drafts synchronized when editing a form draft (such as budget-request) via AI Chat or DraftPanel
+  try {
+    const [existingFormDraft] = await db
+      .select({ id: formDrafts.id })
+      .from(formDrafts)
+      .where(
+        and(
+          eq(formDrafts.ownerEmployeeId, input.ownerEmployeeId),
+          eq(formDrafts.formKey, current.formDefinitionKey)
+        )
+      )
+      .orderBy(desc(formDrafts.updatedAt))
+      .limit(1);
+    if (existingFormDraft) {
+      await db
+        .update(formDrafts)
+        .set({
+          data: nextData,
+          updatedAt: sql`now()`,
+        })
+        .where(eq(formDrafts.id, existingFormDraft.id));
+    }
+  } catch {
+    // sync to form_drafts is best-effort
   }
 
   return {

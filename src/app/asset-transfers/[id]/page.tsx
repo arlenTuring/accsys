@@ -3,9 +3,11 @@ import { notFound } from 'next/navigation';
 import { ApprovalActions } from '@/app/components/approval-actions';
 import { ApprovalTimeline } from '@/app/components/approval-timeline';
 import { AttachmentsPanel } from '@/app/components/attachments-panel';
+import { DetailQueueNav } from '@/app/components/detail-queue-nav';
 import { ROLE_LABELS, STATUS_BADGE, STATUS_LABELS } from '@/app/components/form-labels';
 import { PrintButton } from '@/app/components/print-button';
 import { WithdrawButton } from '@/app/requests/[id]/withdraw-button';
+import { getDetailQueueNavigation } from '@/lib/applications/my-applications';
 import { approveAssetTransferStep, returnAssetTransferStep, withdrawAssetTransfer } from '@/lib/asset-transfers/actions';
 import { ASSET_TRANSFER_TYPE_LABELS, type AssetTransferType } from '@/lib/asset-transfers/constants';
 import { getAssetTransferDetail } from '@/lib/asset-transfers/queries';
@@ -42,7 +44,11 @@ export default async function AssetTransferDetailPage({
   const detail = await getAssetTransferDetail(id);
   if (!detail) notFound();
   const base = `/asset-transfers/${id}`;
-  const [employee, attachments] = await Promise.all([getCurrentEmployee(), getAttachments('asset_transfer', id)]);
+  const [employee, attachments, queueNav] = await Promise.all([
+    getCurrentEmployee(),
+    getAttachments('asset_transfer', id),
+    getDetailQueueNavigation(id),
+  ]);
   const attachmentExtras = await loadAttachmentPanelExtras(attachments.map((a) => a.id));
 
   const currentStep =
@@ -58,13 +64,14 @@ export default async function AssetTransferDetailPage({
 
   return (
     <main className="page-shell space-y-5">
-      <nav className="text-sm text-td-muted print:hidden">
-        <Link href="/asset-transfers" className="hover:text-td-blue">
-          資產異動
-        </Link>
-        <span className="mx-2">/</span>
-        <span className="text-td-blue-dark">{detail.caseNumber}</span>
-      </nav>
+      <DetailQueueNav
+        currentId={detail.id}
+        currentCaseNumber={detail.caseNumber}
+        currentFormLabel="資產異動申請單"
+        preloadedNav={queueNav}
+        secondaryBackHref="/assets/mine"
+        secondaryBackLabel="返回我的資產管理"
+      />
 
       <section className="flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -75,7 +82,7 @@ export default async function AssetTransferDetailPage({
           </p>
         </div>
         <div className="flex flex-wrap gap-2 print:hidden">
-          {detail.status === 'approved' && <PrintButton label="列印資產異動申請單" />}
+          <PrintButton label="列印資產異動申請單 / PDF" />
           {canSelfEdit && (
             <Link href={`${base}/edit`} className="btn-secondary">
               編輯
@@ -182,7 +189,18 @@ export default async function AssetTransferDetailPage({
       </div>
 
       {isCurrentApprover && (
-        <ApprovalActions formId={detail.id} version={detail.version} onApprove={approveAssetTransferStep} onReturn={returnAssetTransferStep} />
+        <ApprovalActions
+          formId={detail.id}
+          version={detail.version}
+          onApprove={approveAssetTransferStep}
+          onReturn={returnAssetTransferStep}
+          nextHref={queueNav.nextItem?.href ?? null}
+          nextLabel={
+            queueNav.nextItem
+              ? `${queueNav.nextItem.formLabel} ${queueNav.nextItem.caseNumber}`
+              : null
+          }
+        />
       )}
     </main>
   );

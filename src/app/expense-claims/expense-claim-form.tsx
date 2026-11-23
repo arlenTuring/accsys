@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Field, FieldRow, Info, Req, inputCls, readOnlyCls } from '@/app/components/form-fields';
 import { AddRowButton, TrashButton, cellInputCls, tdCls, thCls } from '@/app/components/line-item-table';
 import { PendingFilesField } from '@/app/components/pending-files-field';
+import { TwoTierBudgetSelect } from '@/app/components/two-tier-budget-select';
 import { attachmentFieldLabel } from '@/lib/attachments/policy';
 import { reviseExpenseClaim, submitExpenseClaim } from '@/lib/expense-claims/actions';
 import {
@@ -77,6 +78,7 @@ export function ExpenseClaimForm({
   const emptyItem = (): ExpenseClaimItemInput => ({
     category: config.categories[0],
     description: '',
+    quantity: '1',
     currency: 'TWD',
     exchangeRate: '1',
     amount: '',
@@ -190,13 +192,12 @@ export function ExpenseClaimForm({
               目前沒有可用的{followsDepartment ? '部門' : '專案'}預算，請聯絡財會建立預算編號。
             </p>
           ) : (
-            <select value={budgetCodeId} onChange={(e) => setBudgetCodeId(e.target.value)} className={`${inputCls} !bg-white`}>
-              {budgetOptions.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.label}
-                </option>
-              ))}
-            </select>
+            <TwoTierBudgetSelect
+              value={budgetCodeId}
+              onChange={(val) => setBudgetCodeId(val)}
+              options={budgetOptions}
+              ariaLabel="預算來源"
+            />
           )}
         </Field>
       </FieldRow>
@@ -215,6 +216,9 @@ export function ExpenseClaimForm({
                 <th className={thCls}>
                   內容或說明<Req />
                   <Info text="每列填寫單一憑證，簡述費用內容並註明憑證號碼，例如：10月部門聚餐（發票 AB12345678）。" />
+                </th>
+                <th className={`${thCls} w-24`}>
+                  數量<Req />
                 </th>
                 <th className={`${thCls} w-32`}>
                   幣別<Req />
@@ -261,6 +265,19 @@ export function ExpenseClaimForm({
                         placeholder="請輸入文字"
                         aria-label={`第 ${i + 1} 列內容或說明`}
                         className={cellInputCls}
+                      />
+                    </td>
+                    <td className={tdCls}>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        inputMode="numeric"
+                        value={r.quantity ?? '1'}
+                        onChange={(e) => setItem(i, { quantity: e.target.value })}
+                        placeholder="1"
+                        aria-label={`第 ${i + 1} 列數量`}
+                        className={`${cellInputCls} text-right`}
                       />
                     </td>
                     <td className={tdCls}>

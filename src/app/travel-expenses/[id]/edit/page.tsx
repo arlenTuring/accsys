@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { getAttachments } from '@/lib/attachments/queries';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
-import { getTravelBudgetOptions, getTravelExpenseDetail } from '@/lib/travel-expenses/queries';
+import { getTravelBudgetOptions, getTravelCostCategories, getTravelExpenseDetail } from '@/lib/travel-expenses/queries';
 import { TravelExpenseForm } from '../../travel-expense-form';
 
 /** Decimal strings from the database without trailing zeros ("1490.00" -> "1490"). */
@@ -24,7 +24,11 @@ export default async function EditTravelExpensePage({ params }: { params: Promis
         : null;
   if (!kind) redirect(`/travel-expenses/${id}`);
 
-  const [budgetOptions, attachments] = await Promise.all([getTravelBudgetOptions(), getAttachments('travel_expense', id)]);
+  const [budgetOptions, attachments, costCategories] = await Promise.all([
+    getTravelBudgetOptions(),
+    getAttachments('travel_expense', id),
+    getTravelCostCategories(),
+  ]);
   const options = budgetOptions.some((b) => b.id === detail.budgetCodeId)
     ? budgetOptions
     : [{ id: detail.budgetCodeId, label: detail.budgetLabel }, ...budgetOptions];
@@ -47,6 +51,7 @@ export default async function EditTravelExpensePage({ params }: { params: Promis
         departmentName={detail.departmentName}
         formDate={detail.formDate}
         budgetOptions={options}
+        costCategories={costCategories}
         mode={{ kind, travelExpenseId: id, version: detail.version, existingAttachmentCount: attachments.length }}
         initial={{
           budgetCodeId: detail.budgetCodeId,

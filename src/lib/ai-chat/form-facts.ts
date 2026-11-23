@@ -41,11 +41,14 @@ const FIELD_MAP: Record<string, FieldMap> = {
   'minor-expense': EXPENSE,
   'project-expense': EXPENSE,
   'revenue-expense': EXPENSE,
+  'expense-claim': EXPENSE,
   'procurement-payment': EXPENSE,
   'standalone-payment': EXPENSE,
   'asset-transfer': { what: ['items', 'remark'] },
   'purchase-request': { what: ['items'] },
   'purchase-order': { what: ['items'] },
+  'budget-request': { what: ['items'] },
+  'budget-change': { what: ['reason'] },
   acceptance: { what: ['items'], when: ['acceptanceDate'] },
 };
 

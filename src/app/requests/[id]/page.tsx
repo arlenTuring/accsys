@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ApprovalTimeline } from '@/app/components/approval-timeline';
+import { DetailQueueNav } from '@/app/components/detail-queue-nav';
 import { PrintButton } from '@/app/components/print-button';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { replacementFor } from '@/lib/custom-forms/legacy';
@@ -38,7 +39,12 @@ export default async function RequestDetailPage({
     isApplicant && detail.status === 'pending_approval' && detail.currentStepOrder === 1;
 
   return (
-    <main className="mx-auto max-w-4xl p-8">
+    <main className="mx-auto max-w-4xl space-y-4 p-8">
+      <DetailQueueNav
+        currentId={detail.id}
+        currentCaseNumber={detail.caseNumber}
+        currentFormLabel="請購申請單"
+      />
       <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="mb-1 text-2xl font-bold">請購申請單</h1>
@@ -48,7 +54,7 @@ export default async function RequestDetailPage({
             </Link>
           </p>
         </div>
-        {detail.status === 'approved' && <PrintButton label="列印請購單" />}
+        <PrintButton label="列印請購單 / PDF" />
       </div>
 
       <section className="mb-4 rounded border p-4 text-sm">
@@ -67,20 +73,26 @@ export default async function RequestDetailPage({
             <th className="border p-2">項目</th>
             <th className="border p-2">說明</th>
             <th className="border p-2">數量</th>
-            <th className="border p-2">預估費用</th>
+            <th className="border p-2">單價</th>
+            <th className="border p-2">預估費用（小計）</th>
           </tr>
         </thead>
         <tbody>
-          {detail.items.map((i) => (
-            <tr key={i.lineNo}>
-              <td className="border p-2 text-center">{i.lineNo}</td>
-              <td className="border p-2 font-mono">{i.budgetCode}</td>
-              <td className="border p-2">{i.itemCategory}</td>
-              <td className="border p-2">{i.description}</td>
-              <td className="border p-2 text-right">{i.quantity}</td>
-              <td className="border p-2 text-right">{i.estimatedAmount.toLocaleString()}</td>
-            </tr>
-          ))}
+          {detail.items.map((i) => {
+            const unitPrice =
+              i.quantity > 0 ? Math.round((i.estimatedAmount / i.quantity) * 100) / 100 : i.estimatedAmount;
+            return (
+              <tr key={i.lineNo}>
+                <td className="border p-2 text-center">{i.lineNo}</td>
+                <td className="border p-2 font-mono">{i.budgetCode}</td>
+                <td className="border p-2">{i.itemCategory}</td>
+                <td className="border p-2">{i.description}</td>
+                <td className="border p-2 text-right">{i.quantity}</td>
+                <td className="border p-2 text-right">{unitPrice.toLocaleString()}</td>
+                <td className="border p-2 text-right">{i.estimatedAmount.toLocaleString()}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
 

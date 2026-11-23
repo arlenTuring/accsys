@@ -4,11 +4,74 @@ import { revalidatePath } from 'next/cache';
 import { getCurrentEmployee } from '@/lib/auth/current-employee';
 import { MAX_ASSET_FILE_BYTES, parseAssetWorkbook, type ParsedAssetRow } from '@/lib/assets/parse-asset-workbook';
 import * as service from '@/lib/assets/service';
+import * as handover from '@/lib/assets/inventory-forms';
 import { fail, type Failure } from '@/lib/workflow/tx';
 
 export async function upsertAsset(input: service.AssetInput): Promise<service.UpsertAssetResult> {
   const result = await service.upsertAsset(await getCurrentEmployee(), input);
-  if (result.ok) revalidatePath('/assets');
+  if (result.ok) {
+    revalidatePath('/assets');
+    revalidatePath('/assets/mine');
+  }
+  return result;
+}
+
+export async function confirmAssetsByCustodianAction(
+  input: service.CustodianConfirmInput
+): Promise<{ ok: true; confirmedCount: number; confirmedAt: string } | Failure> {
+  const result = await service.confirmAssetsByCustodian(await getCurrentEmployee(), input);
+  if (result.ok) {
+    revalidatePath('/assets');
+    revalidatePath('/assets/mine');
+  }
+  return result;
+}
+
+export async function confirmAssetsByReviewerAction(
+  input: service.ReviewerConfirmInput
+): Promise<{ ok: true; reviewedCount: number; reviewedAt: string } | Failure> {
+  const result = await service.confirmAssetsByReviewer(await getCurrentEmployee(), input);
+  if (result.ok) {
+    revalidatePath('/assets');
+    revalidatePath('/assets/mine');
+  }
+  return result;
+}
+
+export async function createInventoryHandoverFormsAction(
+  input: handover.CreateHandoverFormInput
+) {
+  const result = await handover.createInventoryHandoverForms(await getCurrentEmployee(), input);
+  if (result.ok) {
+    revalidatePath('/assets');
+    revalidatePath('/assets/mine');
+    revalidatePath('/assets/inventory-forms');
+    revalidatePath('/notifications');
+  }
+  return result;
+}
+
+export async function updateAndConfirmHandoverLinesAction(
+  input: handover.UpdateHandoverLineInput
+) {
+  const result = await handover.updateAndConfirmHandoverLines(await getCurrentEmployee(), input);
+  if (result.ok) {
+    revalidatePath('/assets');
+    revalidatePath('/assets/mine');
+    revalidatePath('/assets/inventory-forms');
+    revalidatePath(`/assets/inventory-forms/${input.batchId}`);
+  }
+  return result;
+}
+
+export async function completeInventoryHandoverFormAction(batchId: string) {
+  const result = await handover.completeInventoryHandoverForm(await getCurrentEmployee(), batchId);
+  if (result.ok) {
+    revalidatePath('/assets');
+    revalidatePath('/assets/mine');
+    revalidatePath('/assets/inventory-forms');
+    revalidatePath(`/assets/inventory-forms/${batchId}`);
+  }
   return result;
 }
 

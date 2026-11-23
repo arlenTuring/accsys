@@ -9,7 +9,7 @@ const TABS = [
   { href: '/admin/org/levels', label: '組織層級' },
   { href: '/admin/org/roles', label: '職務類別' },
   { href: '/admin/org/groups', label: '員工群組' },
-  { href: '/admin/org/delegations', label: '代理人' },
+  { href: '/admin/org/delegations', label: '代理人與經辦人' },
   { href: '/admin/org/simulator', label: '流程模擬' },
   { href: '/admin/org/directory', label: '人員同步' },
 ];

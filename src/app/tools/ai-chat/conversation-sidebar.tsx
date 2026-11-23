@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useId, useRef, useState, useTransition } from 'react';
+import { confirmDialog } from '@/app/components/dialog';
 import {
   archiveConversationAction,
   listConversationsAction,
@@ -391,7 +392,14 @@ function ConversationRow({
             type="button"
             className="text-rose-600 underline hover:text-rose-700"
             onClick={async () => {
-              if (!window.confirm(t.aiChat.archiveConfirm)) return;
+              const ok = await confirmDialog({
+                title: `${t.aiChat.archive}「${item.title || t.aiChat.untitledChat}」？`,
+                message: t.aiChat.archiveConfirm,
+                confirmLabel: t.aiChat.archive,
+                cancelLabel: t.common.cancel,
+                tone: 'danger',
+              });
+              if (!ok) return;
               const res = await archiveConversationAction({ conversationId: item.id });
               if (res.ok) onArchived();
               setMenu(false);

@@ -139,3 +139,53 @@ export const editionOfFormType = (formType: ExpenseFormType): ExpenseEdition =>
 export function isProjectKind(value: unknown): value is ProjectKind {
   return value === 'product' || value === 'revenue';
 }
+
+/**
+ * 第 13、15 條：四種費用申請單＋免走採購整併為單一《費用申請單》
+ * 購置／採購性質項目單筆 NT$ 30,000（三萬元）以下可直接開立費用申請單（超過 3 萬元才提示須走「1.請購單 → 2.採購單」）；
+ * 一般日常營業與專案費用（租金、水電瓦斯、勞務、差旅、交際、福利等）則不設上限。
+ */
+export const UNIFIED_CAPPED_CATEGORIES = [
+  '設備',
+  '材料',
+  '軟體',
+  '辦公用品',
+  '其他費用',
+  '雜項購置',
+] as const;
+
+export const UNIFIED_UNCAPPED_CATEGORIES = [
+  '職工福利',
+  '交際費',
+  '文具用品',
+  '郵電費',
+  '交通費',
+  '運費',
+  '修繕費',
+  '廣告費',
+  '水電瓦斯費',
+  '保險費',
+  '租金支出',
+  '場地租金',
+  '書報雜誌',
+  '訓練費',
+  '勞務費',
+  '委外勞務費',
+  '伙食費',
+  '稅捐',
+  '加工費',
+  '安裝施工費',
+  '測試驗證費',
+  '軟體授權費',
+  '雲端服務費',
+  '印刷費',
+  '雜費',
+] as const;
+
+export const UNIFIED_EXPENSE_CATEGORIES = [
+  ...UNIFIED_CAPPED_CATEGORIES,
+  ...UNIFIED_UNCAPPED_CATEGORIES,
+] as const;
+
+export const UNIFIED_SMALL_PURCHASE_MAX_TWD = 30_000;
+

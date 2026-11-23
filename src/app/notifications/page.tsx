@@ -3,6 +3,17 @@ import { getMyNotifications } from '@/lib/notifications/queries';
 import { FORM_ROUTE_PREFIX, type FormType } from '@/lib/procurement/form-registry';
 import { MarkReadButton } from './notification-actions';
 
+function resolveNotificationHref(formType: string, formId: string): string {
+  if (formType === 'asset_inventory_handover') {
+    return '/assets/mine';
+  }
+  if (formType === 'budget_dispatch') {
+    return '/my-tasks/budget';
+  }
+  const prefix = FORM_ROUTE_PREFIX[formType as FormType];
+  return prefix ? `${prefix}/${formId}` : '/applications';
+}
+
 export default async function NotificationsPage() {
   const notifications = await getMyNotifications();
   return (
@@ -17,7 +28,7 @@ export default async function NotificationsPage() {
         <ul className="card divide-y divide-td-border !p-0">
           {notifications.map((n) => (
             <li key={n.id} className={`flex items-center justify-between gap-3 px-5 py-4 first:rounded-t-card last:rounded-b-card ${n.isRead ? '' : 'bg-td-blue-light/60'}`}>
-              <Link href={`${FORM_ROUTE_PREFIX[n.formType as FormType]}/${n.formId}`} className="flex-1 text-sm hover:text-td-blue">
+              <Link href={resolveNotificationHref(n.formType, n.formId)} className="flex-1 text-sm hover:text-td-blue">
                 <span className="mono-case">{n.caseNumber}</span>
                 <span className="ml-2">{n.message}</span>
               </Link>
