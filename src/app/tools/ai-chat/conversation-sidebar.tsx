@@ -107,12 +107,18 @@ export function ConversationSidebar({
     });
   }
 
+  const mountedQueryRef = useRef(false);
+
   useEffect(() => {
     load(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey]);
 
   useEffect(() => {
+    if (!mountedQueryRef.current) {
+      mountedQueryRef.current = true;
+      return;
+    }
     const tmr = window.setTimeout(() => load(true), 250);
     return () => window.clearTimeout(tmr);
     // eslint-disable-next-line react-hooks/exhaustive-deps

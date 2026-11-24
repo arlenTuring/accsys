@@ -49,7 +49,7 @@ export function intentHintsForUserMessage(message: string): string[] {
     hints.push(
       [
         '【系統意圖提示】使用者在詢問「我的待辦」各子項目的待處理數量與摘要：',
-        '請呼叫 `get_my_pending_tasks_overview`，回報「簽核與單據追蹤」、「年度預算表填報」、「我的資產管理（財產清點單）」與「我的專屬問卷」各自的待處理筆數與對應連結。',
+        '請呼叫 `get_my_pending_tasks_overview`，回報「簽核與單據追蹤」、「年度預算表填報」與「我的資產管理（財產清點單）」各自的待處理筆數與對應連結。',
       ].join('\n'),
     );
   }

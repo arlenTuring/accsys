@@ -45,61 +45,69 @@ export async function ensureRegulationsReady(): Promise<void> {
   if (!bootstrappedPromise) {
     bootstrappedPromise = (async () => {
       const db = getDb();
-      await db.execute(sql`
-        CREATE TABLE IF NOT EXISTS "company_regulations" (
-          "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-          "code" text NOT NULL,
-          "title" text NOT NULL,
-          "category" text NOT NULL DEFAULT 'general',
-          "version_label" text NOT NULL DEFAULT '1.0',
-          "effective_date" text NOT NULL DEFAULT '',
-          "owner_department" text NOT NULL DEFAULT '管理部',
-          "approver_title" text NOT NULL DEFAULT '董事長',
-          "summary" text NOT NULL DEFAULT '',
-          "body" text NOT NULL,
-          "related_forms" jsonb NOT NULL DEFAULT '[]'::jsonb,
-          "drive_file_id" text,
-          "drive_url" text,
-          "drive_file_name" text,
-          "status" text NOT NULL DEFAULT 'published',
-          "pinned" boolean NOT NULL DEFAULT false,
-          "sort_order" integer NOT NULL DEFAULT 0,
-          "revision_number" integer NOT NULL DEFAULT 1,
-          "created_by_employee_id" uuid,
-          "updated_by_employee_id" uuid,
-          "published_at" timestamp with time zone DEFAULT now(),
-          "created_at" timestamp with time zone DEFAULT now() NOT NULL,
-          "updated_at" timestamp with time zone DEFAULT now() NOT NULL
-        )
-      `);
-      await db.execute(sql`
-        CREATE INDEX IF NOT EXISTS "company_regulations_status_cat_idx"
-          ON "company_regulations" ("status", "category", "sort_order")
-      `);
-      await db.execute(sql`
-        CREATE TABLE IF NOT EXISTS "company_regulation_attachments" (
-          "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-          "regulation_id" uuid NOT NULL REFERENCES "public"."company_regulations"("id") ON DELETE cascade,
-          "uploaded_by_employee_id" uuid,
-          "storage_path" text NOT NULL UNIQUE,
-          "file_name" text NOT NULL,
-          "mime_type" text NOT NULL,
-          "file_size_bytes" bigint NOT NULL,
-          "sha256" text,
-          "scan_status" text NOT NULL DEFAULT 'clean',
-          "scanned_at" timestamp with time zone,
-          "created_at" timestamp with time zone DEFAULT now() NOT NULL
-        )
-      `);
-      await db.execute(sql`
-        CREATE INDEX IF NOT EXISTS "company_regulation_attachments_reg_idx"
-          ON "company_regulation_attachments" ("regulation_id", "created_at")
-      `);
-
-      const existing = await db
-        .select({ id: companyRegulations.id })
-        .from(companyRegulations)
-        .limit(1);
+      let existing: Array<{ id: string }> = [];
+      try {
+        existing = await db
+          .select({ id: companyRegulations.id })
+          .from(companyRegulations)
+          .limit(1);
+      } catch {
+        // Fallback for unmigrated local/test databases where accsys_app is not restricted
+        await db.execute(sql`
+          CREATE TABLE IF NOT EXISTS "company_regulations" (
+            "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+            "code" text NOT NULL,
+            "title" text NOT NULL,
+            "category" text NOT NULL DEFAULT 'general',
+            "version_label" text NOT NULL DEFAULT '1.0',
+            "effective_date" text NOT NULL DEFAULT '',
+            "owner_department" text NOT NULL DEFAULT '管理部',
+            "approver_title" text NOT NULL DEFAULT '董事長',
+            "summary" text NOT NULL DEFAULT '',
+            "body" text NOT NULL,
+            "related_forms" jsonb NOT NULL DEFAULT '[]'::jsonb,
+            "drive_file_id" text,
+            "drive_url" text,
+            "drive_file_name" text,
+            "status" text NOT NULL DEFAULT 'published',
+            "pinned" boolean NOT NULL DEFAULT false,
+            "sort_order" integer NOT NULL DEFAULT 0,
+            "revision_number" integer NOT NULL DEFAULT 1,
+            "created_by_employee_id" uuid,
+            "updated_by_employee_id" uuid,
+            "published_at" timestamp with time zone DEFAULT now(),
+            "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+            "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+          )
+        `);
+        await db.execute(sql`
+          CREATE INDEX IF NOT EXISTS "company_regulations_status_cat_idx"
+            ON "company_regulations" ("status", "category", "sort_order")
+        `);
+        await db.execute(sql`
+          CREATE TABLE IF NOT EXISTS "company_regulation_attachments" (
+            "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+            "regulation_id" uuid NOT NULL REFERENCES "public"."company_regulations"("id") ON DELETE cascade,
+            "uploaded_by_employee_id" uuid,
+            "storage_path" text NOT NULL UNIQUE,
+            "file_name" text NOT NULL,
+            "mime_type" text NOT NULL,
+            "file_size_bytes" bigint NOT NULL,
+            "sha256" text,
+            "scan_status" text NOT NULL DEFAULT 'clean',
+            "scanned_at" timestamp with time zone,
+            "created_at" timestamp with time zone DEFAULT now() NOT NULL
+          )
+        `);
+        await db.execute(sql`
+          CREATE INDEX IF NOT EXISTS "company_regulation_attachments_reg_idx"
+            ON "company_regulation_attachments" ("regulation_id", "created_at")
+        `);
+        existing = await db
+          .select({ id: companyRegulations.id })
+          .from(companyRegulations)
+          .limit(1);
+      }
 
       if (existing.length === 0) {
         await seedDefaultRegulationsInternal();

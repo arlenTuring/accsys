@@ -29,19 +29,21 @@ if [ -f "deploy/secrets/gmail-service-account.json" ]; then
   ssh "${SSH_OPTS[@]}" "$GCP_HOST" "sudo mkdir -p /srv/accsys/attachments/.email-secrets && cat > /tmp/.gmail-sa.json && sudo mv /tmp/.gmail-sa.json /srv/accsys/attachments/.email-secrets/gmail-service-account.json && sudo chown -R 10001:10001 /srv/accsys/attachments/.email-secrets && sudo chmod 700 /srv/accsys/attachments/.email-secrets && sudo chmod 600 /srv/accsys/attachments/.email-secrets/gmail-service-account.json" < "deploy/secrets/gmail-service-account.json"
 fi
 
-ssh "${SSH_OPTS[@]}" "$GCP_HOST" "cat > /tmp/gcp-update-inner.sh && chmod +x /tmp/gcp-update-inner.sh && ADMIN_ACTOR='$ADMIN_ACTOR' bash /tmp/gcp-update-inner.sh" <<'REMOTE'
+ssh "${SSH_OPTS[@]}" "$GCP_HOST" "cat > /tmp/gcp-update-inner.sh && chmod +x /tmp/gcp-update-inner.sh && ADMIN_ACTOR='$ADMIN_ACTOR' SKIP_DOCKER_BUILD='${SKIP_DOCKER_BUILD:-0}' bash /tmp/gcp-update-inner.sh" <<'REMOTE'
 #!/usr/bin/env bash
 set -euo pipefail
 
 cd /opt/accsys
 DC="sudo docker compose -f deploy/compose.prod.yml --env-file /etc/accsys/accsys.env"
 
-echo "1) Fetching and resetting /opt/accsys to latest origin/main..."
-sudo rm -f deploy/nginx/templates/accsys.conf.template.bak
-sudo GIT_SSH_COMMAND='ssh -i /root/.ssh/accsys_deploy -o StrictHostKeyChecking=accept-new' \
-  git fetch origin main
-sudo git checkout -f main
-sudo git reset --hard origin/main
+if [ "${SKIP_DOCKER_BUILD:-0}" != "1" ]; then
+  echo "1) Fetching and resetting /opt/accsys to latest origin/main..."
+  sudo rm -f deploy/nginx/templates/accsys.conf.template.bak
+  sudo GIT_SSH_COMMAND='ssh -i /root/.ssh/accsys_deploy -o StrictHostKeyChecking=accept-new' \
+    git fetch origin main
+  sudo git checkout -f main
+  sudo git reset --hard origin/main
+fi
 
 COMMIT="$(sudo git rev-parse --short HEAD)"
 echo "Now at commit: $COMMIT"
@@ -149,10 +151,45 @@ fi
 echo "6b) Re-applying db/roles.sql grants for newly created tables..."
 $DC exec -T db psql -X -U postgres -d accsys -v ON_ERROR_STOP=1 -f /accsys/roles.sql
 
-echo "7) Syncing and publishing migrated form definitions (batches 1..7)..."
-for batch in 1 2 3 4 5 6 7; do
-  $DC run --rm admin-cli scripts/migrate-forms.ts --batch "$batch" --publish --allow-remote --actor "$ADMIN_ACTOR"
-done
+echo "6c) Ensuring public.system_email_settings table and Gmail Service Account configuration..."
+$DC exec -T db psql -X -U postgres -d accsys -v ON_ERROR_STOP=1 <<'SQL'
+CREATE TABLE IF NOT EXISTS public.system_email_settings (
+  code text PRIMARY KEY DEFAULT 'default' NOT NULL,
+  config jsonb DEFAULT '{}'::jsonb NOT NULL,
+  updated_at timestamptz DEFAULT now() NOT NULL
+);
+ALTER TABLE public.system_email_settings OWNER TO accsys_owner;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.system_email_settings TO accsys_app;
+SQL
+
+if sudo test -f /srv/accsys/attachments/.email-secrets/gmail-service-account.json; then
+  sudo python3 - <<'PY' | $DC exec -T db psql -X -U postgres -d accsys -v ON_ERROR_STOP=1
+import json
+sa = open("/srv/accsys/attachments/.email-secrets/gmail-service-account.json", "r", encoding="utf-8").read()
+cfg = {
+  "enabled": True,
+  "provider": "google_service_account",
+  "delegatedUser": "turing-drive_mis@turing-drive.com",
+  "displayFromEmail": "no-reply@turing-drive.com",
+  "displayFromName": "TURING DRIVE ACCSYS 系統通知",
+  "testModeOnly": True,
+  "allowedTestRecipients": ["arlen@turing-drive.com"],
+  "nonAllowedRecipientAction": "block",
+  "serviceAccountJson": sa,
+  "recentLogs": []
+}
+payload = json.dumps(cfg)
+print(f"INSERT INTO public.system_email_settings (code, config, updated_at) VALUES ('default', $cfg${payload}$cfg$::jsonb, now()) ON CONFLICT (code) DO UPDATE SET config = EXCLUDED.config, updated_at = now();")
+PY
+  $DC exec -T db psql -X -U postgres -d accsys -c "SELECT code, config->>'delegatedUser' AS delegated_user, config->'allowedTestRecipients' AS allowed_recipients, (config->>'serviceAccountJson' IS NOT NULL) AS has_sa_key, updated_at FROM public.system_email_settings;"
+fi
+
+if [ "${SKIP_DOCKER_BUILD:-0}" != "1" ]; then
+  echo "7) Syncing and publishing migrated form definitions (batches 1..7)..."
+  for batch in 1 2 3 4 5 6 7; do
+    $DC run --rm admin-cli scripts/migrate-forms.ts --batch "$batch" --publish --allow-remote --actor "$ADMIN_ACTOR"
+  done
+fi
 
 echo "8) Rolling out updated app and proxy containers..."
 $DC up -d --remove-orphans
@@ -167,6 +204,19 @@ done
 
 $DC ps
 curl -sk --http1.1 --connect-timeout 5 -o /dev/null -w "Local HTTPS /login check: HTTP %{http_code}\n" https://127.0.0.1/login -H "Host: accsys.turing-drive.org"
+
+echo "9b) Ensuring default company regulations are seeded in PostgreSQL..."
+$DC run --rm admin-cli -e '
+import { loadSecretFiles } from "./src/lib/secret-files.ts";
+import { ensureRegulationsReady, listRegulations } from "./src/lib/regulations/service.ts";
+loadSecretFiles();
+(async () => {
+  await ensureRegulationsReady();
+  const rows = await listRegulations({ manage: true });
+  console.log("  Company regulations count:", rows.length);
+  process.exit(0);
+})();
+'
 
 echo "10) Verifying Vertex AI (gemini-3.8-flash) connectivity from app container..."
 $DC exec -T app node -e '

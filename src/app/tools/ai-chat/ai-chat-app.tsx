@@ -512,13 +512,23 @@ export function AiChatApp() {
           }))
         );
         setHasOlder(boot.hasOlder);
+        setDrawerRefresh((n) => n + 1);
+        if (!boot.conversationId) {
+          try {
+            sessionStorage.removeItem(CONV_PREF);
+          } catch {
+            /* ignore */
+          }
+          return;
+        }
         try {
           sessionStorage.setItem(CONV_PREF, boot.conversationId);
         } catch {
           /* ignore */
         }
         // Files still waiting in the composer come back from the server after a reload (non-blocking).
-        void listPendingStagedAction({ conversationId: boot.conversationId })
+        const loadedConvId = boot.conversationId;
+        void listPendingStagedAction({ conversationId: loadedConvId })
           .then((pendingRes) => {
             if (!pendingRes?.ok || gen !== bootGen.current) return;
             setAttachments((prev) => {
@@ -738,8 +748,19 @@ export function AiChatApp() {
   async function onFilesSelected(fileList: FileList | File[] | null) {
     if (!fileList?.length) return;
     if (!conversationId) {
-      setError('請先開啟對話再上傳檔案。');
-      return;
+      const created = await createConversationAction();
+      if (!created.ok) {
+        setError(created.error);
+        return;
+      }
+      setConversationId(created.conversationId);
+      setTitle(created.title);
+      setDrawerRefresh((n) => n + 1);
+      try {
+        sessionStorage.setItem(CONV_PREF, created.conversationId);
+      } catch {
+        /* ignore */
+      }
     }
     const picked = Array.from(fileList);
     const videoCount = picked.filter((f) => f.type.startsWith('video/') || /\.(mp4|webm|mov)$/i.test(f.name)).length;
@@ -1012,7 +1033,7 @@ export function AiChatApp() {
 
   /** `override`: text from a choice card, sent exactly as if typed (attachments are not included). */
   function onSend(override?: string) {
-    if (!conversationId || pending) return;
+    if (pending) return;
     const text = (override ?? input).trim();
     if (!text && attachments.length === 0) return;
     const blocking = attachments.filter((a) => !canSendToModel(a.status));
@@ -1049,7 +1070,7 @@ export function AiChatApp() {
     setMessages((prev) => [...prev, optimistic]);
     setError(null);
     setTurnSteps([]);
-    const expectedConversation = conversationId;
+    const initialConversation = conversationId;
     const keptAttachments = attachments;
     const keptInput = override === undefined ? input : '';
     const keptReplyingTo = override === undefined ? replyingTo : null;
@@ -1060,6 +1081,27 @@ export function AiChatApp() {
     }
     const attachIntent = wantsDraftAttach(text);
     start(async () => {
+      let expectedConversation = initialConversation;
+      if (!expectedConversation) {
+        const created = await createConversationAction();
+        if (!created.ok) {
+          setError(created.error);
+          setMessages((prev) => prev.filter((m) => m.id !== clientMessageId));
+          setInput(keptInput);
+          setReplyingTo(keptReplyingTo);
+          setEditingMessageId(keptEditingId);
+          return;
+        }
+        expectedConversation = created.conversationId;
+        setConversationId(created.conversationId);
+        setTitle(created.title);
+        setDrawerRefresh((n) => n + 1);
+        try {
+          sessionStorage.setItem(CONV_PREF, created.conversationId);
+        } catch {
+          /* ignore */
+        }
+      }
       // Copy checked files onto the draft in the browser — do not wait for the model tool.
       let attachedOk = false;
       if (attachIntent) {
@@ -1209,6 +1251,7 @@ export function AiChatApp() {
             }
           }}
           onNew={() => {
+            if (pending || navPending) return;
             setMobileDrawerOpen(false);
             startNav(async () => {
               const res = await createConversationAction();
@@ -1218,7 +1261,6 @@ export function AiChatApp() {
               }
               bootGen.current += 1;
               loadConversation({ conversationId: res.conversationId });
-              setDrawerRefresh((n) => n + 1);
             });
           }}
         />
@@ -1663,7 +1705,7 @@ export function AiChatApp() {
                 onChange={setInput}
                 onSend={(overrideText) => onSend(overrideText)}
                 onFilesSelected={(files) => void onFilesSelected(files)}
-                disabled={!conversationId || pending}
+                disabled={pending || navPending}
                 pending={pending}
                 attachmentsBusy={attachmentsBusy}
                 sendDisabled={

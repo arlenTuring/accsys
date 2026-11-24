@@ -756,7 +756,7 @@ export const AI_CHAT_TOOL_DECLARATIONS = [
   {
     name: 'get_my_pending_tasks_overview',
     description:
-      '查詢目前登入使用者在左側「我的待辦」導覽列各子項目的待處理事項數量與明細摘要：包含「簽核與單據追蹤（待我簽核＋被退回補件）」、「年度預算表填報（財會派發待填單）」、「我的資產管理（收到待確認之【財產清點單 INV-...】）」與「我的專屬問卷（待填問卷）」。',
+      '查詢目前登入使用者在左側「我的待辦」導覽列各子項目的待處理事項數量與明細摘要：包含「簽核與單據追蹤（待我簽核＋被退回補件）」、「年度預算表填報（財會派發待填單）」與「我的資產管理（收到待確認之【財產清點單 INV-...】）」。',
     parameters: {
       type: 'OBJECT',
       properties: {},
@@ -3392,17 +3392,6 @@ export async function executeAiChatTool(
                 },
               ]
             : []),
-          ...(featureFlags.company_info_hub
-            ? [
-                {
-                  key: 'pendingSurveys',
-                  title: '我的專屬問卷',
-                  href: '/surveys',
-                  count: counts.pendingSurveys,
-                  description: '待填寫之公司開放問卷',
-                },
-              ]
-            : []),
         ];
 
         const approvalCards =
@@ -3542,7 +3531,7 @@ export async function executeAiChatTool(
                     formKey: i.formKey,
                   }))
                 : [],
-            message: `「我的待辦」目前共有 ${counts.total} 項待處理事項：簽核與單據追蹤 ${counts.approvalsAndReturned} 項、年度預算表填報 ${counts.budgetTasks} 項、我的資產管理（財產清點單）${counts.assetHandovers} 項、我的專屬問卷 ${counts.pendingSurveys} 項。畫面已顯示各單據與草稿卡片（點「詳情」即可在右側面板查看或編輯，自己待簽核的單據可直接點「✓ 快速簽核」），回覆請簡潔指引，勿重複抄寫卡片內容。`,
+            message: `「我的待辦」目前共有 ${counts.total} 項待處理事項：簽核與單據追蹤 ${counts.approvalsAndReturned} 項、年度預算表填報 ${counts.budgetTasks} 項、我的資產管理（財產清點單）${counts.assetHandovers} 項。畫面已顯示各單據與草稿卡片（點「詳情」即可在右側面板查看或編輯，自己待簽核的單據可直接點「✓ 快速簽核」），回覆請簡潔指引，勿重複抄寫卡片內容。`,
           },
           ...(blocks.length ? { blocks } : {}),
         };

@@ -278,7 +278,7 @@ export async function getMyTaskCounts(): Promise<MyTaskCounts> {
     budgetTasks,
     assetHandovers,
     pendingSurveys: surveyCount,
-    total: approvalsAndReturned + budgetTasks + assetHandovers + surveyCount,
+    total: approvalsAndReturned + budgetTasks + assetHandovers,
   };
 }
 

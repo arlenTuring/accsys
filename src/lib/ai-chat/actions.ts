@@ -108,13 +108,71 @@ export async function loadMoreInboxAction(input: {
   return { ok: true, items: res.items, hasMore: res.hasMore };
 }
 
+async function cleanupDuplicateBlankConversations(
+  employeeId: string
+): Promise<Array<{ conv: ConversationRow; messagesCount: number }>> {
+  const recentList = await listConversations({ ownerEmployeeId: employeeId, limit: 10 });
+  const unusedBlanks: Array<{ conv: ConversationRow; messagesCount: number }> = [];
+
+  for (const c of recentList.items) {
+    if (c.title !== '新對話') continue;
+    const page = await listMessages(c.id, employeeId, 5);
+    const hasConversationTurn = page.messages.some(
+      (m) => m.role === 'user' || m.role === 'model'
+    );
+    if (!hasConversationTurn) {
+      unusedBlanks.push({ conv: c, messagesCount: page.messages.length });
+    }
+  }
+
+  if (unusedBlanks.length > 1) {
+    for (const dup of unusedBlanks.slice(1)) {
+      await archiveConversation(employeeId, dup.conv.id).catch(() => false);
+    }
+  }
+
+  return unusedBlanks;
+}
+
+async function getOrReuseBlankConversation(
+  employeeId: string,
+  opts?: { ensureWelcome?: boolean }
+): Promise<ConversationRow> {
+  const unusedBlanks = await cleanupDuplicateBlankConversations(employeeId);
+
+  let target: ConversationRow;
+  let hasMessages = false;
+
+  if (unusedBlanks.length > 0) {
+    target = unusedBlanks[0].conv;
+    hasMessages = unusedBlanks[0].messagesCount > 0;
+  } else {
+    target = await createConversation(employeeId);
+    hasMessages = false;
+  }
+
+  if (opts?.ensureWelcome && !hasMessages) {
+    const summary = await buildWelcomeSummary(target.id);
+    await appendMessage({
+      conversationId: target.id,
+      ownerEmployeeId: employeeId,
+      role: 'system',
+      contentText: summary.text,
+      clientMessageId: welcomeClientMessageId(target.id),
+      blocks: summary.blocks,
+    });
+  }
+
+  return target;
+}
+
 export async function bootstrapAssistantConversation(input?: {
   conversationId?: string | null;
   forceNew?: boolean;
 }): Promise<
   | {
       ok: true;
-      conversationId: string;
+      conversationId: string | null;
       title: string;
       messages: Array<{
         id: string;
@@ -132,15 +190,27 @@ export async function bootstrapAssistantConversation(input?: {
   const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: publicError('unauthenticated') };
 
-  let conversation: ConversationRow;
+  await cleanupDuplicateBlankConversations(employee.id);
+
+  let conversation: ConversationRow | null = null;
   if (input?.forceNew) {
-    conversation = await createConversation(employee.id);
+    conversation = await getOrReuseBlankConversation(employee.id, { ensureWelcome: true });
   } else if (input?.conversationId) {
-    const owned = await getOwnedConversation(employee.id, input.conversationId, { includeArchived: true });
-    if (!owned) return { ok: false, error: publicError('conversation_not_found') };
-    conversation = owned;
+    const owned = await getOwnedConversation(employee.id, input.conversationId);
+    conversation = owned ?? (await listRecentConversation(employee.id));
   } else {
-    conversation = (await listRecentConversation(employee.id)) ?? (await createConversation(employee.id));
+    conversation = await listRecentConversation(employee.id);
+  }
+
+  if (!conversation) {
+    return {
+      ok: true,
+      conversationId: null,
+      title: '新對話',
+      messages: [],
+      hasOlder: false,
+      welcomeInserted: false,
+    };
   }
 
   const firstPage = await listMessages(conversation.id, employee.id, 40);
@@ -1351,16 +1421,7 @@ export async function createConversationAction(): Promise<
 > {
   const employee = await getCurrentEmployee();
   if (!employee) return { ok: false, error: publicError('unauthenticated') };
-  const conversation = await createConversation(employee.id);
-  const summary = await buildWelcomeSummary(conversation.id);
-  await appendMessage({
-    conversationId: conversation.id,
-    ownerEmployeeId: employee.id,
-    role: 'system',
-    contentText: summary.text,
-    clientMessageId: welcomeClientMessageId(conversation.id),
-    blocks: summary.blocks,
-  });
+  const conversation = await getOrReuseBlankConversation(employee.id, { ensureWelcome: true });
   return { ok: true, conversationId: conversation.id, title: conversation.title };
 }
 

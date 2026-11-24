@@ -108,9 +108,10 @@ async function ensureSettingsTable(): Promise<void> {
         updated_at timestamptz NOT NULL DEFAULT now()
       )
     `);
-    tableEnsured = true;
   } catch {
-    // Fallback to local file if DB is unreachable in unit tests
+    // Expected in hardened prod where accsys_app has no DDL permission (table is created by migration 0045)
+  } finally {
+    tableEnsured = true;
   }
 }
 

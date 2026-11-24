@@ -66,7 +66,6 @@ function resolveActiveSection(pathname: string): PrimaryNavKey {
     isUnder(pathname, '/assets/mine') ||
     isUnder(pathname, '/asset-transfers') ||
     isUnder(pathname, '/f/asset-transfer') ||
-    isUnder(pathname, '/surveys') ||
     isRecordPage(pathname)
   ) {
     return 'tasks';
@@ -647,8 +646,7 @@ export function AppShell({
             </div>
 
             {(flags.budget_management_platform ||
-              flags.asset_management_module ||
-              flags.company_info_hub) && (
+              flags.asset_management_module) && (
               <div className="space-y-1">
                 <p className="px-2.5 text-[11px] font-semibold tracking-wider text-slate-400">
                   {tr('互動填報與個人管理')}
@@ -677,15 +675,6 @@ export function AppShell({
                       isUnder(pathname, '/asset-transfers') ||
                       isUnder(pathname, '/f/asset-transfer')
                     }
-                  />
-                )}
-                {flags.company_info_hub && (
-                  <SecondaryNavLink
-                    href="/surveys"
-                    label={tr('我的專屬問卷')}
-                    badge={counts.pendingSurveys}
-                    showZeroBadge
-                    active={isUnder(pathname, '/surveys')}
                   />
                 )}
               </div>
